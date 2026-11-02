@@ -95,4 +95,4 @@ recurse_submodules = false
 
 [remote.github]
 owner = "AlfredClark"
-repo = "tauri-desktop-template"
+repo = "ebook-studio-desktop"

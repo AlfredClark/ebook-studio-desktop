@@ -1,5 +1,5 @@
 ---
-name: Tauri Desktop Template
+name: Ebook Studio
 description: 生产级 Tauri + Svelte 桌面应用基座的视觉系统：中性石墨灰基座、刚好够用的密度、ring 贴合分层
 colors:
   # ── 中性基座（浅色） ──
@@ -124,7 +124,7 @@ components:
     padding: "6px 12px"
 ---
 
-# Design System: Tauri Desktop Template
+# Design System: Ebook Studio
 
 ## Overview
 

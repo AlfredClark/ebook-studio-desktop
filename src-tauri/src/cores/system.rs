@@ -65,12 +65,12 @@ fn emit_via_log(error_log: &str) -> bool {
     .is_ok()
 }
 
-/// 兜底落盘到临时目录的 `my_app_crash.log`，写入失败静默忽略
+/// 兜底落盘到临时目录的 `ebook_studio_crash.log`，写入失败静默忽略
 ///
 /// 无限追加会撑满临时目录：超 512KB 时先轮转旧文件为 `.1`（仅保留一份），再写入本次崩溃
 fn persist_fallback(error_log: &str) {
     const MAX_BYTES: u64 = 512 * 1024;
-    let log_path = env::temp_dir().join("my_app_crash.log");
+    let log_path = env::temp_dir().join("ebook_studio_crash.log");
     if std::fs::metadata(&log_path).is_ok_and(|meta| meta.len() > MAX_BYTES) {
         let rotated = log_path.with_extension("log.1");
         let _ = std::fs::remove_file(&rotated);

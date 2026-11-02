@@ -1,17 +1,17 @@
 [package]
-name = "tauri-desktop-template"
-version = "0.4.2"
+name = "ebook-studio-desktop"
+version = "0.1.0"
 edition = "2024"
 authors = ["Alfred Clark"]
-description = "Desktop application development template based on Tauri and Svelte."
-repository = "https://github.com/AlfredClark/tauri-desktop-template"
-keywords = ["tauri", "desktop", "template"]
+description = "Ebook editor desktop application."
+repository = "https://github.com/AlfredClark/ebook-studio-desktop"
+keywords = ["tauri", "desktop", "ebook", "studio"]
 categories = ["gui"]
 readme = "../README.md"
 license = "GPL-3.0-only"
 
 [lib]
-name = "tauri_desktop_template_lib"
+name = "ebook_studio_desktop_lib"
 crate-type = ["rlib"]
 
 [lints]

@@ -18,7 +18,6 @@
 - **后端支撑：** `serde` / `serde_json` + `chrono`（UTC 时间）+ `log` 门面 + `thiserror` / `anyhow`（统一错误 `CommandError` / `CommandResult`）。
 - **构建 / 质量：** Vite（固定端口 `1420`）+ `svelte-check` 严格 TS 检查 + ESLint / Prettier + vitest；包管理器 `pnpm`（`engines.node >= 24`）；`pnpm-lock.yaml` 与 `Cargo.lock` 均提交。
 - **部署：** GitHub Actions + Tauri bundler；入口 `.github/workflows/ci.yml`（质量门禁）、`release.yml`（打包发布）。
-- **上游示例索引：** 沙盒文件 / 对话框 / 通知 / 网络请求的完整接线示例见上游仓库 `v0.3.0` 标签（全局快捷键已是主线真实功能，见设置页快捷键分组，不再只算示例）。
 
 **版本查询命令：**
 
@@ -34,7 +33,7 @@ rustc --version && cat rust-toolchain.toml && cat src-tauri/Cargo.toml | grep -A
 > 目录职责边界：只在对应目录做对应事，禁止跨层乱放。
 
 ```text
-tauri-desktop-template/
+ebook-studio-desktop/
 ├── src/                            # 前端：SvelteKit 单页应用（adapter-static + fallback: index.html）
 │   ├── app.html                    # HTML 外壳，SvelteKit 在此注入脚本与样式
 │   ├── assets/                     # 需要经构建处理的资源（别名 #assets，见 package.json 的 imports 字段），icons/ 下为内联图标（app-icon / github-icon / svelte-icon / tauri-icon / vite-icon）
@@ -129,7 +128,7 @@ Svelte 组件 → libs/commands（链式 API）→ commands/（Rust 薄封装）
 ### 崩溃边界（`cores/system.rs` + `components/common/error-boundary.svelte`）
 
 - 前端 `ErrorBoundary`：经 `@tauri-apps/plugin-log` 上报，堆栈仅 dev 显示；同步 `console.error` 留底 + 2s 节流防刷屏。
-- 后端 panic 钩子：先走常规日志，日志不可用时落盘到临时目录 `my_app_crash.log` 兜底（Win `%TEMP%` / Unix `$TMPDIR`，二选一而非双写）；超 512KB 轮转为 `.1` 仅保留一份；时间戳用本地时间 RFC3339（`chrono::Local`）。
+- 后端 panic 钩子：先走常规日志，日志不可用时落盘到临时目录 `ebook_studio_crash.log` 兜底（Win `%TEMP%` / Unix `$TMPDIR`，二选一而非双写）；超 512KB 轮转为 `.1` 仅保留一份；时间戳用本地时间 RFC3339（`chrono::Local`）。
 - 两者互不替代，禁止另加并行机制。
 
 ### 语言数据流（`cores/locale.rs` + `cores/config.rs` + `libs/hooks/config.svelte.ts` + `libs/i18n/locale.svelte.ts`）
@@ -199,15 +198,15 @@ const config = await invoke<Config>("get_config");
 
 > 改代码时同步改文档：下表是「改了 A 就必须检查 B」的正向清单，与上表「成对维护的配置」同等效力，改完对照打勾。
 
-| 代码改动               | 必须同步的文档位置                                                                                                                                         |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 新增后端插件           | 本文件技术栈与目录树、`AGENTS.md` 安全红线#4、`docs/INITIAL.md` §7 白名单与 §8.2 计数、`README.md` 与 `docs/README_zh-CN.md` 功能与外壳、`PRODUCT.md` 能力 |
-| 新增 / 变更配置项      | 本文件配置节、`README.md` 与 `docs/README_zh-CN.md` 配置说明（`INITIAL.md` §8.2 文案键数如联动）                                                           |
-| 新增 / 改签名命令      | `docs/INITIAL.md` §8.2 命令数（如变化）、`docs/WORKFLOW.md` 命令契约流程（如改流程）                                                                       |
-| 新增前端依赖 / 插件    | 本文件技术栈、`README.md` 与 `docs/README_zh-CN.md` 技术选型、`docs/INITIAL.md` §8.2 计数                                                                  |
-| 新增文案键             | `docs/INITIAL.md` §8.2 文案键数                                                                                                                            |
-| 新增设置分组 / 页面    | `README.md` 与 `docs/README_zh-CN.md` 页面一览与功能、`docs/images/` 截图重拍、本文件目录树                                                                |
-| 调整门禁 / 脚本 / 校验 | `docs/WORKFLOW.md` 对应章节、`AGENTS.md`「效力分级与定制」                                                                                                 |
+| 代码改动               | 必须同步的文档位置                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 新增后端插件           | 本文件技术栈与目录树、`AGENTS.md` 安全红线#4、`README.md` 与 `docs/README_zh-CN.md` 功能与外壳、`PRODUCT.md` 能力 |
+| 新增 / 变更配置项      | 本文件配置节、`README.md` 与 `docs/README_zh-CN.md` 配置说明                                                      |
+| 新增 / 改签名命令      | `docs/WORKFLOW.md` 命令契约流程（如改流程）                                                                       |
+| 新增前端依赖 / 插件    | 本文件技术栈、`README.md` 与 `docs/README_zh-CN.md` 技术选型                                                      |
+| 新增文案键             | `README.md` 与 `docs/README_zh-CN.md` 对应章节                                                                    |
+| 新增设置分组 / 页面    | `README.md` 与 `docs/README_zh-CN.md` 页面一览与功能、`docs/images/` 截图重拍、本文件目录树                       |
+| 调整门禁 / 脚本 / 校验 | `docs/WORKFLOW.md` 对应章节、`AGENTS.md`「效力分级与定制」                                                        |
 
 ---
 

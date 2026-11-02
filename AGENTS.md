@@ -1,7 +1,7 @@
 # AGENTS.md — 常驻开发规范
 
 > 面向 AI 智能体与新加入开发者：本文件是每次任务都适用的常驻规则层（自动加载），只放「红线、边界与门禁」。
-> 技术栈：Tauri v2 + SvelteKit 2 + Svelte 5 + Tailwind CSS v4 + shadcn-svelte + Paraglide + tauri-specta 的桌面应用模板；人类向导读见 `docs/README_zh-CN.md`。
+> 技术栈：Tauri v2 + SvelteKit 2 + Svelte 5 + Tailwind CSS v4 + shadcn-svelte + Paraglide + tauri-specta 的 Ebook Studio 桌面应用；人类向导读见 `docs/README_zh-CN.md`。
 > 优先级：安全红线 > 架构不变量 > 测试验证 > 代码风格。参考细节与「为什么」在按需文档中，按下方索引读取。
 
 ## 文档索引（做对应任务前先读）
@@ -15,7 +15,6 @@
 | 改外观 / 配色主题 / 布局 / 新页面视觉                      | `DESIGN.md`（视觉系统）+ `PRODUCT.md`（产品上下文） |
 | 跑命令 / 依赖升级 / 构建产物 / 验证级别                    | `docs/WORKFLOW.md`                                  |
 | 发版 / CI / 提交钩子细节                                   | `docs/WORKFLOW.md` 的「CI」与「验证矩阵」           |
-| 派生新项目（改名 / 换协议 / 换密钥 / 换图标 / 文档收尾）   | `docs/INITIAL.md`                                   |
 
 > 只有仓库根的 `AGENTS.md` 会被自动加载；上表文档按需读取——做对应任务时必须先读，不要依赖记忆。
 
@@ -46,7 +45,7 @@
 3. **状态归属：** Svelte 5 runes（`$state` / `$props` / `$effect`）优先，禁用旧式 store；页面私有状态用局部 state，跨页面共享才考虑提升。主题经 `mode-watcher` 全局管理，语言归后端 `config.json`，禁止各页面自建。
 4. **错误处理分层：** `features/` 返回业务错误 → `commands/` 转 `CommandResult`（错误统一 `CommandError::Internal(...)`，`anyhow::Error` 经已有 `From` 自动转换）→ 前端经链式 API 处理。关键取值用 `.result()` 按 `status` 分支（`.value()` 的回落会把失败与空数据压成同一个值）；回调内只做幂等赋值 / toast 且保证不抛错；多步分支 / 跨状态机流转必须 `result()` 后置分支。未注册 `.failed()` 的失败会自动经 plugin-log 上报，不会静默丢失；多个业务通用的逻辑抽取到 `cores/`，不散落在各业务文件中。
 5. **配置唯一来源与迁移：** Paraglide 编译选项唯一来源 `src/libs/i18n/project.inlang/paraglide.config.ts`；路径别名唯一来源 `package.json` 的 `imports`；新增外部 URL 同步 `capabilities/*.json` 与 CSP；新增 / 变更配置项必须同步 `cores/config.rs` 的 `CURRENT_SCHEMA_VERSION` 与 `MIGRATIONS` 迁移链，配置写入只走 `update` / `save_locale` / `migrate` 三入口；新增 / 变更配置项时对照 `docs/ARCHITECTURE.md` 的「成对维护的配置」表。
-6. **崩溃边界：** 前端 `ErrorBoundary` + 后端 panic 钩子（`cores/system.rs`，兜底落盘临时目录 `my_app_crash.log`，Win `%TEMP%` / Unix `$TMPDIR`）。两者互不替代，禁止另加并行机制。
+6. **崩溃边界：** 前端 `ErrorBoundary` + 后端 panic 钩子（`cores/system.rs`，兜底落盘临时目录 `ebook_studio_crash.log`，Win `%TEMP%` / Unix `$TMPDIR`）。两者互不替代，禁止另加并行机制。
 7. **语言数据流：** 唯一持久化点是 `config.json` 的 `locale` 键（`Locale` 枚举，`"en" | "zh-CN"`，禁止裸 `string` 或类型断言）；切换先经 `commands.updateConfig` 落盘再改内存，按返回值分支（禁用状态相等代理推断）；前端渲染期文案经 `libs/i18n/locale.svelte.ts` 桥接响应式（`overwriteGetLocale` 读 `$state`），**不重载的语言变更只允许经 `alignLocale`**；`restart` 桌面端永不结算（勿 `await`）。完整时序见 `docs/ARCHITECTURE.md`。
 8. **初始化与订阅：** `initAppearance` 由调用点包 `untrack` 后执行（`+layout.svelte` 的 `$effect.pre`；init 内读写同一批外观状态，被跟踪会形成「改动→重初始化」回路），init 本体保持幂等、可重复调用；`app.html` 首帧内联脚本与 init 的键名 / 分支必须同步改；`localStorage` 存量键（`layout-name` / `color-theme` / `font-family` / `font-weight` / `font-size` / `dashboard-collapsed` / mode-watcher 的 `mode-watcher-mode`）冻结豁免，新增键统一 `app.` 前缀。
 
@@ -146,7 +145,7 @@ CI 流程与提交钩子细节见 `docs/WORKFLOW.md`。
 
 ## 效力分级与定制
 
-> 面向派生项目：本规范哪些条目由机器强制、哪些只是默认约定，以及想改时的落点（完整定制清单见 `docs/INITIAL.md`）。
+> 面向派生项目：本规范哪些条目由机器强制、哪些只是默认约定，以及想改时的落点。
 
 1. **机器强制（违反即红）：** CI 步骤（prettier / ESLint / svelte-check / vitest / build，`cargo fmt --check` / clippy `-D warnings` / `cargo test` / `bindings.ts` 同步校验）、提交钩子（commitlint 与 lint-staged）、`i18n:compile` 生成物一致性、`check:sync` 三项对齐（TypeScript 版本 / 插件前后端版本 / 路径别名）。
 2. **默认约定（评审与智能体默认遵循，可改）：** 「架构不变量」中的分层与边界、代码风格中的命名与函数规模、提交流程、测试范围。
@@ -156,4 +155,4 @@ CI 流程与提交钩子细节见 `docs/WORKFLOW.md`。
 
 ---
 
-<!-- 维护说明：本文件是常驻规则层，细节写进 docs/ARCHITECTURE.md 与 docs/WORKFLOW.md；改动本文件时同步检查 docs/INITIAL.md 的落点表 -->
+<!-- 维护说明：本文件是常驻规则层，细节写进 docs/ARCHITECTURE.md 与 docs/WORKFLOW.md -->

@@ -141,7 +141,7 @@ describe("关于页", () => {
     expect(screen.getByText("App info")).not.toBeNull();
     expect(screen.getByText("Project info")).not.toBeNull();
     expect(screen.getByText("Platform info")).not.toBeNull();
-    expect(screen.getByText("Tauri Desktop Template")).not.toBeNull();
+    expect(screen.getByText("Ebook Studio")).not.toBeNull();
     expect(screen.getByText("Current version")).not.toBeNull();
     // 版本号以 tauri.conf.json 构建常量为准，写死会随 bump 脚本失效
     expect(screen.getByText(__APP_TAURI_CONF__.version)).not.toBeNull();

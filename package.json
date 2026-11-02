@@ -1,21 +1,22 @@
 {
-  "name": "tauri-desktop-template",
-  "version": "0.4.2",
-  "description": "Desktop application development template based on Tauri and Svelte.",
+  "name": "ebook-studio-desktop",
+  "version": "0.1.0",
+  "description": "Ebook editor desktop application.",
   "license": "GPL-3.0-only",
   "author": "Alfred Clark",
-  "homepage": "https://github.com/alfredclark/tauri-desktop-template",
+  "homepage": "https://github.com/AlfredClark/ebook-studio-desktop",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alfredclark/tauri-desktop-template.git"
+    "url": "git+https://github.com/AlfredClark/ebook-studio-desktop.git"
   },
   "bugs": {
-    "url": "https://github.com/alfredclark/tauri-desktop-template/issues"
+    "url": "https://github.com/AlfredClark/ebook-studio-desktop/issues"
   },
   "keywords": [
     "tauri",
     "desktop",
-    "template"
+    "ebook",
+    "studio"
   ],
   "type": "module",
   "imports": {

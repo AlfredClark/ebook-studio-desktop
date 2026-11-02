@@ -7,5 +7,5 @@
 
 fn main() {
     // 二进制入口只做转发，桌面 / 移动端（mobile_entry_point）与测试共用同一份 run()
-    tauri_desktop_template_lib::run();
+    ebook_studio_desktop_lib::run();
 }
