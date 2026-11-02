@@ -1,0 +1,5 @@
+[toolchain]
+# 锁死具体的主次版本，避免最新 nightly 或当前 stable 隐式破坏
+channel = "1.99.1"
+# 自动确保安装开发和 Lint 必需的组件
+components = ["rustfmt", "clippy"]

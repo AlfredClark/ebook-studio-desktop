@@ -1,0 +1,28 @@
+# `cargo deny` 配置：后端依赖安全审计基线（见 AGENTS.md 的「安全红线」第 5 条）。
+# 只启用误报率低的检查：RUSTSEC 公告 + crate 来源 + bans（多版本仅警告，不红灯）。
+# 许可证收紧待依赖清单稳定后再做，避免模板初始化即红灯。
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# 以下忽略均为 tauri 生态传递依赖，公告本身注明无安全升级可用（unmaintained 非可利用漏洞），
+# 本仓无法直接升级，只能等上游（tauri / tauri-specta / gtk / zbus 系）迁移；每次升级 tauri 系依赖时重访本表。
+# zip 漏洞（RUSTSEC-2026-0367/0368/0369）已随 zip 9 解决，不列入忽略。
+ignore = [
+  # paste：经 specta → tauri-specta 引入，过程宏仅构建期使用，不进运行时
+  { id = "RUSTSEC-2024-0436", reason = "transitive via specta/tauri-specta, build-time proc-macro only, no safe upgrade per advisory" },
+  # proc-macro-error：经 glib/gtk（仅 Linux 托盘链 tray-icon → tauri）引入，构建期使用
+  { id = "RUSTSEC-2024-0370", reason = "transitive via gtk stack on linux tray backend, build-time only, no safe upgrade per advisory" },
+  # ttf-parser：经 fontdb → tauri-plugin-system-fonts（系统字体枚举）引入
+  { id = "RUSTSEC-2026-0192", reason = "transitive via fontdb/tauri-plugin-system-fonts, no safe upgrade per advisory" },
+  # zbus_names / zvariant / zvariant_derive：经 zbus 5（仅 Linux，tauri-plugin-opener / single-instance 的 D-Bus 依赖）引入，
+  # 公告注明已并入 zbus 6、无安全升级可用
+  { id = "RUSTSEC-2026-0370", reason = "transitive via zbus 5 (tauri-plugin-opener / single-instance), merged into zbus 6, no safe upgrade per advisory" },
+  { id = "RUSTSEC-2026-0371", reason = "transitive via zbus 5 (tauri-plugin-opener / single-instance), merged into zbus 6, no safe upgrade per advisory" },
+  { id = "RUSTSEC-2026-0372", reason = "transitive via zbus 5 (tauri-plugin-opener / single-instance), merged into zbus 6, no safe upgrade per advisory" },
+]
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

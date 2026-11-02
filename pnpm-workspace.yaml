@@ -1,0 +1,10 @@
+allowBuilds:
+  esbuild: true
+
+autoInstallPeers: false
+
+overrides:
+  # prettier-plugin-tailwindcss 会把 @trivago/prettier-plugin-sort-imports（仅支持 prettier 2.x）列为可选 peer，
+  # 安装时自动拉入与 prettier 3 冲突的 @trivago；这里全局重定向到 @ianvs 的实现。
+  # 不要给 key 加父级版本限定（如 prettier-plugin-tailwindcss@0.8.1>...），否则该插件一升级这条规则就会静默失效。
+  "@trivago/prettier-plugin-sort-imports": "npm:@ianvs/prettier-plugin-sort-imports@^4.7.1"

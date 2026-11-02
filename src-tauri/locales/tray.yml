@@ -1,0 +1,8 @@
+_version: 2
+tray:
+  toggle:
+    en: Show / Hide
+    zh-CN: 显示/隐藏
+  quit:
+    en: Quit
+    zh-CN: 退出应用

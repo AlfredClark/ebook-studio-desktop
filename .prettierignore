@@ -1,0 +1,69 @@
+# Common ignore
+node_modules
+.svelte-kit
+build
+dist
+package
+.vite/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+*.log
+# 本地调试与托管平台目录、桌面打包产物（Prettier 不读 .gitignore，此处同步）
+debug/
+.vercel/
+.cloudflare/
+*.app
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*.msi
+*.exe
+*.pdb
+# Rust 构建与 Tauri 生成物（只忽略生成目录，tauri.conf.json 与 capabilities 仍接受排版检查）
+src-tauri/gen
+src-tauri/target
+target
+Cargo.lock
+.pnpm-store/
+pnpm-lock.yaml
+
+# 生成物与缓存
+coverage
+.git
+
+# tsc -b 项目引用产物（.gitignore 已忽略这些文件，但 Prettier 不读 .gitignore，必须在此同步）
+*.config.js
+*.config.d.ts
+*.config.js.map
+*.config.d.ts.map
+*.tsbuildinfo
+
+# AI Agents local state
+.claude
+.cursor
+.commandcode
+.windsurf
+.codeium
+.aider*
+.continue
+.cline
+.roo
+.copilot
+.devin
+.gemini
+
+# Rust
+**/*.rs
+
+# shadcn-svelte 自动生成组件（如需将 CLI 输出交付原样，可取消注释）
+# src/components/shadcn-svelte
+
+# tauri-specta 自动生成（cargo test 每次重写，禁止手改/排版）
+src/libs/commands/bindings.ts
+
+# Paraglide
+src/libs/i18n/paraglide
+src/libs/i18n/project.inlang/**
+!src/libs/i18n/project.inlang/settings.json
+!src/libs/i18n/project.inlang/paraglide.config.ts

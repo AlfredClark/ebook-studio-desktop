@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="%paraglide.lang%" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <script>
+      // 首帧外观恢复：JS 包就绪前的同步兜底，避免暗色/配色/字体用户闪白闪字。
+      // 键名与两处唯一来源同源：明暗读 mode-watcher 默认键（本项目未自定义 modeStorageKey），
+      // 配色读外观 hook 的 COLOR_THEME_STORAGE_KEY，字体三键读 FONT_*_STORAGE_KEY；
+      // 回落分支与 loadFontFamily/loadFontWeight/loadFontSize 对齐，改任一处须同步。
+      try {
+        const mode = localStorage.getItem("mode-watcher-mode") || "system";
+        const dark =
+          mode === "dark" ||
+          (mode !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        const root = document.documentElement;
+        if (dark) {
+          root.classList.add("dark");
+          root.style.colorScheme = "dark";
+        }
+        const colorTheme = localStorage.getItem("color-theme");
+        if (colorTheme && colorTheme !== "neutral") {
+          root.setAttribute("data-color-theme", colorTheme);
+        }
+        const family = (localStorage.getItem("font-family") || "").replace(/["';\\]/g, "").trim();
+        root.style.setProperty(
+          "--app-font-family",
+          family && family !== "system"
+            ? `"${family}", "Geist Variable", sans-serif`
+            : `"Geist Variable", sans-serif`,
+        );
+        const weight = Number(localStorage.getItem("font-weight"));
+        root.style.setProperty(
+          "--app-font-weight",
+          String(
+            Number.isInteger(weight) && weight >= 100 && weight <= 900 && weight % 100 === 0
+              ? weight
+              : 400,
+          ),
+        );
+        const size = Number(localStorage.getItem("font-size"));
+        root.style.setProperty(
+          "--app-font-size",
+          `${Number.isInteger(size) && size >= 75 && size <= 125 && size % 5 === 0 ? size : 100}%`,
+        );
+      } catch {
+        // 存储或媒体查询不可用时按样式表默认渲染，不阻断首帧
+      }
+    </script>
+    <link rel="icon" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tauri Desktop Template</title>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

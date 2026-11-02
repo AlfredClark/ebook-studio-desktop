@@ -1,0 +1,49 @@
+[package]
+name = "tauri-desktop-template"
+version = "0.4.2"
+edition = "2024"
+authors = ["Alfred Clark"]
+description = "Desktop application development template based on Tauri and Svelte."
+repository = "https://github.com/AlfredClark/tauri-desktop-template"
+keywords = ["tauri", "desktop", "template"]
+categories = ["gui"]
+readme = "../README.md"
+license = "GPL-3.0-only"
+
+[lib]
+name = "tauri_desktop_template_lib"
+crate-type = ["rlib"]
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+tauri-plugin-log = "2"
+# 作为 Rust 库使用（系统语言与平台信息采集，见 cores/config.rs / cores/system.rs），未注册 JS API
+tauri-plugin-os = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-i18n = "4.2.1"
+chrono = "0.4.45"
+log = "0.4.34"
+thiserror = "2"
+specta = "=2.0.0-rc.25"
+specta-typescript = "=0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["javascript", "typescript"] }
+anyhow = "1.0.104"
+tauri-plugin-system-fonts = "2.0.2"
+tauri-plugin-clipboard-manager = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-global-shortcut = "2"

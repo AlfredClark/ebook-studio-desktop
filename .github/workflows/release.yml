@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to release (e.g. v1.2.3)."
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve_tag.outputs.tag }}
+      app_version: ${{ steps.resolve_tag.outputs.version }}
+    steps:
+      - name: Resolve
+        id: resolve_tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            RAW_TAG="${GITHUB_REF_NAME}"
+            if [ -z "$RAW_TAG" ]; then
+              RAW_TAG="${GITHUB_REF#refs/tags/}"
+            fi
+          else
+            RAW_TAG="${{ inputs.version }}"
+          fi
+
+          TAG=$(echo "$RAW_TAG" | xargs)
+          VERSION="${TAG#v}"
+
+          echo "Detected Tag: '$TAG'"
+          echo "Parsed Version: '$VERSION'"
+
+          if [ -z "$TAG" ] || [ -z "$VERSION" ]; then
+            echo "::error::Failed to extract a valid tag or version. (RAW_TAG: '$RAW_TAG')"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.resolve_tag.outputs.tag }}
+
+      - name: Verify
+        shell: bash
+        run: |
+          APP_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          CARGO_VERSION=$(grep -m1 '^version' src-tauri/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          EXPECTED_VERSION="${{ steps.resolve_tag.outputs.version }}"
+
+          echo "App Version in tauri.conf.json: $APP_VERSION"
+          echo "App Version in package.json: $PKG_VERSION"
+          echo "App Version in src-tauri/Cargo.toml: $CARGO_VERSION"
+          echo "Expected Version from Tag: $EXPECTED_VERSION"
+
+          if [ "$APP_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::tauri.conf.json version ($APP_VERSION) does not match tag version ($EXPECTED_VERSION)!"
+            exit 1
+          fi
+
+          if [ "$PKG_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag version ($EXPECTED_VERSION)!"
+            exit 1
+          fi
+
+          if [ "$CARGO_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::src-tauri/Cargo.toml version ($CARGO_VERSION) does not match tag version ($EXPECTED_VERSION)!"
+            exit 1
+          fi
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            bundle-glob: |
+              target/release/bundle/appimage/*.AppImage
+              target/release/bundle/appimage/*.AppImage.sig
+              target/release/bundle/deb/*.deb
+              target/release/bundle/deb/*.deb.sig
+              target/release/bundle/rpm/*.rpm
+              target/release/bundle/rpm/*.rpm.sig
+          - target: macos-arm64
+            os: macos-latest
+            bundle-glob: |
+              target/release/bundle/dmg/*.dmg
+              target/release/bundle/macos/*.app.tar.gz
+              target/release/bundle/macos/*.app.tar.gz.sig
+          - target: windows-x86_64
+            os: windows-latest
+            bundle-glob: |
+              target/release/bundle/msi/*.msi
+              target/release/bundle/msi/*.msi.sig
+              target/release/bundle/nsis/*-setup.exe
+              target/release/bundle/nsis/*-setup.exe.sig
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Setup
+        uses: pnpm/setup@v2
+        with:
+          # pnpm 版本唯一来源是 package.json 的 packageManager，不在此重复声明 version
+          runtime: node@24
+          cache: true
+
+      - name: Toolchain
+        # toolchain 版本必须与 rust-toolchain.toml 保持一致
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Dependencies
+        if: matrix.target == 'linux-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl wget file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: I18n
+        run: pnpm run i18n:compile
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          tagName: ${{ needs.prepare.outputs.release_tag }}
+          releaseName: ${{ needs.prepare.outputs.release_tag }}
+          releaseDraft: true
+
+      - name: Attest
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ matrix.bundle-glob }}
+
+  release:
+    name: Publish Release Notes
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip all --tag ${{ needs.prepare.outputs.release_tag }}
+        env:
+          OUTPUT: CHANGELOG.md
+
+      - name: Update GitHub Release
+        run: |
+          TAG="${{ needs.prepare.outputs.release_tag }}"
+          gh release edit "$TAG" --draft=false --notes-file CHANGELOG.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

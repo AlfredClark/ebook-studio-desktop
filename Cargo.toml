@@ -1,0 +1,39 @@
+# 虚拟工作区
+[workspace]
+members = ["src-tauri"]
+resolver = "3"
+
+# 全局 lints 配置为 warn
+[workspace.lints.rust]
+warnings = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Tauri 插件生态的传递依赖必然混入多主版本（如 base64/syn/windows-sys），无法在代码侧收敛，故豁免
+multiple_crate_versions = "allow"
+
+# 配置全局 profile
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+codegen-units = 256
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = "line-tables-only"
+
+[profile.dev.build-override]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = false

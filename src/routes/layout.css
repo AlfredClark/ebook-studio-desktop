@@ -1,0 +1,161 @@
+/* Tailwind v4 入口与 shadcn-svelte 主题令牌。
+   颜色与圆角令牌按 shadcn 约定命名，`.dark` 块在 mode-watcher 切换根元素 .dark 类后生效；
+   调整主题优先改这里的令牌值，换配色改 `themes.css` 的 `[data-color-theme]` 块（`neutral` 即此处默认值）。
+   界面字体、粗细与字号经 `--app-font-*` 由外观设置在运行时覆盖，无值时回退此处默认值。 */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+@import "./themes.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.6 0 0);
+  /* 控件边界色：开关关闭态轨道、滑块未填充轨道等"非文字边界"共用（WCAG 2.2 非文本对比度需 ≥3:1）。
+     取中间灰是有意的——同一个值对白色卡片（实测 3.95:1）与深色卡片（实测 4.54:1）都过线，
+     故无需按明暗分档；再浅就有一侧掉到 3:1 以下。 */
+  --control-boundary: oklch(0.6 0 0);
+  /* 控件列宽：卡片行的右列与所有行内控件（下拉 / 滑块 / 字体选择器）共用同一个值，
+     保证「同一页所有行文案换行宽度一致 + 控件右缘对齐」在三种布局下都成立，是 DESIGN.md
+     里 176px 控件列的唯一来源；改宽度只改这里，不要在调用点另写数值。 */
+  --control-column-width: 11rem;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --app-font-family: "Geist Variable", sans-serif;
+  --app-font-weight: 400;
+  --app-font-size: 100%;
+  /* 字重工具类（`font-thin`…`font-black`）以用户设置为**基准**做相对偏移，而不是全部替换成它：
+     用户调的是"整体粗细"，`font-medium` 与 `font-normal` 之间的相对阶梯在任何档位都保留；
+     无类名文本走 `html` 的 `--app-font-weight` 继承（见文件末尾 base 层）。
+     越界值由浏览器夹到 [1, 1000]，故拧到两端时阶梯自然收敛为同一档，属预期行为。 */
+  --font-weight-thin: calc(var(--app-font-weight) - 300);
+  --font-weight-extralight: calc(var(--app-font-weight) - 200);
+  --font-weight-light: calc(var(--app-font-weight) - 100);
+  --font-weight-normal: var(--app-font-weight);
+  --font-weight-medium: calc(var(--app-font-weight) + 100);
+  --font-weight-semibold: calc(var(--app-font-weight) + 200);
+  --font-weight-bold: calc(var(--app-font-weight) + 300);
+  --font-weight-extrabold: calc(var(--app-font-weight) + 400);
+  --font-weight-black: calc(var(--app-font-weight) + 500);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.6 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+  --font-sans: var(--app-font-family);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-control-boundary: var(--control-boundary);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+    font-weight: var(--app-font-weight);
+    font-size: var(--app-font-size);
+  }
+}

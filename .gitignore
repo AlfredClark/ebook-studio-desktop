@@ -1,0 +1,179 @@
+# ==========================================
+# Rust & Cargo
+# ==========================================
+# Cargo 构建输出
+target/
+# 根目录如果也有调试中间产物
+debug/
+
+# rustfmt 备份文件
+**/*.rs.bk
+
+# 调试与测试生成物
+*.pdb
+**/mutants.out*/
+
+# TypeScript 增量编译缓存（tsconfig.node.json 开启 composite 后生成）
+*.tsbuildinfo
+
+# Cargo.lock: 通常建议提交 Cargo.lock，以确保依赖版本确定性。
+# Cargo.lock
+
+# ==========================================
+# Tauri 专属生成物
+# ==========================================
+# Tauri 2.0 在编译和生成平台代码时创建的临时/代码生成目录
+src-tauri/gen/
+# 移动端临时生成物
+src-tauri/gen/android/
+src-tauri/gen/ios/
+# Tauri 桌面打包阶段产生的安装包和 bundle 产物
+src-tauri/target/
+# 安装包（若 bundle 输出到仓库根目录；默认在 src-tauri/target/release/bundle/）
+*.app
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*.msi
+*.exe
+
+# ==========================================
+# 前端依赖与构建 (pnpm + SvelteKit + Vite)
+# ==========================================
+node_modules/
+.pnpm-store/
+
+# SvelteKit 编译缓存与输出
+.svelte-kit/
+build/
+package/
+dist/
+.vercel/
+.cloudflare/
+
+# vitest 覆盖率产物（与 .prettierignore 同步，见 AGENTS.md §10.4）
+coverage/
+
+# Vite 缓存与时间戳临时文件
+.vite/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# tsc -b 项目引用（composite）产生的类型声明与编译产物
+tsconfig.node.*.tsbuildinfo
+*.config.d.ts
+*.config.js
+*.config.d.ts.map
+*.config.js.map
+
+# ==========================================
+# 环境变量与敏感凭据
+# ==========================================
+.env
+.env.*
+!.env.example
+# Tauri / 桌面签名密钥与证书
+*.key
+*.pem
+*.pfx
+
+# ==========================================
+# 日志与临时文件
+# ==========================================
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# ==========================================
+# IDE & 编辑器
+# ==========================================
+# JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ==========================================
+# 操作系统缓存
+# ==========================================
+# Linux / KDE / GNOME 桌面缩略图与临时文件
+*~
+.directory
+.Trash-*
+.nfs*
+
+# 跨平台系统遗留
+.DS_Store
+Thumbs.db
+
+# ==============================================================================
+# Agent 相关目录
+# ==============================================================================
+
+# Claude Code / Anthropic
+.claude/
+!.claude/config.json
+
+# Command Code
+.commandcode/
+
+# Cursor
+.cursor/
+
+# Windsurf
+.windsurf/
+.codeium/
+
+# Copilot
+.copilot/
+
+# Aider
+.aider*
+!.aider.conf.yml        # 保留团队共享的全局配置
+
+# Continue.dev
+.continue/
+!.continue/config.json  # 如需团队统一模型/路由配置可保留此项
+
+# Devin
+.devin/
+
+# Roo Code / Cline
+.cline/
+.roo/
+
+# Gemini
+.gemini/
+
+# Open Interpreter
+.interpreter/
+
+# 常见本地 Agent 运行时临时导出
+.agent/
+.agents/
+agent-logs/
+
+# ==============================================================================
+# 组件配置 或 第三方生成目录
+# ==============================================================================
+
+# Paraglide
+src/libs/i18n/paraglide
+src/libs/i18n/project.inlang/cache
+!src/libs/i18n/project.inlang/settings.json
+!/src/libs/i18n/project.inlang/paraglide.config.ts
