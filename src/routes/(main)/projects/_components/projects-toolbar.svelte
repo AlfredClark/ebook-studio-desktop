@@ -122,7 +122,7 @@
     class="w-32 min-w-0 flex-1"
   />
   <Select type="single" value={sortKey} items={sortItems} onValueChange={handleSortChange}>
-    <SelectTrigger class="w-28 shrink-0" aria-label={m.projects_toolbar_sort_label()}>
+    <SelectTrigger class="w-32 shrink-0" aria-label={m.projects_toolbar_sort_label()}>
       <SelectValue />
     </SelectTrigger>
     <SelectContent>
@@ -135,7 +135,7 @@
     </SelectContent>
   </Select>
   <Select type="single" value={filter} items={filterItems} onValueChange={handleFilterChange}>
-    <SelectTrigger class="w-24 shrink-0" aria-label={m.projects_toolbar_filter_label()}>
+    <SelectTrigger class="w-28 shrink-0" aria-label={m.projects_toolbar_filter_label()}>
       <SelectValue />
     </SelectTrigger>
     <SelectContent>

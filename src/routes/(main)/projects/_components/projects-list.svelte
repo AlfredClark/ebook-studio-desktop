@@ -31,6 +31,7 @@
     onEditCancel,
     onEditConfirm,
     onDelete,
+    onOpen,
   }: {
     projects: ProjectInfo[];
     activeId: string | undefined;
@@ -43,6 +44,7 @@
     onEditCancel: () => void;
     onEditConfirm: (id: string, name: string) => void;
     onDelete: (id: string) => void;
+    onOpen: (id: string) => void;
   } = $props();
 
   let draftName = $state("");
@@ -84,6 +86,15 @@
     }
   }
 
+  /** 行双击打开项目：仅行内空白/文本区生效，聚焦行内控件（按钮/输入框等）时放行，不误触。 */
+  function handleRowDoubleClick(event: MouseEvent, id: string): void {
+    const target = event.target as HTMLElement | null;
+    if (target !== null && target.closest("button, input, select, textarea, a") !== null) {
+      return;
+    }
+    onOpen(id);
+  }
+
   /** 行回车/空格选中：事件来自行内控件时放行，不重复触发。 */
   function handleRowKeydown(event: KeyboardEvent, id: string): void {
     if (event.target !== event.currentTarget) {
@@ -95,8 +106,11 @@
     }
   }
 
-  /** 编辑框按键：回车确认、Esc 取消；阻止冒泡避免触发行选中。 */
+  /** 编辑框按键：组词中（isComposing）只确认组词，不触发改名；回车确认、Esc 取消；阻止冒泡避免触发行选中。 */
   function handleDraftKeydown(event: KeyboardEvent, id: string): void {
+    if (event.isComposing) {
+      return;
+    }
     event.stopPropagation();
     if (event.key === "Enter") {
       event.preventDefault();
@@ -132,6 +146,7 @@
           aria-selected={active}
           tabindex={0}
           onclick={() => onSelect(project.id)}
+          ondblclick={(event) => handleRowDoubleClick(event, project.id)}
           onkeydown={(event) => handleRowKeydown(event, project.id)}
           class={cn(
             "flex min-w-0 items-center gap-2 rounded-lg px-2 py-2 outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50",

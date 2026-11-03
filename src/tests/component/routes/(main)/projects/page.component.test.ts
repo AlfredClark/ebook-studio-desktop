@@ -79,6 +79,7 @@ function failed(): EnhancedCommand<Err> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   commandsMock.listProjects.mockReturnValue(ok([...backendProjects]));
   commandsMock.createProject.mockImplementation((name: string, type: ProjectInfo["type"]) =>
     ok({
@@ -210,6 +211,38 @@ describe("项目页", () => {
     expect(commandsMock.createProject).toHaveBeenCalledWith("纸飞机", "novel");
   });
 
+  it("组词中的回车只确认组词，不触发改名落盘", async () => {
+    render(Page);
+    await screen.findAllByRole("option");
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    const box = screen.getByRole("textbox");
+    await fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+
+    expect(commandsMock.renameProject).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).not.toBeNull();
+  });
+
+  it("首跑空态引导直达新建，组词中弹窗确认被拦截", async () => {
+    const user = userEvent.setup();
+    commandsMock.listProjects.mockReturnValue(ok([]));
+    render(Page);
+
+    expect(await screen.findByText("No projects yet")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Novel" }));
+
+    const dialog = await screen.findByRole("dialog", { hidden: true });
+    const input = within(dialog).getByPlaceholderText("Enter project name");
+    await user.type(input, "雾镇");
+    await fireEvent.compositionStart(input);
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(commandsMock.createProject).not.toHaveBeenCalled();
+
+    await fireEvent.compositionEnd(input);
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(commandsMock.createProject).toHaveBeenCalledWith("雾镇", "novel");
+  });
+
   it("行内编辑回车确认落盘并提示，取消放弃修改", async () => {
     const user = userEvent.setup();
     render(Page);
@@ -249,6 +282,40 @@ describe("项目页", () => {
     await user.click(screen.getAllByRole("button", { name: "Open project" })[0]);
 
     expect(gotoMock).toHaveBeenCalledWith("/comic/22222222-2222-4222-8222-222222222222/metadata");
+  });
+
+  it("行内空白双击打开对应项目的元数据步骤", async () => {
+    const user = userEvent.setup();
+    render(Page);
+    await screen.findAllByRole("option");
+
+    await user.dblClick(screen.getByText("星海长歌"));
+
+    expect(gotoMock).toHaveBeenCalledWith("/novel/11111111-1111-4111-8111-111111111111/metadata");
+  });
+
+  it("返回项目页后恢复上次选中，存量失效时回落首项", async () => {
+    const user = userEvent.setup();
+    render(Page);
+    await screen.findAllByRole("option");
+
+    await user.click(screen.getByText("星海长歌"));
+    expect(localStorage.getItem("app.projects.activeId")).toBe(
+      "11111111-1111-4111-8111-111111111111",
+    );
+
+    // 模拟离开再返回：卸载重挂载
+    cleanup();
+    render(Page);
+
+    expect(await screen.findByRole("heading", { name: "星海长歌" })).not.toBeNull();
+
+    // 存量 id 已不存在时回落最近更新项
+    cleanup();
+    localStorage.setItem("app.projects.activeId", "00000000-0000-4000-8000-000000000000");
+    render(Page);
+
+    expect(await screen.findByRole("heading", { name: "雾镇" })).not.toBeNull();
   });
 
   it("行删除图标经确认框删除", async () => {

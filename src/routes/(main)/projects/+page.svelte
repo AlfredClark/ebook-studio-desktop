@@ -2,6 +2,8 @@
   // 项目页：左右分栏 + 操作栏/列表/详情组装；项目数据来自后端命令，进页拉取一次，
   // 创建/删除用命令返回值直接改本地态，页内不再重拉。
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { Button } from "#components/shadcn-svelte/button";
   import * as Resizable from "#components/shadcn-svelte/resizable";
   import { Skeleton } from "#components/shadcn-svelte/skeleton";
@@ -54,6 +56,32 @@
   // 右栏只预览可见列表中的选中项；筛掉或删掉后切空态但保留 activeId，不自动跳选。
   const activeProject = $derived(visibleProjects.find((project) => project.id === activeId));
 
+  /** 选中项持久化键：新增键统一 `app.` 前缀，返回/刷新后仍选中上次项目。 */
+  const ACTIVE_ID_KEY = "app.projects.activeId";
+
+  /** 读存量选中；无痕/禁用存储时回落空，不阻断加载。 */
+  function readStoredActiveId(): string | undefined {
+    try {
+      return localStorage.getItem(ACTIVE_ID_KEY) ?? undefined;
+    } catch {
+      // 存储不可用时视为无存量
+      return undefined;
+    }
+  }
+
+  /** 写存量选中；失败静默跳过，不影响主流程。 */
+  function storeActiveId(id: string | undefined): void {
+    try {
+      if (id === undefined) {
+        localStorage.removeItem(ACTIVE_ID_KEY);
+      } else {
+        localStorage.setItem(ACTIVE_ID_KEY, id);
+      }
+    } catch {
+      // 存储不可用时跳过持久化
+    }
+  }
+
   /** 进页拉取一次：成功落本地态并补默认选中，失败走空列表 + 错误态。 */
   async function loadProjects(): Promise<void> {
     loading = true;
@@ -66,11 +94,21 @@
       return;
     }
     projects = result.data;
-    // 勾选只保留仍存在的 id；选中缺失时默认首个可见项。
+    // 勾选只保留仍存在的 id；选中优先恢复存量，缺失（删除/首次）时默认首个可见项。
     checkedIds = checkedIds.filter((id) => projects.some((project) => project.id === id));
-    if (!projects.some((project) => project.id === activeId)) {
+    const storedId = readStoredActiveId();
+    if (storedId !== undefined && projects.some((project) => project.id === storedId)) {
+      activeId = storedId;
+    } else {
       activeId = filterAndSortProjects(projects, { query, sortKey, filter }).at(0)?.id;
     }
+    storeActiveId(activeId);
+  }
+
+  /** 行选中：落本地态并同步存量，返回后再进页可恢复。 */
+  function handleSelect(id: string): void {
+    activeId = id;
+    storeActiveId(id);
   }
 
   /** 新建菜单选类型后开弹窗，类型决定弹窗标题。 */
@@ -90,6 +128,7 @@
     }
     projects = [result.data, ...projects];
     activeId = result.data.id;
+    storeActiveId(result.data.id);
     // 新项目在当前筛选/搜索下不可见时回落到全部，避免"建了却看不到"。
     const nowVisible = filterAndSortProjects(projects, { query, sortKey, filter }).some(
       (project) => project.id === result.data.id,
@@ -205,6 +244,21 @@
               {m.projects_list_retry()}
             </Button>
           </div>
+        {:else if projects.length === 0}
+          <div
+            class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center"
+          >
+            <p class="text-sm font-medium">{m.projects_empty_title()}</p>
+            <p class="text-sm text-muted-foreground">{m.projects_empty_description()}</p>
+            <div class="flex items-center gap-2">
+              <Button size="sm" onclick={() => handleCreateMenu("novel")}>
+                {m.projects_type_novel()}
+              </Button>
+              <Button size="sm" variant="outline" onclick={() => handleCreateMenu("comic")}>
+                {m.projects_type_comic()}
+              </Button>
+            </div>
+          </div>
         {:else}
           <ProjectsList
             projects={visibleProjects}
@@ -212,12 +266,18 @@
             {checkedIds}
             {editingId}
             {renaming}
-            onSelect={(id) => (activeId = id)}
+            onSelect={handleSelect}
             onToggle={(id, checked) => (checkedIds = toggleCheckedId(checkedIds, id, checked))}
             onEditStart={(id) => (editingId = id)}
             onEditCancel={() => (editingId = null)}
             onEditConfirm={(id, name) => void handleRenameConfirm(id, name)}
             onDelete={handleRowDelete}
+            onOpen={(id) => {
+              const project = projects.find((item) => item.id === id);
+              if (project) {
+                void goto(resolve(`/${project.type}/${project.id}/metadata`));
+              }
+            }}
           />
         {/if}
       </div>

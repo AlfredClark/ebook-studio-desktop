@@ -14,6 +14,8 @@
   "projects_toolbar_filter_label": "Filter by type",
   "projects_toolbar_batch": "Bulk actions",
   "projects_toolbar_refresh": "Refresh",
+  "projects_empty_title": "No projects yet",
+  "projects_empty_description": "Create a novel or comic project to get started",
   "projects_open": "Open project",
   "projects_back": "Back to projects",
   "projects_steps_nav": "Project steps",

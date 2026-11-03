@@ -14,6 +14,8 @@
   "projects_toolbar_filter_label": "分类筛选",
   "projects_toolbar_batch": "批量操作",
   "projects_toolbar_refresh": "刷新",
+  "projects_empty_title": "还没有项目",
+  "projects_empty_description": "创建一个小说或漫画项目开始吧",
   "projects_open": "打开项目",
   "projects_back": "返回项目列表",
   "projects_steps_nav": "项目步骤",

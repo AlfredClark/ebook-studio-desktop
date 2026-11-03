@@ -21,6 +21,9 @@
 
   let name = $state("");
 
+  /** 输入法组词中不提交，组词结束才允许确认；与工具栏搜索同策略。 */
+  let composing = $state(false);
+
   /** 打开即清空，保证每次都是空白输入；关窗不同路径（确认/取消/右上/Esc）都覆盖到。 */
   $effect(() => {
     if (open) {
@@ -31,12 +34,13 @@
   /** 去首尾空白后仍有内容且非提交中才可提交。 */
   const canSubmit = $derived(name.trim() !== "" && !creating);
 
-  /** 回车等同确认；空名禁用由按钮守住，此处再防一层。 */
+  /** 回车等同确认；组词中或空名不提交，按钮禁用同步守住。 */
   function handleSubmit(event: SubmitEvent): void {
     event.preventDefault();
-    if (canSubmit) {
-      onConfirm(name.trim());
+    if (composing || !canSubmit) {
+      return;
     }
+    onConfirm(name.trim());
   }
 </script>
 
@@ -57,6 +61,8 @@
         <Input
           id="project-name"
           bind:value={name}
+          oncompositionstart={() => (composing = true)}
+          oncompositionend={() => (composing = false)}
           type="text"
           maxlength={100}
           placeholder={m.projects_create_name_placeholder()}
