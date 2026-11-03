@@ -26,14 +26,14 @@ web
 
 **「生产级接线 + 刻意干净的主分支」**——同类模板要么是教学示例仓（业务样例占满、派生时先大扫除），要么是空脚手架（关键能力留给使用者自己接）。
 
-本应用的机制：能力全部真实接线（非文档承诺）、页面是**部分能力**的验证面（`/settings` 展示后端落盘 + 纯前端 + 快捷键注册三类设置的完整链，`/about` 展示诊断与更新链路），主分支不带任何业务示例。
+本应用的机制：能力全部真实接线（非文档承诺）、页面是**部分能力**的验证面（`/settings` 展示后端落盘 + 纯前端 + 快捷键注册三类设置的完整链，`/about` 展示诊断与更新链路，`/projects` 展示项目增删改查后端链 + `(projects)` 展示分组自带 chrome 的步骤导航），主分支不带任何业务示例。
 
 ## Operating Context
 
 - **平台与分发**：仅桌面三平台（Windows / macOS / Linux），打包目标 deb / AppImage / rpm / app / dmg / msi / nsis；自动更新对接 GitHub Releases `latest.json`。
 - **开发工作流**：`pnpm`（Node ≥ 24、pnpm@12.15.0）+ 锁定 Rust 工具链；日常入口 `pnpm tauri:dev` / `pnpm format` / `pnpm validate`；提交走 Conventional Commits（英文、小写），手动提交；CI（`ci.yml`）与发布（`release.yml`）已就位。
 - **初始化**：已按初始化清单完成改名、换协议、换更新密钥、换图标与文档收尾。
-- **评估面**：README（en）+ `docs/README_zh-CN.md`、`docs/ARCHITECTURE.md` / `docs/WORKFLOW.md`、`docs/images/` 三张截图，以及运行中的应用本身（`/`、`/settings`、`/about`）。
+- **评估面**：README（en）+ `docs/README_zh-CN.md`、`docs/ARCHITECTURE.md` / `docs/WORKFLOW.md`、`docs/images/` 三张截图，以及运行中的应用本身（`/`、`/settings`、`/about`、`/projects` 与 `(projects)` 小说/漫画六步骤）。
 - **模板自身页面即展示面**（已确认）：`/settings` 演示持久化设置、外观设置与快捷键设置三条链，`/about` 演示信息 / 诊断 / 更新，`/` 是布局骨架验证起点；三页可以继续打磨，但必须保持「接线真实可用」。
 
 ## Capabilities and Constraints

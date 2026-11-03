@@ -15,7 +15,7 @@
 - **国际化：** 前端 Paraglide（策略 `localStorage` + `baseLocale`，CLI 为 `@inlang/cli`）；后端 rust-i18n（`src-tauri/locales/*.yml`，`fallback = "en"`）。
 - **后端：** Tauri v2 + Rust（`edition = "2024"`，工具链由 `rust-toolchain.toml` 锁定，`tauri-build` 构建脚本）。
 - **后端插件：** `opener` / `store` / `log` / `os` / `updater` / `autostart` / `window-state` / `system-fonts` / `single-instance` / `deep-link` / `clipboard-manager` / `global-shortcut`——依次对应外部打开、持久化（`config.json` 存 `locale`）、日志、系统语言与平台信息采集（`tauri-plugin-os` 仅作 Rust 库使用）、自动更新 / 开机自启 / 窗口状态（仅非移动端启用）、系统字体探测（`plugins/system_fonts.rs`）、单实例（二次启动聚焦 + 深链参数转发，仅桌面端）、深链协议（`plugins.deep-link.desktop.schemes`）、剪贴板纯文本、显示应用全局快捷键（配置驱动动态注册，仅桌面端、无前端直调）。
-- **后端支撑：** `serde` / `serde_json` + `chrono`（UTC 时间）+ `log` 门面 + `thiserror` / `anyhow`（统一错误 `CommandError` / `CommandResult`）。
+- **后端支撑：** `serde` / `serde_json` + `chrono`（UTC 时间）+ `uuid`（项目 id/文件夹名）+ `log` 门面 + `thiserror` / `anyhow`（统一错误 `CommandError` / `CommandResult`）。
 - **构建 / 质量：** Vite（固定端口 `1420`）+ `svelte-check` 严格 TS 检查 + ESLint / Prettier + vitest；包管理器 `pnpm`（`engines.node >= 24`）；`pnpm-lock.yaml` 与 `Cargo.lock` 均提交。
 - **部署：** GitHub Actions + Tauri bundler；入口 `.github/workflows/ci.yml`（质量门禁）、`release.yml`（打包发布）。
 
@@ -44,19 +44,24 @@ ebook-studio-desktop/
 │   │   │   ├── +layout.svelte      # 分组布局：LayoutContainer 包裹，特殊页另起分组即可绕开布局
 │   │   │   ├── +page.svelte        # 占位首页：布局骨架验证起点，业务在此开发
 │   │   │   ├── about/              # 关于页（应用 / 项目 / 平台分组 + 更新面板；页面组件在 `_components/`）
-│   │   │   └── settings/           # 完整设置页（通用 + 外观 + 快捷键 + 重置；页面组件在 `_components/`，超过 ~8 个分组时按分组建子目录）
+│   │   │   ├── settings/           # 完整设置页（通用 + 外观 + 快捷键 + 重置；页面组件在 `_components/`，超过 ~8 个分组时按分组建子目录）
+│   │   │   └── projects/           # 项目页（左右分栏：操作栏 + 列表 / 详情；新建弹窗 + 确认框 + 行内改名，页面组件在 `_components/`）
+│   │   ├── (projects)/             # 项目工作区分组（括号不进 URL）：自带步骤导航 chrome，不走 LayoutContainer
+│   │   │   ├── +layout.svelte      # 分组布局：仅内容槽 + 底边版权，窗口控制下沉到步骤导航栏
+│   │   │   ├── _components/        # 分组共享：project-steps-nav.svelte（返回 + 面包屑 + 拖拽区 + 窗口控制）、window-controls.svelte
+│   │   │   └── novel|comic/[uuid]/ # 项目类型 × id：+layout（步骤导航）+ 裸路由重定向 + metadata/files/edit/build/package/export 六步骤页（占位）
 │   │   └── layout.css              # Tailwind v4 入口与 shadcn-svelte 主题令牌（含 .dark 暗色变体与 --app-font-* 外观变量）
 │   │   └── themes.css              # 配色主题令牌（鲜艳系 7 色 + 暗色美学 3 色的浅色 + :root.dark 暗色块，neutral 回落 layout.css）
 │   ├── components/
 │   │   ├── common/                 # 跨页共享的手写组件（error-boundary.svelte 全局渲染兜底，card-section/row.svelte 通用卡片分组与行，confirm-dialog.svelte 通用确认弹窗）
 │   │   ├── layout/                 # 布局子系统：layout-container.svelte 容器 + tabs（标题栏/标签栏/内容/底边）、sidebar（侧边栏 + 标题栏/内容/底边）与 dashboard（可收起左侧导航 + 标题栏/内容/底边）实现，新增布局需在 libs/hooks/appearance.svelte.ts 中映射
 │   │   │   └── parts/              # 布局配套部件（title-bar / nav-tabs-bar / side-nav-bar / dashboard-nav-bar / copyright）
-│   │   └── shadcn-svelte/          # CLI 生成的 UI 组件（nova / neutral / lucide），新增走 CLI 添加，勿手动重组
+│   │   └── shadcn-svelte/          # CLI 生成的 UI 组件（nova / neutral / lucide），新增走 CLI 添加，勿手动重组；已引入 resizable / checkbox / dropdown-menu / breadcrumb
 │   ├── tests/                      # 前端测试集中目录，按源路径镜像：unit/ 纯逻辑（node）+ component/ 组件（jsdom）
 │   └── libs/
 │       ├── commands/               # tauri-specta 契约链（bindings.ts 生成物 + 链式 API 封装）
 │       ├── i18n/                   # Paraglide：messages/ 文案、project.inlang/ 配置、paraglide/ 生成物、locale.svelte.ts 语言响应式桥
-│       ├── navigation/             # 导航等应用级注册表（nav-tabs.ts：路径 / 图标 / 顺序，顶部标签栏与侧边栏导航同源）
+│       ├── navigation/             # 导航等应用级注册表（nav-tabs.ts：路径 / 图标 / 顺序，顶部标签栏与侧边栏导航同源；project-steps.ts：项目六步骤 slug / 顺序 / 当前步解析）
 │       ├── shortcut/                 # 快捷键领域模块（展示切分 / 录制归一化，与后端 `Shortcut::from_str` 可解析子集对齐）
 │       ├── utils/                  # 前端通用工具（shadcn-svelte.ts 的 cn()、window-controls.ts、toast.ts、opener.ts）
 │       └── hooks/                  # 前端共享状态（统一经 #libs/hooks 引用），如 appearance.svelte.ts（布局注册表 + 字体偏好）、config.svelte.ts（后端配置内存态）、updater.svelte.ts（更新状态）、is-mobile.svelte.ts（响应式断点）、deep-link.svelte.ts（三路深链入口）、dashboard.svelte.ts（仪表盘侧栏折叠偏好）
@@ -66,7 +71,7 @@ ebook-studio-desktop/
 │   │   ├── lib.rs                  # 串联插件注册 → 命令处理器 → 核心初始化
 │   │   ├── commands/               # 命令封装层：薄封装 + collect_commands! 注册
 │   │   ├── cores/                  # 通用能力与跨层共享类型（types / locale / config / deep_link / shortcut / specta / system / tray / updater）
-│   │   ├── features/               # 具体业务逻辑：按业务类型拆文件组装完整业务，供 commands/ 调用（通用逻辑抽到 cores/；当前为空）
+│   │   ├── features/               # 具体业务逻辑：按业务类型拆文件组装完整业务，供 commands/ 调用（通用逻辑抽到 cores/；projects.rs：APPDATA/Projects 落盘读写）
 │   │   └── plugins/                # 各 Tauri 插件的初始化（log / store / opener / updater / autostart / window-state / system-fonts / single-instance / deep-link / clipboard / global-shortcut）
 │   ├── locales/                    # rust-i18n 后端文案（按功能分文件，一文件一命名空间：当前 tray.yml 的 tray.*，单文件可内含多 locale 的 en/zh-CN 双写）
 │   ├── app-icon.svg                # 应用图标源（推荐正方形透明底 SVG，标称尺寸任意；PNG 备选 ≥1024；`pnpm tauri:icon` 的输入，换图标时替换本文件）
