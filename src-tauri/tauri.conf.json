@@ -23,6 +23,10 @@
       }
     ],
     "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**/*"]
+      },
       "devCsp": {
         "default-src": "'self' http://localhost:1420",
         "connect-src": "'self' ipc: http://ipc.localhost https://ipc.localhost tauri: http://localhost:1420 ws://localhost:1420 ws://localhost:1421",

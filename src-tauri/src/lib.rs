@@ -29,6 +29,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(plugins::log::init())
+        .plugin(plugins::dialog::init())
         .plugin(plugins::store::init())
         .plugin(plugins::opener::init())
         .plugin(plugins::clipboard::init())

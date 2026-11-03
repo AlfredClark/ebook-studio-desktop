@@ -4,5 +4,11 @@
   "description": "Capability for the plugins",
   "platforms": ["linux", "macOS", "windows"],
   "windows": ["main"],
-  "permissions": ["deep-link:default", "log:default", "opener:default", "system-fonts:default"]
+  "permissions": [
+    "deep-link:default",
+    "dialog:allow-open",
+    "log:default",
+    "opener:default",
+    "system-fonts:default"
+  ]
 }

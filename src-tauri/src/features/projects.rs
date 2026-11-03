@@ -51,6 +51,17 @@ fn resolve_projects_root(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     Ok(root)
 }
 
+/// 解析单个项目目录：id 必须为合法 `UUID`（路径穿越守卫），目录不存在视为目标缺失。
+pub fn resolve_project_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<PathBuf> {
+    uuid::Uuid::parse_str(id).with_context(|| format!("invalid project id: {id}"))?;
+    let root = resolve_projects_root(app)?;
+    let dir = root.join(id);
+    if !dir.is_dir() {
+        anyhow::bail!("project not found: {id}");
+    }
+    Ok(dir)
+}
+
 /// 校验展示名：非空（去首尾空白后）且不超长；名称不参与路径，无需字符黑名单。
 fn sanitize_name(name: &str) -> anyhow::Result<String> {
     let trimmed = name.trim();
@@ -90,7 +101,7 @@ pub fn list_projects_in(root: &Path) -> anyhow::Result<Vec<ProjectInfo>> {
 }
 
 /// 读取并解析单个 `project.json`。
-fn read_manifest(manifest: &Path) -> anyhow::Result<ProjectInfo> {
+pub fn read_manifest(manifest: &Path) -> anyhow::Result<ProjectInfo> {
     let text = std::fs::read_to_string(manifest)
         .with_context(|| format!("failed to read manifest: {}", manifest.display()))?;
     serde_json::from_str(&text)

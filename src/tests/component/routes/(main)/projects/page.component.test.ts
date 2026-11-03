@@ -48,6 +48,7 @@ const commandsMock = vi.hoisted(() => ({
   createProject: vi.fn(),
   renameProject: vi.fn(),
   deleteProjects: vi.fn(),
+  getProjectOverview: vi.fn(),
 }));
 
 vi.mock("#libs/commands", () => ({
@@ -100,6 +101,9 @@ beforeEach(() => {
     }),
   );
   commandsMock.deleteProjects.mockImplementation((ids: string[]) => ok(ids.length));
+  commandsMock.getProjectOverview.mockImplementation(() =>
+    ok({ metadata: null, cover_path: null }),
+  );
 });
 
 afterEach(() => {

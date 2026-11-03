@@ -7,6 +7,7 @@
 #![allow(clippy::unnecessary_wraps)]
 
 pub mod config;
+pub mod metadata;
 pub mod projects;
 pub mod system;
 pub mod updater;
@@ -24,6 +25,12 @@ macro_rules! collect_commands {
             $crate::commands::projects::create_project,
             $crate::commands::projects::rename_project,
             $crate::commands::projects::delete_projects,
+            $crate::commands::metadata::get_project_metadata,
+            $crate::commands::metadata::update_project_metadata,
+            $crate::commands::metadata::reset_project_metadata,
+            $crate::commands::metadata::import_project_cover,
+            $crate::commands::metadata::get_project_cover_path,
+            $crate::commands::metadata::get_project_overview,
             $crate::commands::system::get_system_info,
             $crate::commands::system::quit_app,
             $crate::commands::system::open_log_dir,

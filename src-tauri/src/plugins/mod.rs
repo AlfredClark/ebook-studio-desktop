@@ -8,6 +8,7 @@ pub mod autostart;
 pub mod clipboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod deep_link;
+pub mod dialog;
 pub mod log;
 pub mod opener;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

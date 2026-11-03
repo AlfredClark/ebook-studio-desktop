@@ -1,29 +1,112 @@
 <script lang="ts">
-  // 右栏详情：只读展示选中项目的基础信息，无选中走空态；详情交互后续接通。
+  // 右栏详情：只读展示选中项目的封面与元数据；无选中走空态，
+  // 无元数据回落默认封面（2:3 项目名）与项目创建时间。
+  // 作者 / 主题词 / 简介常显，其余属性收进末尾的更多信息折叠区。
+  import { convertFileSrc } from "@tauri-apps/api/core";
+  import * as Accordion from "#components/shadcn-svelte/accordion";
   import { Badge } from "#components/shadcn-svelte/badge";
+  import commands from "#libs/commands";
+  import type { ProjectInfo, ProjectMetadata, ProjectOverview } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
   import { getLocale } from "#libs/i18n/paraglide/runtime";
   import { formatDateTime } from "./project-data";
-  import type { ProjectInfo } from "#libs/commands/types";
 
   let { project }: { project: ProjectInfo | undefined } = $props();
+
+  let overview = $state<ProjectOverview | null>(null);
+  let coverUrl = $state<string | null>(null);
+
+  /** 折叠区是否有内容：九项附加属性任一非空即展示。 */
+  function hasMoreInfo(meta: ProjectMetadata): boolean {
+    return (
+      meta.alternative !== "" ||
+      meta.contributor !== "" ||
+      meta.language !== "" ||
+      meta.publisher !== "" ||
+      meta.date_published !== null ||
+      meta.series !== "" ||
+      meta.volume !== "" ||
+      meta.source !== "" ||
+      meta.rights !== ""
+    );
+  }
+
+  /** 绝对路径转预览 URL：非 Tauri 环境（单测 / 纯浏览器）转失败时回落空，走默认封面。 */
+  function toCoverUrl(path: string): string | null {
+    try {
+      return convertFileSrc(path);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 拉取概览快照：只读不建文件；失败静默回落默认展示（后端已记日志）。 */
+  async function loadOverview(id: string): Promise<void> {
+    const result = await commands.getProjectOverview(id).result();
+    if (result.status === "error" || id !== project?.id) {
+      return;
+    }
+    overview = result.data;
+    const path = result.data.cover_path;
+    coverUrl = path == null ? null : toCoverUrl(path);
+  }
+
+  // 选中变化即重拉；切空选中时清空旧快照，避免残留上一个项目。
+  $effect(() => {
+    const id = project?.id;
+    overview = null;
+    coverUrl = null;
+    if (id !== undefined) {
+      void loadOverview(id);
+    }
+  });
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-4 overflow-auto p-6">
   {#if project}
+    {@const meta = overview?.metadata}
     <div class="flex min-w-0 items-center gap-2">
-      <h2 class="min-w-0 flex-1 truncate text-lg font-medium">{project.name}</h2>
+      <h2 class="min-w-0 flex-1 truncate text-lg font-medium">{meta?.title || project.name}</h2>
       <Badge variant="outline" class="shrink-0">
         {project.type === "novel" ? m.projects_type_novel() : m.projects_type_comic()}
       </Badge>
     </div>
-    <dl class="flex flex-col gap-2 text-sm">
-      <div class="flex items-center justify-between gap-2">
-        <dt class="shrink-0 text-muted-foreground">{m.projects_detail_type()}</dt>
-        <dd class="min-w-0 truncate">
-          {project.type === "novel" ? m.projects_type_novel() : m.projects_type_comic()}
-        </dd>
+    {#if coverUrl !== null}
+      <div class="flex justify-center">
+        <img
+          src={coverUrl}
+          alt={m.metadata_cover_preview_alt()}
+          class="aspect-[2/3] w-40 rounded-md border object-cover"
+        />
       </div>
+    {:else}
+      <div class="flex justify-center">
+        <div
+          class="flex aspect-[2/3] w-40 items-center justify-center rounded-md border bg-muted p-3 text-center"
+        >
+          <span class="line-clamp-4 text-sm font-medium">{meta?.title || project.name}</span>
+        </div>
+      </div>
+    {/if}
+    <dl class="flex flex-col gap-2 text-sm">
+      {#if meta?.creator}
+        <div class="flex items-center justify-between gap-2">
+          <dt class="shrink-0 text-muted-foreground">{m.metadata_creator_label()}</dt>
+          <dd class="min-w-0 truncate">{meta.creator}</dd>
+        </div>
+      {/if}
+      {#if meta?.description}
+        <div class="flex flex-col gap-1">
+          <dt class="shrink-0 text-muted-foreground">{m.metadata_description_label()}</dt>
+          <dd class="line-clamp-3">{meta.description}</dd>
+        </div>
+      {/if}
+      {#if meta && meta.subjects.length > 0}
+        <div class="flex items-center justify-between gap-2">
+          <dt class="shrink-0 text-muted-foreground">{m.metadata_subjects_label()}</dt>
+          <dd class="min-w-0 truncate">{meta.subjects.join("，")}</dd>
+        </div>
+      {/if}
       <div class="flex items-center justify-between gap-2">
         <dt class="shrink-0 text-muted-foreground">{m.projects_detail_created()}</dt>
         <dd class="min-w-0 truncate">{formatDateTime(project.created_at, getLocale())}</dd>
@@ -32,8 +115,76 @@
         <dt class="shrink-0 text-muted-foreground">{m.projects_detail_updated()}</dt>
         <dd class="min-w-0 truncate">{formatDateTime(project.updated_at, getLocale())}</dd>
       </div>
+      {#if meta && hasMoreInfo(meta)}
+        <Accordion.Root type="single" class="w-full">
+          <Accordion.Item value="more-info">
+            <Accordion.Trigger class="text-sm text-muted-foreground">
+              {m.metadata_more_info()}
+            </Accordion.Trigger>
+            <Accordion.Content>
+              <div class="flex flex-col gap-2 text-sm">
+                {#if meta.alternative}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_alternative_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.alternative}</dd>
+                  </div>
+                {/if}
+                {#if meta.contributor}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_contributor_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.contributor}</dd>
+                  </div>
+                {/if}
+                {#if meta.publisher}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_publisher_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.publisher}</dd>
+                  </div>
+                {/if}
+                {#if meta.rights}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_rights_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.rights}</dd>
+                  </div>
+                {/if}
+                {#if meta.language}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_language_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.language}</dd>
+                  </div>
+                {/if}
+                {#if meta.series}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_series_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.series}</dd>
+                  </div>
+                {/if}
+                {#if meta.volume}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_volume_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.volume}</dd>
+                  </div>
+                {/if}
+                {#if meta.source}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">{m.metadata_source_label()}</dt>
+                    <dd class="min-w-0 truncate">{meta.source}</dd>
+                  </div>
+                {/if}
+                {#if meta.date_published}
+                  <div class="flex items-center justify-between gap-2">
+                    <dt class="shrink-0 text-muted-foreground">
+                      {m.metadata_date_published_label()}
+                    </dt>
+                    <dd class="min-w-0 truncate">{meta.date_published}</dd>
+                  </div>
+                {/if}
+              </div>
+            </Accordion.Content>
+          </Accordion.Item>
+        </Accordion.Root>
+      {/if}
     </dl>
-    <p class="text-sm text-muted-foreground">{m.projects_detail_pending()}</p>
   {:else}
     <div class="flex min-h-0 flex-1 items-center justify-center p-6 text-center">
       <p class="text-sm text-muted-foreground">{m.projects_detail_empty()}</p>

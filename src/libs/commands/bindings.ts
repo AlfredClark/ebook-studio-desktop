@@ -21,6 +21,18 @@ export const commands = {
 	renameProject: (id: string, name: string) => typedError<ProjectInfo, CommandError>(__TAURI_INVOKE("rename_project", { id, name })),
 	/**  批量删除项目：永久递归删除对应目录，不存在的 id 跳过，返回实际删除数 */
 	deleteProjects: (ids: string[]) => typedError<number, CommandError>(__TAURI_INVOKE("delete_projects", { ids })),
+	/**  读取项目元数据；文件缺失时按项目信息新建并落盘后返回。 */
+	getProjectMetadata: (id: string) => typedError<ProjectMetadata, CommandError>(__TAURI_INVOKE("get_project_metadata", { id })),
+	/**  保存项目元数据：服务端字段（标识 / 版本 / 小说语言 / 存量封面）一律回填，返回写后的完整内容。 */
+	updateProjectMetadata: (id: string, metadata: ProjectMetadata) => typedError<ProjectMetadata, CommandError>(__TAURI_INVOKE("update_project_metadata", { id, metadata })),
+	/**  重置项目元数据：删除 `metadata.json` 后按项目信息重建默认值，返回新建内容。 */
+	resetProjectMetadata: (id: string) => typedError<ProjectMetadata, CommandError>(__TAURI_INVOKE("reset_project_metadata", { id })),
+	/**  导入封面：把用户选取的图片复制为 `sources/cover.<ext>` 并回写 `cover` 字段，返回更新后的完整元数据。 */
+	importProjectCover: (id: string, sourcePath: string) => typedError<ProjectMetadata, CommandError>(__TAURI_INVOKE("import_project_cover", { id, sourcePath })),
+	/**  查询封面绝对路径：供前端转 `asset:` 预览 URL；未设置或文件缺失返回 `None`。 */
+	getProjectCoverPath: (id: string) => typedError<string | null, CommandError>(__TAURI_INVOKE("get_project_cover_path", { id })),
+	/**  读取项目概览：详情页的只读快照，无元数据时回落空，不建文件。 */
+	getProjectOverview: (id: string) => typedError<ProjectOverview, CommandError>(__TAURI_INVOKE("get_project_overview", { id })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -186,6 +198,52 @@ export type ProjectInfo = {
 	created_at: string,
 	/**  更新时间（UTC `RFC3339`，内容编辑时刷新，创建时与创建时间一致） */
 	updated_at: string,
+};
+
+/**  项目元数据：都柏林核心 + EPUB3 构建所需的著录信息。 */
+export type ProjectMetadata = {
+	/**  结构版本，固定 `1`，由后端断言。 */
+	schema_version: number,
+	/**  项目标识符，复用项目 id（`dc:identifier` 取 `urn:uuid:` 前缀），只读。 */
+	identifier: string,
+	/**  书名（`dc:title`），默认取项目展示名。 */
+	title: string,
+	/**  副标题（`dc:alternative`）。 */
+	alternative: string,
+	/**  作者（`dc:creator`）。 */
+	creator: string,
+	/**  贡献者（`dc:contributor`），单值。 */
+	contributor: string,
+	/**  语言（`dc:language`，BCP47）；小说固定 `zh-CN`。 */
+	language: string,
+	/**  出版社（`dc:publisher`）。 */
+	publisher: string,
+	/**  简介（`dc:description`，兼小说扉页描述块）。 */
+	description: string,
+	/**  主题词（`dc:subject`，可多值）。 */
+	subjects: string[],
+	/**  出版日期（`dc:date`），`YYYY-MM-DD` 或空。 */
+	date_published: string | null,
+	/**  版权（`dc:rights`）。 */
+	rights: string,
+	/**  系列名（EPUB `belongs-to-collection`，`collection-type` 为 `series`）。 */
+	series: string,
+	/**  卷次（EPUB `group-position`，如 `上` / `3`）。 */
+	volume: string,
+	/**  来源（`dc:source`，如原著或改编出处）。 */
+	source: string,
+	/**  封面相对路径（如 `sources/cover.jpg`），只经封面导入命令写入。 */
+	cover: string | null,
+	/**  更新时间（UTC `RFC3339`），后端每次保存刷新。 */
+	updated_at: string,
+};
+
+/**  项目概览：详情页的只读快照；无元数据文件或解析失败时回落空，不建文件。 */
+export type ProjectOverview = {
+	/**  元数据内容；缺失或损坏时为 `None`，前端回落默认展示。 */
+	metadata: ProjectMetadata | null,
+	/**  封面绝对路径（供前端转 `asset:` 预览）；未设置或文件缺失时为 `None`。 */
+	cover_path: string | null,
 };
 
 /**  项目类型：落盘与契约为小写字符串，前后端共用 `"novel" | "comic"`。 */
