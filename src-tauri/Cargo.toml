@@ -37,6 +37,7 @@ specta = "=2.0.0-rc.25"
 specta-typescript = "=0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["javascript", "typescript"] }
 anyhow = "1.0.104"
+uuid = { version = "1", features = ["v4"] }
 tauri-plugin-system-fonts = "2.0.2"
 tauri-plugin-clipboard-manager = "2"
 

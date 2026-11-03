@@ -5,6 +5,8 @@ import type {
   ConfigPatch,
   Config_Serialize,
   Locale,
+  ProjectInfo,
+  ProjectType,
   SystemInfo,
   UpdateInfo,
   commands as rawCommands,
@@ -38,6 +40,8 @@ export type {
   ConfigPatch,
   Config_Serialize,
   Locale,
+  ProjectInfo,
+  ProjectType,
   SystemInfo,
   UpdateInfo,
 };

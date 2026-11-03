@@ -1,9 +1,9 @@
-# Common ignore
+# Common ignore（构建产物锚定根目录：嵌套同名路由段不受影响）
 node_modules
 .svelte-kit
-build
-dist
-package
+/build
+/dist
+/package
 .vite/
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*

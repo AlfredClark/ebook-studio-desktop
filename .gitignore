@@ -46,9 +46,10 @@ node_modules/
 
 # SvelteKit 编译缓存与输出
 .svelte-kit/
-build/
-package/
-dist/
+# SvelteKit 编译缓存与输出（锚定根目录：嵌套同名路由段不受影响）
+/build/
+/package/
+/dist/
 .vercel/
 .cloudflare/
 

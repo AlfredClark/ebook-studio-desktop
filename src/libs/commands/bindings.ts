@@ -13,6 +13,14 @@ export const commands = {
 	 *  界面语言亦经此切换——运行时 `rust_i18n` 由 `config::apply_runtime_effects` 统一同步。
 	 */
 	updateConfig: (patch: ConfigPatch) => typedError<Config_Serialize, CommandError>(__TAURI_INVOKE("update_config", { patch })),
+	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
+	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
+	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */
+	createProject: (name: string, projectType: ProjectType) => typedError<ProjectInfo, CommandError>(__TAURI_INVOKE("create_project", { name, projectType })),
+	/**  重命名项目：校验展示名后回写 `project.json` 并刷新更新时间，返回更新后的信息 */
+	renameProject: (id: string, name: string) => typedError<ProjectInfo, CommandError>(__TAURI_INVOKE("rename_project", { id, name })),
+	/**  批量删除项目：永久递归删除对应目录，不存在的 id 跳过，返回实际删除数 */
+	deleteProjects: (ids: string[]) => typedError<number, CommandError>(__TAURI_INVOKE("delete_projects", { ids })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -165,6 +173,23 @@ export type Config_Serialize = {
 
 /**  应用支持的语言 */
 export type Locale = "en" | "zh-CN";
+
+/**  项目基本信息：`project.json` 的落盘格式即前端契约，时间全链路 UTC。 */
+export type ProjectInfo = {
+	/**  项目 id，与文件夹名一致（`UUID v4` 字符串） */
+	id: string,
+	/**  项目展示名，允许重名，不参与路径 */
+	name: string,
+	/**  项目类型；`type` 是 Rust 关键字，落盘与契约仍用 `type` */
+	type: ProjectType,
+	/**  创建时间（UTC `RFC3339`） */
+	created_at: string,
+	/**  更新时间（UTC `RFC3339`，内容编辑时刷新，创建时与创建时间一致） */
+	updated_at: string,
+};
+
+/**  项目类型：落盘与契约为小写字符串，前后端共用 `"novel" | "comic"`。 */
+export type ProjectType = "novel" | "comic";
 
 /**  运行平台信息：经 `tauri-plugin-os` 采集，全字段必填，前端逐行展示 */
 export type SystemInfo = {

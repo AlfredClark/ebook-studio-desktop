@@ -1,6 +1,7 @@
 // 顶部导航标签注册表：`path` 与 SvelteKit 路由一一对应，同时作为 tabs 的取值。
 // 文案直接取 Paraglide 消息函数；运行时的 getLocale 已由 #libs/i18n/locale.svelte.ts 覆盖为
 // 响应式读取，启动水合对齐（不重载）后自动重渲染，故此处无需响应式包装。
+import FolderKanbanIcon from "@lucide/svelte/icons/folder-kanban";
 import InfoIcon from "@lucide/svelte/icons/info";
 import HouseIcon from "@lucide/svelte/icons/house";
 import SettingsIcon from "@lucide/svelte/icons/settings";
@@ -9,6 +10,7 @@ import { m } from "#libs/i18n/paraglide/messages";
 /** 导航标签清单，数组顺序即渲染顺序；`as const` 保留路径字面量类型，注册错路由会在编译期报错 */
 export const NAV_TABS = [
   { path: "/", label: m.nav_home, icon: HouseIcon },
+  { path: "/projects", label: m.nav_projects, icon: FolderKanbanIcon },
   { path: "/settings", label: m.nav_settings, icon: SettingsIcon },
   { path: "/about", label: m.nav_about, icon: InfoIcon },
 ] as const;
