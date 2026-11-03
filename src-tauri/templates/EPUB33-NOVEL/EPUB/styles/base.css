@@ -1,0 +1,106 @@
+@namespace epub "http://www.idpf.org/2007/ops";
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0 auto;
+  font-size: 1rem;
+}
+
+body.cover {
+  overflow: hidden;
+}
+
+.cover-frame {
+  height: 100%;
+}
+
+.cover-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-frame .book-title {
+  font-size: 1.5rem;
+  text-align: center;
+}
+
+body.titlepage {
+  display: table;
+  width: 100%;
+  height: 100%;
+}
+
+.titlepage-frame {
+  display: table-cell;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.titlepage-frame > * + * {
+  margin-top: 0.75rem;
+}
+
+.titlepage-frame .book-description {
+  display: inline-block;
+  text-align: left;
+}
+
+.book-description .desc-line {
+  display: block;
+}
+
+body.volume-page {
+  display: table;
+  width: 100%;
+  height: 100%;
+}
+
+.volume {
+  display: table-cell;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.chapter {
+  line-height: 1.75;
+}
+
+.chapter p {
+  margin: 0.5em 0;
+  text-indent: 2em;
+}
+
+.chapter-title {
+  margin: 1em 0 1.5em;
+  font-size: 1.25em;
+  text-align: center;
+}
+
+.book-title {
+  font-size: 2em;
+}
+
+.book-author {
+  font-size: 1.25em;
+}
+
+.volume-title {
+  font-size: 1.5em;
+}
+
+.volume-intro {
+  margin: 0.5em 0;
+  text-align: left;
+  text-indent: 2em;
+}

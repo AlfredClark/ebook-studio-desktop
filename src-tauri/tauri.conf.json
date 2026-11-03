@@ -49,6 +49,7 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "appimage", "rpm", "app", "dmg", "msi", "nsis"],
+    "resources": ["templates/EPUB33-NOVEL", "templates/EPUB33-COMIC"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

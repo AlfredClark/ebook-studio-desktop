@@ -74,6 +74,7 @@ ebook-studio-desktop/
 │   │   ├── features/               # 具体业务逻辑：按业务类型拆文件组装完整业务，供 commands/ 调用（通用逻辑抽到 cores/；projects.rs：APPDATA/Projects 落盘读写）
 │   │   └── plugins/                # 各 Tauri 插件的初始化（log / store / opener / updater / autostart / window-state / system-fonts / single-instance / deep-link / clipboard / global-shortcut）
 │   ├── locales/                    # rust-i18n 后端文案（按功能分文件，一文件一命名空间：当前 tray.yml 的 tray.*，单文件可内含多 locale 的 en/zh-CN 双写）
+│   ├── templates/                  # 内置 EPUB3.3 模板骨架（EPUB33-NOVEL / EPUB33-COMIC），经 bundle.resources 打包，Rust 侧由 features/epub_template 只读访问
 │   ├── app-icon.svg                # 应用图标源（推荐正方形透明底 SVG，标称尺寸任意；PNG 备选 ≥1024；`pnpm tauri:icon` 的输入，换图标时替换本文件）
 │   ├── capabilities/               # 权限配置（default.json / plugins.json），外部 URL 需同步更新
 │   ├── icons/                      # 应用图标（由 pnpm tauri:icon 生成）

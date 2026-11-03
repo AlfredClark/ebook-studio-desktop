@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
+         version="3.0"
+         unique-identifier="book-id"
+         xml:lang="{{BOOK_LANGUAGE}}">
+  <metadata>
+    <dc:identifier id="book-id">urn:uuid:{{BOOK_UUID}}</dc:identifier>
+    <dc:title>{{BOOK_TITLE}}</dc:title>
+    <dc:language>{{BOOK_LANGUAGE}}</dc:language>
+    <meta property="dcterms:modified">{{BOOK_MODIFIED}}</meta>
+
+    <dc:creator id="creator">{{BOOK_AUTHOR}}</dc:creator>
+    <meta refines="#creator" property="role" scheme="marc:relators">aut</meta>
+    <dc:contributor id="contributor">{{CONTRIBUTOR}}</dc:contributor>
+    <meta refines="#contributor" property="role" scheme="marc:relators">edt</meta>
+
+{{OTHER_METADATA}}
+
+    <meta property="schema:accessMode">visual</meta>
+    <meta property="schema:accessModeSufficient">visual</meta>
+    <meta property="schema:accessibilityFeature">structuralNavigation</meta>
+    <meta property="schema:accessibilityFeature">tableOfContents</meta>
+    <meta property="schema:accessibilityHazard">none</meta>
+    <meta property="schema:accessibilitySummary">本书为漫画，以整页图像形式排版，每页对应一张图像，目录按话/页层级导航。</meta>
+  </metadata>
+  <manifest>
+    <item id="base-css" href="styles/base.css" media-type="text/css"/>
+{{COVER_ITEM}}
+    <item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+{{MANIFEST_ITEMS}}
+  </manifest>
+  <spine>
+    <itemref idref="cover-page"/>
+{{NAV_ITEMREF}}
+{{SPINE_ITEMS}}
+  </spine>
+</package>
