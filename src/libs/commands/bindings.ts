@@ -65,6 +65,12 @@ export const commands = {
 } | null, CommandError>(__TAURI_INVOKE("get_novel_content_outline", { id })),
 	/**  强制重排编号：按文档顺序重写卷号与章号后落盘，返回新大纲。 */
 	renumberNovelContent: (id: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("renumber_novel_content", { id })),
+	/**  读取单章正文：按卷章下标寻址，标题只读、正文按行返回，越界或产物异常直接报错。 */
+	getNovelChapter: (id: string, volumeIndex: number, chapterIndex: number) => typedError<ChapterContent, CommandError>(__TAURI_INVOKE("get_novel_chapter", { id, volumeIndex, chapterIndex })),
+	/**  保存单章正文：归一化落盘后返回新大纲（左栏字数即时刷新）。 */
+	updateNovelChapter: (id: string, volumeIndex: number, chapterIndex: number, lines: string[]) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("update_novel_chapter", { id, volumeIndex, chapterIndex, lines })),
+	/**  全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。 */
+	filterNovelContent: (id: string, filter: NovelFilter) => typedError<FilterOutcome, CommandError>(__TAURI_INVOKE("filter_novel_content", { id, filter })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -97,6 +103,24 @@ export const commands = {
 };
 
 /* Types */
+/**  单章正文：编辑页中栏的读写单位；标题只读展示，正文按行往返。 */
+export type ChapterContent = {
+	/**  章完整标题（只读展示用）。 */
+	full_title: string,
+	/**  章正文：每元素一行（与解析口径一致：去首尾空白、无空行）。 */
+	lines: string[],
+};
+
+/**  单章命中汇总：下标与大纲数组同源。 */
+export type ChapterMatches = {
+	/**  卷下标。 */
+	volume_index: number,
+	/**  章下标。 */
+	chapter_index: number,
+	/**  命中行（按行号升序）。 */
+	matches: LineMatch[],
+};
+
 /**  章大纲：右栏识别结果的只读条目，字数仅计章正文。 */
 export type ChapterOutline = {
 	/**  章完整标题。 */
@@ -235,6 +259,14 @@ export type ContentIssue = {
 	number: number | null,
 };
 
+/**  筛选结果：命中章节清单；超限截断时置位，前端 toast 提示。 */
+export type FilterOutcome = {
+	/**  有命中的章节（文档顺序）。 */
+	chapters: ChapterMatches[],
+	/**  是否因命中上限截断。 */
+	truncated: boolean,
+};
+
 /**  问题种类：解析结果的警告项，只做展示，不阻塞解析。 */
 export type IssueKind = 
 /**  编号空缺：卷/章的 `number` 为 `None`。 */
@@ -246,8 +278,29 @@ export type IssueKind =
 /**  标题空缺：纯标题回落为完整行。 */
 "MissingTitle";
 
+/**  单行命中：行号为章内 1-based，与编辑器行号同源。 */
+export type LineMatch = {
+	/**  章内行号（1-based）。 */
+	line: number,
+	/**  本行全部非重叠命中（空跨度已剔除）。 */
+	spans: TextSpan[],
+};
+
 /**  应用支持的语言 */
 export type Locale = "en" | "zh-CN";
+
+/**  筛选种类：右栏筛选器的前端契约；关键词含匹配与正则二选一。 */
+export type NovelFilter = 
+/**  关键词含匹配：空关键词前后端都拦截。 */
+{ type: "Keyword"; 
+/**  关键词原文（大小写不敏感时内部转小写比对，正文索引不受影响）。 */
+keyword: string; 
+/**  是否区分大小写。 */
+case_sensitive: boolean } | 
+/**  正则表达式：Rust 正则语法，非法 pattern 直接报错。 */
+{ type: "Regex"; 
+/**  用户填写的正则原文。 */
+pattern: string };
 
 /**  小说原文状态：左栏文件卡片的只读展示；缺文件时 `exists` 为假。 */
 export type NovelTextStatus = {
@@ -357,6 +410,14 @@ export type SystemInfo = {
 	arch: string,
 	/**  主机名 */
 	hostname: string,
+};
+
+/**  命中文本段：Rust `char` 索引；中文常用字落在 BMP，前后端一致，超平面字符由前端换算。 */
+export type TextSpan = {
+	/**  起始字符索引（0-based）。 */
+	start: number,
+	/**  命中字符数。 */
+	len: number,
 };
 
 /**  可用的更新信息：只含前端展示所需字段，插件的 `Update` 句柄不出命令边界 */

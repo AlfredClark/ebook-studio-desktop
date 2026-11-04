@@ -1,7 +1,9 @@
 //! 小说原文命令：`sources/content.txt` 导入、状态查询、卷章解析与编号重排的薄封装，具体文件操作在 `features::novel_files`。
 
 use crate::cores::types::CommandResult;
-use crate::features::novel_files::{self, NovelTextStatus, ParseOutline};
+use crate::features::novel_files::{
+    self, ChapterContent, FilterOutcome, NovelFilter, NovelTextStatus, ParseOutline,
+};
 
 /// 查询小说原文状态；缺文件回落空态，不建文件。
 #[tauri::command]
@@ -58,4 +60,54 @@ pub fn get_novel_content_outline(
 #[allow(clippy::needless_pass_by_value)]
 pub fn renumber_novel_content(app: tauri::AppHandle, id: String) -> CommandResult<ParseOutline> {
     Ok(novel_files::renumber_content(&app, &id)?)
+}
+
+/// 读取单章正文：按卷章下标寻址，标题只读、正文按行返回，越界或产物异常直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_novel_chapter(
+    app: tauri::AppHandle,
+    id: String,
+    volume_index: u32,
+    chapter_index: u32,
+) -> CommandResult<ChapterContent> {
+    Ok(novel_files::chapter_content(
+        &app,
+        &id,
+        volume_index,
+        chapter_index,
+    )?)
+}
+
+/// 保存单章正文：归一化落盘后返回新大纲（左栏字数即时刷新）。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_novel_chapter(
+    app: tauri::AppHandle,
+    id: String,
+    volume_index: u32,
+    chapter_index: u32,
+    lines: Vec<String>,
+) -> CommandResult<ParseOutline> {
+    Ok(novel_files::update_chapter(
+        &app,
+        &id,
+        volume_index,
+        chapter_index,
+        lines,
+    )?)
+}
+
+/// 全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn filter_novel_content(
+    app: tauri::AppHandle,
+    id: String,
+    filter: NovelFilter,
+) -> CommandResult<FilterOutcome> {
+    Ok(novel_files::filter_content(&app, &id, &filter)?)
 }

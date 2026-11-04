@@ -29,6 +29,10 @@ const MAX_VOLUMES: usize = 2000;
 const MAX_CHAPTERS: usize = 20000;
 /// 解析上限：单章正文行数。
 const MAX_CHAPTER_LINES: usize = 200_000;
+/// 筛选上限：单章命中行数，超限截断本章（置 `truncated`），避免单章打爆 IPC。
+const MAX_FILTER_LINE_MATCHES: usize = 500;
+/// 筛选上限：全文命中文本段总数，超限停止全书扫描（置 `truncated`）。
+const MAX_FILTER_SPANS: usize = 20_000;
 
 /// 小说原文状态：左栏文件卡片的只读展示；缺文件时 `exists` 为假。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -138,6 +142,71 @@ pub struct NovelVolume {
     pub intro: Vec<String>,
     /// 卷内章节（跨卷连续计数与卷内重计数都按命中顺序收纳）。
     pub chapters: Vec<NovelChapter>,
+}
+
+/// 单章正文：编辑页中栏的读写单位；标题只读展示，正文按行往返。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ChapterContent {
+    /// 章完整标题（只读展示用）。
+    pub full_title: String,
+    /// 章正文：每元素一行（与解析口径一致：去首尾空白、无空行）。
+    pub lines: Vec<String>,
+}
+
+/// 筛选种类：右栏筛选器的前端契约；关键词含匹配与正则二选一。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "type")]
+pub enum NovelFilter {
+    /// 关键词含匹配：空关键词前后端都拦截。
+    Keyword {
+        /// 关键词原文（大小写不敏感时内部转小写比对，正文索引不受影响）。
+        keyword: String,
+        /// 是否区分大小写。
+        case_sensitive: bool,
+    },
+    /// 正则表达式：Rust 正则语法，非法 pattern 直接报错。
+    Regex {
+        /// 用户填写的正则原文。
+        pattern: String,
+    },
+}
+
+/// 命中文本段：Rust `char` 索引；中文常用字落在 BMP，前后端一致，超平面字符由前端换算。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct TextSpan {
+    /// 起始字符索引（0-based）。
+    pub start: u32,
+    /// 命中字符数。
+    pub len: u32,
+}
+
+/// 单行命中：行号为章内 1-based，与编辑器行号同源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct LineMatch {
+    /// 章内行号（1-based）。
+    pub line: u32,
+    /// 本行全部非重叠命中（空跨度已剔除）。
+    pub spans: Vec<TextSpan>,
+}
+
+/// 单章命中汇总：下标与大纲数组同源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ChapterMatches {
+    /// 卷下标。
+    pub volume_index: u32,
+    /// 章下标。
+    pub chapter_index: u32,
+    /// 命中行（按行号升序）。
+    pub matches: Vec<LineMatch>,
+}
+
+/// 筛选结果：命中章节清单；超限截断时置位，前端 toast 提示。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct FilterOutcome {
+    /// 有命中的章节（文档顺序）。
+    pub chapters: Vec<ChapterMatches>,
+    /// 是否因命中上限截断。
+    pub truncated: bool,
 }
 
 /// 解析产物：`content.json` 的落盘格式即前端契约（`snake_case`）。
@@ -641,6 +710,194 @@ pub fn content_outline(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Optio
     Ok(outline_in(&dir))
 }
 
+/// 读 `content.json` 全量并断言结构版本：版本不符直接报错，不静默回落。
+fn read_content(project_dir: &Path) -> anyhow::Result<NovelContent> {
+    let path = project_dir.join(CONTENT_NAME);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}, parse the text first", path.display()))?;
+    let content: NovelContent = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    if content.schema_version != CONTENT_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported content schema version: {}",
+            content.schema_version
+        );
+    }
+    Ok(content)
+}
+
+/// 读单章正文（下标寻址）：下标越界直接报错，由前端按分支处理。
+pub fn chapter_in(
+    project_dir: &Path,
+    volume_index: usize,
+    chapter_index: usize,
+) -> anyhow::Result<ChapterContent> {
+    let content = read_content(project_dir)?;
+    let volume = content.volumes.get(volume_index).with_context(|| {
+        format!("chapter address out of range: volume {volume_index}, chapter {chapter_index}")
+    })?;
+    let chapter = volume.chapters.get(chapter_index).with_context(|| {
+        format!("chapter address out of range: volume {volume_index}, chapter {chapter_index}")
+    })?;
+    Ok(ChapterContent {
+        full_title: chapter.full_title.clone(),
+        lines: chapter.lines.clone(),
+    })
+}
+
+/// 存单章正文并返回新大纲：行归一化与解析口径一致（去首尾空白、丢弃空行），
+/// 单章行数仍受解析上限约束；标题与编号不动。
+pub fn update_chapter_in(
+    project_dir: &Path,
+    volume_index: usize,
+    chapter_index: usize,
+    lines: Vec<String>,
+) -> anyhow::Result<ParseOutline> {
+    let mut content = read_content(project_dir)?;
+    let normalized: Vec<String> = lines
+        .into_iter()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+    if normalized.len() > MAX_CHAPTER_LINES {
+        anyhow::bail!("chapter is too long (max {MAX_CHAPTER_LINES} lines)");
+    }
+    let volume = content.volumes.get_mut(volume_index).with_context(|| {
+        format!("chapter address out of range: volume {volume_index}, chapter {chapter_index}")
+    })?;
+    let chapter = volume.chapters.get_mut(chapter_index).with_context(|| {
+        format!("chapter address out of range: volume {volume_index}, chapter {chapter_index}")
+    })?;
+    chapter.lines = normalized;
+    content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
+    std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
+    Ok(outline_of(&content))
+}
+
+/// 读单章正文（`AppHandle` 入口）：下标寻址，越界直接报错。
+pub fn chapter_content(
+    app: &tauri::AppHandle,
+    id: &str,
+    volume_index: u32,
+    chapter_index: u32,
+) -> anyhow::Result<ChapterContent> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    chapter_in(&dir, volume_index as usize, chapter_index as usize)
+}
+
+/// 存单章正文（`AppHandle` 入口）：落盘后返回新大纲。
+pub fn update_chapter(
+    app: &tauri::AppHandle,
+    id: &str,
+    volume_index: u32,
+    chapter_index: u32,
+    lines: Vec<String>,
+) -> anyhow::Result<ParseOutline> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    update_chapter_in(&dir, volume_index as usize, chapter_index as usize, lines)
+}
+
+/// 筛选种类编译为正则：关键词转义后统一走正则引擎，命中字节区间落在原文上，
+/// 大小写不敏感经 `(?i)` 由引擎处理，不挪动原文索引。
+fn build_filter_regex(filter: &NovelFilter) -> anyhow::Result<Regex> {
+    match filter {
+        NovelFilter::Keyword {
+            keyword,
+            case_sensitive,
+        } => {
+            if keyword.trim().is_empty() {
+                anyhow::bail!("keyword must not be empty");
+            }
+            let pattern = if *case_sensitive {
+                regex::escape(keyword)
+            } else {
+                format!("(?i){}", regex::escape(keyword))
+            };
+            Regex::new(&pattern).context("invalid keyword pattern")
+        }
+        NovelFilter::Regex { pattern } => {
+            if pattern.trim().is_empty() {
+                anyhow::bail!("pattern must not be empty");
+            }
+            Regex::new(pattern).context("invalid regex pattern")
+        }
+    }
+}
+
+/// 单行全部命中：字节区间换算为 `char` 索引，空跨度（如 `x*` 类）直接剔除。
+fn collect_line_spans(re: &Regex, line: &str) -> Vec<TextSpan> {
+    let char_index_of = |byte: usize| {
+        line.char_indices()
+            .enumerate()
+            .find_map(|(char_index, (byte_index, _))| (byte_index == byte).then_some(char_index))
+            .unwrap_or_else(|| line.chars().count())
+    };
+    re.find_iter(line)
+        .filter(|matched| !matched.is_empty())
+        .map(|matched| TextSpan {
+            start: saturating_u32(char_index_of(matched.start())),
+            len: saturating_u32(matched.as_str().chars().count()),
+        })
+        .collect()
+}
+
+/// 全书筛选：按文档顺序逐章逐行扫描，命中章节进清单；超限截断并置位。
+pub fn filter_content_in(
+    project_dir: &Path,
+    filter: &NovelFilter,
+) -> anyhow::Result<FilterOutcome> {
+    let re = build_filter_regex(filter)?;
+    let content = read_content(project_dir)?;
+    let mut outcome = FilterOutcome {
+        chapters: Vec::new(),
+        truncated: false,
+    };
+    let mut span_total = 0usize;
+    'volumes: for (volume_index, volume) in content.volumes.iter().enumerate() {
+        for (chapter_index, chapter) in volume.chapters.iter().enumerate() {
+            let mut matches = Vec::new();
+            for (line_index, line) in chapter.lines.iter().enumerate() {
+                let spans = collect_line_spans(&re, line);
+                if spans.is_empty() {
+                    continue;
+                }
+                span_total += spans.len();
+                matches.push(LineMatch {
+                    line: saturating_u32(line_index + 1),
+                    spans,
+                });
+                if span_total >= MAX_FILTER_SPANS {
+                    outcome.truncated = true;
+                    break 'volumes;
+                }
+                if matches.len() >= MAX_FILTER_LINE_MATCHES {
+                    outcome.truncated = true;
+                    break;
+                }
+            }
+            if !matches.is_empty() {
+                outcome.chapters.push(ChapterMatches {
+                    volume_index: saturating_u32(volume_index),
+                    chapter_index: saturating_u32(chapter_index),
+                    matches,
+                });
+            }
+        }
+    }
+    Ok(outcome)
+}
+
+/// 全书筛选（`AppHandle` 入口）：只读，不建文件。
+pub fn filter_content(
+    app: &tauri::AppHandle,
+    id: &str,
+    filter: &NovelFilter,
+) -> anyhow::Result<FilterOutcome> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    filter_content_in(&dir, filter)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -742,6 +999,211 @@ mod tests {
         assert!(import_txt_in(&dir, &root.join("missing.txt")).is_err());
         // 全部拒绝后不应留下半成品。
         assert!(!dir.join(SOURCES_DIR).join(CONTENT_FILE).exists());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn reads_and_updates_single_chapter() {
+        let (root, dir) = test_project("chapter-rw");
+        write_content(
+            &dir,
+            "第一卷 开篇\n第一章 引子\n正文甲\n正文乙\n第二章 发展\n正文丙\n第二卷 承接\n第一章 再起\n正文丁\n",
+        );
+        let outline = parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        assert_eq!(outline.chapter_count, 3);
+        let chapter = chapter_in(&dir, 0, 1).expect("read");
+        assert_eq!(chapter.full_title, "第二章 发展");
+        assert_eq!(chapter.lines, vec!["正文丙"]);
+        let outline = update_chapter_in(
+            &dir,
+            0,
+            1,
+            vec![
+                "  新正文  ".to_string(),
+                String::new(),
+                "第二行".to_string(),
+            ],
+        )
+        .expect("update");
+        // 保存归一化与解析口径一致：去首尾空白、丢弃空行。
+        let chapter = chapter_in(&dir, 0, 1).expect("reread");
+        assert_eq!(chapter.full_title, "第二章 发展");
+        assert_eq!(chapter.lines, vec!["新正文", "第二行"]);
+        assert_eq!(outline.volumes[0].chapters[1].chars, 6);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn chapter_address_out_of_range_errors() {
+        let (root, dir) = test_project("chapter-range");
+        write_content(&dir, "第一章 引子\n正文\n");
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        assert!(chapter_in(&dir, 0, 5).is_err());
+        assert!(chapter_in(&dir, 3, 0).is_err());
+        assert!(update_chapter_in(&dir, 0, 9, vec!["正文".to_string()]).is_err());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn chapter_without_content_json_errors() {
+        let (root, dir) = test_project("chapter-missing");
+        assert!(chapter_in(&dir, 0, 0).is_err());
+        assert!(update_chapter_in(&dir, 0, 0, vec!["正文".to_string()]).is_err());
+        cleanup(&root);
+    }
+
+    /// 筛选夹具：两卷三章， mixed 中英文行。
+    fn write_filter_text(dir: &Path) {
+        write_content(
+            dir,
+            "第一卷 开篇\n第一章 引子\nHe whispered hello\n甲乙丙甲\n第二章 发展\nNothing here\n第二卷 承接\n第一章 再起\nHELLO world\n",
+        );
+        parse_txt_in(dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+    }
+
+    #[test]
+    fn filters_keyword_case_insensitive_with_char_spans() {
+        let (root, dir) = test_project("filter-keyword");
+        write_filter_text(&dir);
+        let outcome = filter_content_in(
+            &dir,
+            &NovelFilter::Keyword {
+                keyword: "hello".to_string(),
+                case_sensitive: false,
+            },
+        )
+        .expect("filter");
+        assert!(!outcome.truncated);
+        assert_eq!(outcome.chapters.len(), 2);
+        assert_eq!(
+            outcome.chapters[0].matches[0],
+            LineMatch {
+                line: 1,
+                spans: vec![TextSpan { start: 13, len: 5 }],
+            }
+        );
+        assert_eq!(
+            outcome.chapters[1].matches[0],
+            LineMatch {
+                line: 1,
+                spans: vec![TextSpan { start: 0, len: 5 }],
+            }
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_keyword_case_sensitive_and_chinese_chars() {
+        let (root, dir) = test_project("filter-case");
+        write_filter_text(&dir);
+        let outcome = filter_content_in(
+            &dir,
+            &NovelFilter::Keyword {
+                keyword: "甲".to_string(),
+                case_sensitive: true,
+            },
+        )
+        .expect("filter");
+        assert_eq!(outcome.chapters.len(), 1);
+        assert_eq!(
+            outcome.chapters[0].matches[0],
+            LineMatch {
+                line: 2,
+                spans: vec![TextSpan { start: 0, len: 1 }, TextSpan { start: 3, len: 1 },],
+            }
+        );
+        let sensitive = filter_content_in(
+            &dir,
+            &NovelFilter::Keyword {
+                keyword: "hello".to_string(),
+                case_sensitive: true,
+            },
+        )
+        .expect("filter");
+        assert_eq!(sensitive.chapters.len(), 1);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_regex_and_rejects_bad_patterns() {
+        let (root, dir) = test_project("filter-regex");
+        write_filter_text(&dir);
+        let outcome = filter_content_in(
+            &dir,
+            &NovelFilter::Regex {
+                pattern: "^He".to_string(),
+            },
+        )
+        .expect("filter");
+        assert_eq!(outcome.chapters.len(), 1);
+        assert_eq!(outcome.chapters[0].matches[0].line, 1);
+        assert!(
+            filter_content_in(
+                &dir,
+                &NovelFilter::Regex {
+                    pattern: "(".to_string(),
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            filter_content_in(
+                &dir,
+                &NovelFilter::Keyword {
+                    keyword: "   ".to_string(),
+                    case_sensitive: false,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            filter_content_in(
+                &dir,
+                &NovelFilter::Regex {
+                    pattern: String::new(),
+                },
+            )
+            .is_err()
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filter_truncates_huge_match_sets() {
+        let (root, dir) = test_project("filter-truncate");
+        let text = format!(
+            "第一章 引子\n{}",
+            (0..600).map(|_| "命中行").collect::<Vec<_>>().join("\n")
+        );
+        write_content(&dir, &text);
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        let outcome = filter_content_in(
+            &dir,
+            &NovelFilter::Keyword {
+                keyword: "命中".to_string(),
+                case_sensitive: true,
+            },
+        )
+        .expect("filter");
+        assert!(outcome.truncated);
+        assert_eq!(outcome.chapters.len(), 1);
+        assert_eq!(outcome.chapters[0].matches.len(), MAX_FILTER_LINE_MATCHES);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filter_without_content_json_errors() {
+        let (root, dir) = test_project("filter-missing");
+        assert!(
+            filter_content_in(
+                &dir,
+                &NovelFilter::Keyword {
+                    keyword: "正文".to_string(),
+                    case_sensitive: true,
+                },
+            )
+            .is_err()
+        );
         cleanup(&root);
     }
 
