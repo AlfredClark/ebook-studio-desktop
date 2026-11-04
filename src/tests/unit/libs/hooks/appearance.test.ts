@@ -143,12 +143,13 @@ describe("initLayout", () => {
 });
 
 describe("LAYOUTS", () => {
+  // 动态 import 三个布局组件（含 Svelte 编译 + bits-ui 链），CI 并行压力下可能超过默认 5s。
   it("合法取值均有对应组件", async () => {
     for (const name of ["tabs", "sidebar", "dashboard"] as const) {
       expect(isLayoutName(name)).toBe(true);
       await expect(LAYOUTS[name]()).resolves.toBeDefined();
     }
-  });
+  }, 30000);
 });
 
 describe("sanitizeFontFamily", () => {
