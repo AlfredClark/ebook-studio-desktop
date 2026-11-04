@@ -10,7 +10,7 @@ const chooseMock = vi.hoisted(() => vi.fn());
 const resetMock = vi.hoisted(() => vi.fn());
 
 const baseMetadata: ProjectMetadata = {
-  schema_version: 1,
+  schema_version: 2,
   identifier: "abc-uuid",
   title: "雾镇",
   alternative: "",
@@ -18,7 +18,7 @@ const baseMetadata: ProjectMetadata = {
   contributor: "",
   language: "zh-CN",
   publisher: "",
-  description: "",
+  description: [],
   subjects: ["悬疑"],
   date_published: null,
   rights: "",
@@ -81,6 +81,21 @@ describe("元数据表单", () => {
 
     expect(saveMock).toHaveBeenCalledOnce();
     expect(saveMock.mock.calls[0][0].subjects).toEqual(["悬疑", "推理"]);
+  });
+
+  it("简介回显为换行文本且提交时去空去首尾空白", async () => {
+    const user = userEvent.setup();
+    renderForm({ ...baseMetadata, description: ["第一行", "第二行"] }, "comic");
+
+    const description = screen.getByLabelText("Description") as HTMLTextAreaElement;
+    expect(description.value).toBe("第一行\n第二行");
+
+    await user.clear(description);
+    await user.type(description, "  第一行  {enter}{enter}  第二行  ");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(saveMock).toHaveBeenCalledOnce();
+    expect(saveMock.mock.calls[0][0].description).toEqual(["第一行", "第二行"]);
   });
 
   it("重置走确认回调而非直接回填", async () => {

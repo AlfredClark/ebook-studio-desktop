@@ -95,10 +95,14 @@
           <dd class="min-w-0 truncate">{meta.creator}</dd>
         </div>
       {/if}
-      {#if meta?.description}
+      {#if meta && meta.description.length > 0}
         <div class="flex flex-col gap-1">
           <dt class="shrink-0 text-muted-foreground">{m.metadata_description_label()}</dt>
-          <dd class="line-clamp-3">{meta.description}</dd>
+          <dd class="line-clamp-3 flex flex-col gap-0.5">
+            {#each meta.description as line, i (i)}
+              <span class="block">{line}</span>
+            {/each}
+          </dd>
         </div>
       {/if}
       {#if meta && meta.subjects.length > 0}

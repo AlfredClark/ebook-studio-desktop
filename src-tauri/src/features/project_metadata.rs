@@ -13,8 +13,8 @@ use specta::Type;
 
 use super::projects::{ProjectInfo, ProjectType};
 
-/// `metadata.json` 的结构版本：字段变更时递增并在读取处做迁移（当前仅 `v1`）。
-const SCHEMA_VERSION: u32 = 1;
+/// `metadata.json` 的结构版本：字段变更时递增并在读取处做迁移（当前 `v2`，简介为数组）。
+const SCHEMA_VERSION: u32 = 2;
 
 /// 封面落盘位置：`<uuid>/sources/cover.<ext>`，相对路径存入 `cover` 字段。
 const SOURCES_DIR: &str = "sources";
@@ -30,7 +30,7 @@ const NOVEL_LANGUAGE: &str = "zh-CN";
 /// 项目元数据：都柏林核心 + EPUB3 构建所需的著录信息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ProjectMetadata {
-    /// 结构版本，固定 `1`，由后端断言。
+    /// 结构版本，固定 `2`，由后端断言。
     pub schema_version: u32,
     /// 项目标识符，复用项目 id（`dc:identifier` 取 `urn:uuid:` 前缀），只读。
     pub identifier: String,
@@ -46,8 +46,8 @@ pub struct ProjectMetadata {
     pub language: String,
     /// 出版社（`dc:publisher`）。
     pub publisher: String,
-    /// 简介（`dc:description`，兼小说扉页描述块）。
-    pub description: String,
+    /// 简介（`dc:description`，兼小说扉页描述块）：每元素一行，已去空去首尾空白。
+    pub description: Vec<String>,
     /// 主题词（`dc:subject`，可多值）。
     pub subjects: Vec<String>,
     /// 出版日期（`dc:date`），`YYYY-MM-DD` 或空。
@@ -128,7 +128,7 @@ fn validate_metadata(meta: &ProjectMetadata, kind: ProjectType) -> anyhow::Resul
     if !is_bcp47(&meta.language) {
         anyhow::bail!("invalid language tag: {}", meta.language);
     }
-    if meta.description.chars().count() > MAX_DESCRIPTION_LEN {
+    if description_len(&meta.description) > MAX_DESCRIPTION_LEN {
         anyhow::bail!("description is too long (max {MAX_DESCRIPTION_LEN} chars)");
     }
     if meta.subjects.len() > MAX_SUBJECTS {
@@ -170,7 +170,7 @@ fn default_metadata(info: &ProjectInfo) -> ProjectMetadata {
         contributor: String::new(),
         language: NOVEL_LANGUAGE.to_string(),
         publisher: String::new(),
-        description: String::new(),
+        description: Vec::new(),
         subjects: Vec::new(),
         date_published: None,
         rights: String::new(),
@@ -225,7 +225,7 @@ pub fn reset_metadata_in(project_dir: &Path) -> anyhow::Result<ProjectMetadata> 
 }
 
 /// 保存元数据：服务端字段（标识 / 版本 / 小说语言 / 存量封面 / 更新时间）一律回填，
-/// 主题词做去空去重后校验落盘，返回写后的完整内容。
+/// 简介与主题词做归一化后校验落盘，返回写后的完整内容。
 pub fn save_metadata_in(
     project_dir: &Path,
     mut incoming: ProjectMetadata,
@@ -238,11 +238,26 @@ pub fn save_metadata_in(
         incoming.language = NOVEL_LANGUAGE.to_string();
     }
     incoming.cover = stored_cover;
+    incoming.description = normalize_description(&incoming.description);
     incoming.subjects = dedupe_subjects(&incoming.subjects);
     validate_metadata(&incoming, info.project_type)?;
     incoming.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     write_metadata(project_dir, &incoming)?;
     Ok(incoming)
+}
+
+/// 简介总字符数：各行相加（换行符不计），口径与旧字符串版对齐。
+fn description_len(description: &[String]) -> usize {
+    description.iter().map(|line| line.chars().count()).sum()
+}
+
+/// 简介归一化：去每行首尾空白、丢空行，保序不去重。
+fn normalize_description(description: &[String]) -> Vec<String> {
+    description
+        .iter()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 /// 主题词归一化：去首尾空白、丢空、保序去重。
@@ -510,6 +525,45 @@ mod tests {
         bad.volume = String::new();
         bad.source = "x".repeat(501);
         assert!(save_metadata_in(&dir, bad).is_err());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn normalizes_description_lines_on_save() {
+        let (root, dir, _) = test_project("desc-lines", ProjectType::Comic);
+        let mut meta = load_or_init_metadata_in(&dir).expect("init");
+        assert_eq!(meta.description, Vec::<String>::new());
+        meta.description = vec![
+            "  第一行  ".to_string(),
+            String::new(),
+            "   ".to_string(),
+            "第二行".to_string(),
+            "第二行".to_string(),
+        ];
+        let saved = save_metadata_in(&dir, meta).expect("save description");
+        assert_eq!(saved.description, vec!["第一行", "第二行", "第二行"]);
+        let reloaded = load_or_init_metadata_in(&dir).expect("reload");
+        assert_eq!(reloaded.description, vec!["第一行", "第二行", "第二行"]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn rejects_overlong_description_total_and_legacy_string() {
+        let (root, dir, _) = test_project("desc-bad", ProjectType::Comic);
+        let mut meta = load_or_init_metadata_in(&dir).expect("init");
+        meta.description = vec!["x".repeat(5001)];
+        assert!(save_metadata_in(&dir, meta.clone()).is_err());
+        meta.description = vec!["x".repeat(2500), "y".repeat(2501)];
+        assert!(save_metadata_in(&dir, meta).is_err());
+        let text = std::fs::read_to_string(dir.join("metadata.json")).expect("read metadata");
+        let mut value: serde_json::Value = serde_json::from_str(&text).expect("parse metadata");
+        value["description"] = serde_json::Value::String("旧简介第一行\n旧简介第二行".to_string());
+        std::fs::write(
+            dir.join("metadata.json"),
+            serde_json::to_string_pretty(&value).expect("serialize legacy"),
+        )
+        .expect("write legacy metadata");
+        assert!(load_or_init_metadata_in(&dir).is_err());
         cleanup(&root);
     }
 

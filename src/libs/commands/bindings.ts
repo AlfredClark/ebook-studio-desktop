@@ -202,7 +202,7 @@ export type ProjectInfo = {
 
 /**  项目元数据：都柏林核心 + EPUB3 构建所需的著录信息。 */
 export type ProjectMetadata = {
-	/**  结构版本，固定 `1`，由后端断言。 */
+	/**  结构版本，固定 `2`，由后端断言。 */
 	schema_version: number,
 	/**  项目标识符，复用项目 id（`dc:identifier` 取 `urn:uuid:` 前缀），只读。 */
 	identifier: string,
@@ -218,8 +218,8 @@ export type ProjectMetadata = {
 	language: string,
 	/**  出版社（`dc:publisher`）。 */
 	publisher: string,
-	/**  简介（`dc:description`，兼小说扉页描述块）。 */
-	description: string,
+	/**  简介（`dc:description`，兼小说扉页描述块）：每元素一行，已去空去首尾空白。 */
+	description: string[],
 	/**  主题词（`dc:subject`，可多值）。 */
 	subjects: string[],
 	/**  出版日期（`dc:date`），`YYYY-MM-DD` 或空。 */

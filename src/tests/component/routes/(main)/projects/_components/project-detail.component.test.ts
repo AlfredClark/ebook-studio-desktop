@@ -59,7 +59,7 @@ describe("项目详情", () => {
             contributor: "",
             language: "zh-CN",
             publisher: "某社",
-            description: "",
+            description: [],
             subjects: [],
             date_published: "2026-01-01",
             rights: "",
@@ -67,7 +67,7 @@ describe("项目详情", () => {
             volume: "",
             source: "",
             cover: "sources/cover.png",
-            schema_version: 1,
+            schema_version: 2,
             updated_at: "2026-01-02T00:00:00Z",
           },
           cover_path: "/data/covers/cover.png",
@@ -87,6 +87,39 @@ describe("项目详情", () => {
     expect(await screen.findByText("某社")).not.toBeNull();
     const img = screen.getByAltText("Cover preview") as HTMLImageElement;
     expect(img.src).toContain("asset.localhost");
+  });
+
+  it("简介多行逐行渲染", async () => {
+    getOverviewMock.mockReturnValue(
+      fakeCommand({
+        status: "ok",
+        data: {
+          metadata: {
+            identifier: "abc-uuid",
+            title: "雾镇·卷一",
+            creator: "作者",
+            contributor: "",
+            language: "zh-CN",
+            publisher: "",
+            description: ["第一行", "第二行"],
+            subjects: [],
+            date_published: null,
+            rights: "",
+            series: "",
+            volume: "",
+            source: "",
+            cover: null,
+            schema_version: 2,
+            updated_at: "2026-01-02T00:00:00Z",
+          },
+          cover_path: null,
+        },
+      }),
+    );
+    render(ProjectDetail, { props: { project } });
+
+    expect(await screen.findByText("第一行")).not.toBeNull();
+    expect(screen.getByText("第二行")).not.toBeNull();
   });
 
   it("无元数据回落默认封面与创建时间", async () => {

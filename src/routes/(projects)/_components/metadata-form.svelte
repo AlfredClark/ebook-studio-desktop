@@ -20,7 +20,12 @@
   import { m } from "#libs/i18n/paraglide/messages";
   import { toast } from "#libs/utils/toast";
   import { cn } from "#libs/utils/shadcn-svelte";
-  import { formatSubjectsInput, parseSubjectsInput } from "./metadata-form-data";
+  import {
+    formatDescriptionInput,
+    formatSubjectsInput,
+    parseDescriptionInput,
+    parseSubjectsInput,
+  } from "./metadata-form-data";
 
   let {
     metadata,
@@ -92,7 +97,7 @@
     contributor = metadata.contributor;
     language = metadata.language;
     publisher = metadata.publisher;
-    description = metadata.description;
+    description = formatDescriptionInput(metadata.description);
     subjectsText = formatSubjectsInput(metadata.subjects);
     datePublished = metadata.date_published ?? "";
     rights = metadata.rights;
@@ -128,7 +133,7 @@
       contributor: contributor.trim(),
       language: projectType === "novel" ? "zh-CN" : language.trim(),
       publisher: publisher.trim(),
-      description: description.trim(),
+      description: parseDescriptionInput(description),
       subjects: parseSubjectsInput(subjectsText),
       date_published: datePublished === "" ? null : datePublished,
       rights: rights.trim(),
