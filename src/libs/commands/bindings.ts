@@ -33,6 +33,38 @@ export const commands = {
 	getProjectCoverPath: (id: string) => typedError<string | null, CommandError>(__TAURI_INVOKE("get_project_cover_path", { id })),
 	/**  读取项目概览：详情页的只读快照，无元数据时回落空，不建文件。 */
 	getProjectOverview: (id: string) => typedError<ProjectOverview, CommandError>(__TAURI_INVOKE("get_project_overview", { id })),
+	/**  查询小说原文状态；缺文件回落空态，不建文件。 */
+	getNovelTextStatus: (id: string) => typedError<NovelTextStatus, CommandError>(__TAURI_INVOKE("get_novel_text_status", { id })),
+	/**  导入小说原文：把用户选取的 TXT 覆盖拷贝为 `sources/content.txt`，返回最新状态。 */
+	importNovelText: (id: string, sourcePath: string) => typedError<NovelTextStatus, CommandError>(__TAURI_INVOKE("import_novel_text", { id, sourcePath })),
+	/**  解析小说原文：按卷章正则逐行切分后落盘 `content.json`，返回识别大纲（正文行不出 IPC）。 */
+	parseNovelText: (id: string, volumePattern: string, chapterPattern: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("parse_novel_text", { id, volumePattern, chapterPattern })),
+	/**  读取已落盘的识别大纲：缺失、损坏或版本不符回落空，不建文件。 */
+	getNovelContentOutline: (id: string) => typedError<{
+	/**  卷数（含无标题卷）。 */
+	volume_count: number,
+	/**  全书章节总数。 */
+	chapter_count: number,
+	/**  正文总行数：仅各章 `lines` 之和（前言、卷简介不计）。 */
+	line_count: number,
+	/**  正文字数：仅各章 `lines` 字符数之和（不计换行符）。 */
+	char_count: number,
+	/**  前言行数（暂不展示，保留备查）。 */
+	preface_lines: number,
+	/**  卷章标题树。 */
+	volumes: VolumeOutline[],
+	/**
+	 *  两套正则都没有数字组（第一捕获组）时为真；此时全量编号为 `None`。
+	 *  个别数字串不可解析不置位，仅 pattern 级缺组置位。
+	 */
+	numbers_missing: boolean,
+	/**  两套正则都没有标题组（第二捕获组）时为真；此时纯标题全员回落。 */
+	titles_missing: boolean,
+	/**  解析问题：文档顺序收集，展示用。 */
+	issues: ContentIssue[],
+} | null, CommandError>(__TAURI_INVOKE("get_novel_content_outline", { id })),
+	/**  强制重排编号：按文档顺序重写卷号与章号后落盘，返回新大纲。 */
+	renumberNovelContent: (id: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("renumber_novel_content", { id })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -65,6 +97,14 @@ export const commands = {
 };
 
 /* Types */
+/**  章大纲：右栏识别结果的只读条目，字数仅计章正文。 */
+export type ChapterOutline = {
+	/**  章完整标题。 */
+	title: string,
+	/**  本章正文字数（`lines` 字符数之和）。 */
+	chars: number,
+};
+
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
 
@@ -183,8 +223,66 @@ export type Config_Serialize = {
 	shortcut_show: string,
 };
 
+/**  解析问题条目：卷/章均存完整行，前端定位与组装文案用。 */
+export type ContentIssue = {
+	/**  问题种类。 */
+	kind: IssueKind,
+	/**  所属卷完整行；卷级问题即该卷本身，全局断号时为 `None`。 */
+	volume: string | null,
+	/**  所属章完整行；卷级问题为 `None`。 */
+	chapter: string | null,
+	/**  相关编号：重复/缺失的编号值；空缺类为 `None`。 */
+	number: number | null,
+};
+
+/**  问题种类：解析结果的警告项，只做展示，不阻塞解析。 */
+export type IssueKind = 
+/**  编号空缺：卷/章的 `number` 为 `None`。 */
+"MissingNumber" | 
+/**  编号重复：同卷内章号重复或全局卷号重复。 */
+"DuplicateNumber" | 
+/**  缺失章节：卷内章号或全局卷号存在断号。 */
+"MissingChapter" | 
+/**  标题空缺：纯标题回落为完整行。 */
+"MissingTitle";
+
 /**  应用支持的语言 */
 export type Locale = "en" | "zh-CN";
+
+/**  小说原文状态：左栏文件卡片的只读展示；缺文件时 `exists` 为假。 */
+export type NovelTextStatus = {
+	/**  `sources/content.txt` 是否存在。 */
+	exists: boolean,
+	/**  原文字节数；不存在时为 `0`（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+	/**  原文更新时间（UTC `RFC3339`）；不存在或不可读时为 `None`。 */
+	updated_at: string | null,
+};
+
+/**  解析大纲：右栏识别结果的只读展示，正文行不出 IPC。 */
+export type ParseOutline = {
+	/**  卷数（含无标题卷）。 */
+	volume_count: number,
+	/**  全书章节总数。 */
+	chapter_count: number,
+	/**  正文总行数：仅各章 `lines` 之和（前言、卷简介不计）。 */
+	line_count: number,
+	/**  正文字数：仅各章 `lines` 字符数之和（不计换行符）。 */
+	char_count: number,
+	/**  前言行数（暂不展示，保留备查）。 */
+	preface_lines: number,
+	/**  卷章标题树。 */
+	volumes: VolumeOutline[],
+	/**
+	 *  两套正则都没有数字组（第一捕获组）时为真；此时全量编号为 `None`。
+	 *  个别数字串不可解析不置位，仅 pattern 级缺组置位。
+	 */
+	numbers_missing: boolean,
+	/**  两套正则都没有标题组（第二捕获组）时为真；此时纯标题全员回落。 */
+	titles_missing: boolean,
+	/**  解析问题：文档顺序收集，展示用。 */
+	issues: ContentIssue[],
+};
 
 /**  项目基本信息：`project.json` 的落盘格式即前端契约，时间全链路 UTC。 */
 export type ProjectInfo = {
@@ -269,6 +367,14 @@ export type UpdateInfo = {
 	current_version: string,
 	/**  发布说明（`latest.json` 的 `body`，可能缺失） */
 	body: string | null,
+};
+
+/**  卷大纲：右栏识别结果的只读条目。 */
+export type VolumeOutline = {
+	/**  卷标题；无标题卷为 `None`，前端回落“未分卷”。 */
+	title: string | null,
+	/**  卷内章节（含完整标题与正文字数）。 */
+	chapters: ChapterOutline[],
 };
 
 /* Tauri Specta runtime */

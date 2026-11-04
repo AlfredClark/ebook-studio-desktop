@@ -29,6 +29,10 @@ tauri-plugin-log = "2"
 tauri-plugin-os = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 中文数字→阿拉伯数字（万进），小说卷章编号解析用，仅 chinese-to-number 方向
+chinese-number = "0.8"
+# 小说原文卷章切分用的行匹配引擎（features/novel_files.rs，落盘解析以 Rust 为准）
+regex = "1"
 rust-i18n = "4.2.1"
 chrono = "0.4.45"
 log = "0.4.34"

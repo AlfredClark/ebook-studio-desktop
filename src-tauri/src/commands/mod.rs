@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod metadata;
+pub mod novel_files;
 pub mod projects;
 pub mod system;
 pub mod updater;
@@ -31,6 +32,11 @@ macro_rules! collect_commands {
             $crate::commands::metadata::import_project_cover,
             $crate::commands::metadata::get_project_cover_path,
             $crate::commands::metadata::get_project_overview,
+            $crate::commands::novel_files::get_novel_text_status,
+            $crate::commands::novel_files::import_novel_text,
+            $crate::commands::novel_files::parse_novel_text,
+            $crate::commands::novel_files::get_novel_content_outline,
+            $crate::commands::novel_files::renumber_novel_content,
             $crate::commands::system::get_system_info,
             $crate::commands::system::quit_app,
             $crate::commands::system::open_log_dir,
