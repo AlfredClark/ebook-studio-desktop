@@ -70,6 +70,8 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-xml": "^6.1.0",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
     "@tauri-apps/api": "^2.12.4",

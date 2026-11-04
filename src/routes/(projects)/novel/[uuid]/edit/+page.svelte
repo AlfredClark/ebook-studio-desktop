@@ -179,6 +179,14 @@
     }
   }
 
+  /** 全局保存快捷键：Ctrl/Cmd+S 与保存按钮同等效果，门禁由 handleSave 统一把守。 */
+  function handleGlobalKeydown(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void handleSave();
+    }
+  }
+
   /** 章节加载失败重试：选中仍在时重开当前章。 */
   function retryChapter(): void {
     if (selected == null) {
@@ -233,6 +241,7 @@
 </script>
 
 <!-- 小说编辑页：左栏章节树 + 中栏正文编辑 + 右栏正文筛选 -->
+<svelte:window onkeydown={handleGlobalKeydown} />
 <h1 class="sr-only">{m.project_step_edit()}</h1>
 <div class="flex h-full min-h-0 w-full min-w-0">
   <Resizable.PaneGroup direction="horizontal">

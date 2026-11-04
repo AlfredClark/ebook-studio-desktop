@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod metadata;
+pub mod novel_build;
 pub mod novel_files;
 pub mod projects;
 pub mod system;
@@ -40,6 +41,12 @@ macro_rules! collect_commands {
             $crate::commands::novel_files::get_novel_chapter,
             $crate::commands::novel_files::update_novel_chapter,
             $crate::commands::novel_files::filter_novel_content,
+            $crate::commands::novel_build::build_novel_content,
+            $crate::commands::novel_build::get_novel_build_tree,
+            $crate::commands::novel_build::get_novel_build_file,
+            $crate::commands::novel_build::update_novel_build_file,
+            $crate::commands::novel_build::format_novel_build_file,
+            $crate::commands::novel_build::format_all_novel_build_files,
             $crate::commands::system::get_system_info,
             $crate::commands::system::quit_app,
             $crate::commands::system::open_log_dir,

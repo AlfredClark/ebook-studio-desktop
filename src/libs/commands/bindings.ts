@@ -71,6 +71,23 @@ export const commands = {
 	updateNovelChapter: (id: string, volumeIndex: number, chapterIndex: number, lines: string[]) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("update_novel_chapter", { id, volumeIndex, chapterIndex, lines })),
 	/**  全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。 */
 	filterNovelContent: (id: string, filter: NovelFilter) => typedError<FilterOutcome, CommandError>(__TAURI_INVOKE("filter_novel_content", { id, filter })),
+	/**  构建小说：清空构建目录后全量重生成，返回文件树。 */
+	buildNovelContent: (id: string) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_novel_content", { id })),
+	/**  读取构建树：未构建回 `None`，前端展示空态引导构建。 */
+	getNovelBuildTree: (id: string) => typedError<{
+	/**  构建根下的顶层节点（已排序，目录在前）。 */
+	files: BuildFileNode[],
+	/**  全部文件数（不计目录）。 */
+	file_count: number,
+} | null, CommandError>(__TAURI_INVOKE("get_novel_build_tree", { id })),
+	/**  读取构建文件：二进制回 `content: None`，固定文件标记不可编辑。 */
+	getNovelBuildFile: (id: string, path: string) => typedError<BuildFileContent, CommandError>(__TAURI_INVOKE("get_novel_build_file", { id, path })),
+	/**  保存构建文件：固定文件与二进制拒绝写入。 */
+	updateNovelBuildFile: (id: string, path: string, content: string) => typedError<null, CommandError>(__TAURI_INVOKE("update_novel_build_file", { id, path, content })),
+	/**  格式化单个构建文件：只读内存返回格式化文本，不落盘。 */
+	formatNovelBuildFile: (id: string, path: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_novel_build_file", { id, path })),
+	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
+	formatAllNovelBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_novel_build_files", { id })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -103,6 +120,34 @@ export const commands = {
 };
 
 /* Types */
+/**  构建文件内容：二进制回 `None`，前端展示不支持预览提示。 */
+export type BuildFileContent = {
+	/**  文本内容；二进制为 `None`。 */
+	content: string | null,
+	/**  是否可编辑保存。 */
+	editable: boolean,
+};
+
+/**  构建文件树节点：`children` 为 `Some` 即目录（不可编辑），`None` 即文件。 */
+export type BuildFileNode = {
+	/**  显示名（文件含扩展名）。 */
+	name: string,
+	/**  构建根起的相对路径（POSIX 分隔）。 */
+	path: string,
+	/**  是否可编辑保存：固定文件与二进制为假。 */
+	editable: boolean,
+	/**  子节点；目录为 `Some`，文件为 `None`。 */
+	children: BuildFileNode[] | null,
+};
+
+/**  构建结果：文件树根节点清单与文件总数。 */
+export type BuildOutcome = {
+	/**  构建根下的顶层节点（已排序，目录在前）。 */
+	files: BuildFileNode[],
+	/**  全部文件数（不计目录）。 */
+	file_count: number,
+};
+
 /**  单章正文：编辑页中栏的读写单位；标题只读展示，正文按行往返。 */
 export type ChapterContent = {
 	/**  章完整标题（只读展示用）。 */
@@ -265,6 +310,16 @@ export type FilterOutcome = {
 	chapters: ChapterMatches[],
 	/**  是否因命中上限截断。 */
 	truncated: boolean,
+};
+
+/**  批量格式化结果：成功数 + 跳过（固定只读与二进制）+ 失败清单（内容保持原样）。 */
+export type FormatOutcome = {
+	/**  成功格式化的可编辑文件数（含已规范无需改动的）。 */
+	formatted: number,
+	/**  跳过的文件。 */
+	skipped: string[],
+	/**  格式化失败的文件。 */
+	failed: string[],
 };
 
 /**  问题种类：解析结果的警告项，只做展示，不阻塞解析。 */

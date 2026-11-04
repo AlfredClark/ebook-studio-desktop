@@ -42,6 +42,11 @@ specta-typescript = "=0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["javascript", "typescript"] }
 anyhow = "1.0.104"
 uuid = { version = "1", features = ["v4"] }
+# 构建产物格式化：XHTML/OPF 按事件流重排（features/novel_build.rs），零外部进程
+quick-xml = "0.41"
+# 构建产物 CSS 美化：解析后重打（features/novel_build.rs），失败不动原文件；
+# 1.x 长期 alpha，精确 pin，升级需人工评审 API 变更
+lightningcss = "=1.0.0-alpha.72"
 tauri-plugin-system-fonts = "2.0.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"

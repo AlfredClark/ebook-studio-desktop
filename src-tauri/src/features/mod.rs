@@ -2,6 +2,7 @@
 //! 命令层只负责参数校验与结果转换，真正干活的是这里；多个业务通用或共享的逻辑抽取到 `cores`。
 
 pub mod epub_template;
+pub mod novel_build;
 pub mod novel_files;
 pub mod project_metadata;
 pub mod projects;

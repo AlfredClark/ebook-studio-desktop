@@ -711,7 +711,8 @@ pub fn content_outline(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Optio
 }
 
 /// 读 `content.json` 全量并断言结构版本：版本不符直接报错，不静默回落。
-fn read_content(project_dir: &Path) -> anyhow::Result<NovelContent> {
+/// 对同 crate 内构建等后续步骤开放，跨步骤共用同一份解析产物。
+pub fn read_content(project_dir: &Path) -> anyhow::Result<NovelContent> {
     let path = project_dir.join(CONTENT_NAME);
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}, parse the text first", path.display()))?;

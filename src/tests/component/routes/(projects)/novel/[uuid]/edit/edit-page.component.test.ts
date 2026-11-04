@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import type { ChapterContent, ParseOutline } from "../../../../../../../libs/commands/types";
 import EditPage from "../../../../../../../routes/(projects)/novel/[uuid]/edit/+page.svelte";
@@ -301,5 +301,24 @@ describe("编辑页", () => {
 
     expect(updateMock).toHaveBeenCalledOnce();
     expect(filterMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("Ctrl+S 触发保存，干净态下无操作", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(EditPage);
+
+    // 干净态：快捷键不调后端。
+    await screen.findByRole("heading", { name: "第一章 引子" });
+    await fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(updateMock).not.toHaveBeenCalled();
+
+    // 脏态：快捷键与保存按钮同效。
+    const editor = await screen.findByLabelText("Chapter text editor");
+    await user.clear(editor.querySelector(".cm-content") as Element);
+    await user.type(editor.querySelector(".cm-content") as Element, "新正文");
+    await fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(updateMock).toHaveBeenCalledOnce();
+    expect(updateMock).toHaveBeenCalledWith("abc-uuid", 0, 0, ["新正文"]);
   });
 });
