@@ -91,8 +91,8 @@ pub struct PackageOutcome {
 /// 书名转文件主干：文件系统非法字符（`/ \ : * ? " < > |` 与控制字符）
 ///
 /// 按 `_` 替换并合并连续，全空或全非法回落 `book`；首尾空格与点一并去除
-///（`Windows` 禁止尾点 / 尾空），超长截断。
-fn sanitize_stem(title: &str) -> String {
+///（`Windows` 禁止尾点 / 尾空），超长截断。导出命名复用同一口径。
+pub fn sanitize_stem(title: &str) -> String {
     let mut stem = String::new();
     let mut last_underscore = false;
     for ch in title.chars() {
@@ -171,7 +171,7 @@ fn collect_files(build_dir: &Path, dir: &Path, out: &mut Vec<String>) -> anyhow:
 }
 
 /// `dist/` 下最新的 `.epub`：多件并存时保留最新、顺手清理其余。
-fn latest_package(project_dir: &Path) -> Option<PathBuf> {
+pub fn latest_package(project_dir: &Path) -> Option<PathBuf> {
     let dist_dir = project_dir.join(DIST_DIR);
     let entries = std::fs::read_dir(&dist_dir).ok()?;
     let mut packages: Vec<PathBuf> = entries

@@ -101,6 +101,10 @@ export const commands = {
 } | null, CommandError>(__TAURI_INVOKE("get_novel_package_status", { id })),
 	/**  校验已有产物：无包直接报错，前端引导先打包。 */
 	validateNovelPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_novel_package", { id })),
+	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
+	getNovelExportStatus: (id: string) => typedError<ExportStatus, CommandError>(__TAURI_INVOKE("get_novel_export_status", { id })),
+	/**  导出小说：改名拷贝 EPUB / 封面、`content.json` 转 TXT，落到自选目录的 `<命名>/` 下。 */
+	exportNovelContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ExportItems) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_novel_content", { id, destDir, naming, customName, items })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -315,6 +319,67 @@ export type ContentIssue = {
 	chapter: string | null,
 	/**  相关编号：重复/缺失的编号值；空缺类为 `None`。 */
 	number: number | null,
+};
+
+/**
+ *  解析产物摘要：存在性之外的展示信息。
+ * 
+ *  字段名与 `ParseOutline` 同口径（`struct_field_names` 豁免）。
+ */
+export type ContentSummary = {
+	/**  卷数（含无标题卷）。 */
+	volume_count: number,
+	/**  全书章节总数。 */
+	chapter_count: number,
+	/**  正文字数：仅各章 `lines` 字符数之和（不计换行符）。 */
+	char_count: number,
+};
+
+/**  导出勾选项：全假直接报错，至少选一项。 */
+export type ExportItems = {
+	/**  导出 EPUB。 */
+	epub: boolean,
+	/**  导出标准 TXT。 */
+	txt: boolean,
+	/**  导出封面。 */
+	cover: boolean,
+};
+
+/**  命名来源：项目名 / 书名 / 自定义。 */
+export type ExportNaming = 
+/**  用项目名。 */
+"project" | 
+/**  用书名。 */
+"book" | 
+/**  用用户填写的自定义名。 */
+"custom";
+
+/**  导出结果：最终目录绝对路径 + 落盘文件名清单。 */
+export type ExportOutcome = {
+	/**  最终目录（`<自选目录>/<命名>/` 绝对路径）。 */
+	dir: string,
+	/**  落盘文件名（已排序）。 */
+	files: string[],
+};
+
+/**  导出状态：进页一次查全，前端据此渲染表单与禁用态。 */
+export type ExportStatus = {
+	/**  是否有可导出的解析产物。 */
+	has_content: boolean,
+	/**  解析产物摘要；无产物时为 `None`。 */
+	content: ContentSummary | null,
+	/**  是否有可导出的打包产物。 */
+	has_epub: boolean,
+	/**  打包文件名；无产物时为 `None`。 */
+	epub_name: string | null,
+	/**  是否有可导出的封面。 */
+	has_cover: boolean,
+	/**  封面扩展名（小写）；无封面时为 `None`。 */
+	cover_ext: string | null,
+	/**  项目名（`project.json`）。 */
+	project_name: string,
+	/**  书名（`metadata.json`）。 */
+	book_title: string,
 };
 
 /**  筛选结果：命中章节清单；超限截断时置位，前端 toast 提示。 */

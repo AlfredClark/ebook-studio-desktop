@@ -3,6 +3,7 @@
 
 pub mod epub_template;
 pub mod novel_build;
+pub mod novel_export;
 pub mod novel_files;
 pub mod novel_package;
 pub mod project_metadata;
