@@ -1,0 +1,35 @@
+//! 小说打包命令：`build/` → `dist/书名.epub` 的落盘、状态查询与 `epubveri` 校验的薄封装，
+//! 具体打包与校验逻辑在 `features::novel_package`。
+
+use crate::cores::types::CommandResult;
+use crate::features::novel_package::{self, PackageInfo, PackageOutcome, ValidationOutcome};
+
+/// 打包小说：落盘 `dist/书名.epub` 后自动校验一次，返回产物与校验结果。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn package_novel_content(app: tauri::AppHandle, id: String) -> CommandResult<PackageOutcome> {
+    Ok(novel_package::package_novel(&app, &id)?)
+}
+
+/// 查询打包状态：无产物回 `None`，前端展示待打包空态。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_novel_package_status(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<Option<PackageInfo>> {
+    Ok(novel_package::package_status(&app, &id)?)
+}
+
+/// 校验已有产物：无包直接报错，前端引导先打包。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn validate_novel_package(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<ValidationOutcome> {
+    Ok(novel_package::validate_package(&app, &id)?)
+}

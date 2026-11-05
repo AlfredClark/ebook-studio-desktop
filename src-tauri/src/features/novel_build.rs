@@ -349,6 +349,13 @@ pub fn build_in(project_dir: &Path, template_base: &Path) -> anyhow::Result<Buil
         .replace("{{MANIFEST_ITEMS}}", &manifest_items.join("\n"))
         .replace("{{NAV_ITEMREF}}", "")
         .replace("{{SPINE_ITEMS}}", &spine_items.join("\n"));
+    if metadata.creator.is_empty() {
+        opf = opf
+            .lines()
+            .filter(|line| !line.contains("creator"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     if metadata.contributor.is_empty() {
         opf = opf
             .lines()
@@ -944,7 +951,8 @@ mod tests {
                 "placeholder left in {rel}"
             );
         }
-        // 空贡献者整组删除。
+        // 空作者与空贡献者整组删除（空元素通不过 OPF 模式校验）。
+        assert!(!opf.contains("creator"));
         assert!(!opf.contains("contributor"));
         cleanup(&root);
     }

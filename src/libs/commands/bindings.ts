@@ -88,6 +88,19 @@ export const commands = {
 	formatNovelBuildFile: (id: string, path: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_novel_build_file", { id, path })),
 	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
 	formatAllNovelBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_novel_build_files", { id })),
+	/**  打包小说：落盘 `dist/书名.epub` 后自动校验一次，返回产物与校验结果。 */
+	packageNovelContent: (id: string) => typedError<PackageOutcome, CommandError>(__TAURI_INVOKE("package_novel_content", { id })),
+	/**  查询打包状态：无产物回 `None`，前端展示待打包空态。 */
+	getNovelPackageStatus: (id: string) => typedError<{
+	/**  文件名（如 `雾镇.epub`）。 */
+	file_name: string,
+	/**  产物字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+	/**  打包时间（UTC `RFC3339`）。 */
+	updated_at: string,
+} | null, CommandError>(__TAURI_INVOKE("get_novel_package_status", { id })),
+	/**  校验已有产物：无包直接报错，前端引导先打包。 */
+	validateNovelPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_novel_package", { id })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -367,6 +380,24 @@ export type NovelTextStatus = {
 	updated_at: string | null,
 };
 
+/**  打包产物信息：重进页恢复展示的唯一依据。 */
+export type PackageInfo = {
+	/**  文件名（如 `雾镇.epub`）。 */
+	file_name: string,
+	/**  产物字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+	/**  打包时间（UTC `RFC3339`）。 */
+	updated_at: string,
+};
+
+/**  打包结果：产物信息 + 紧随其后的自动校验。 */
+export type PackageOutcome = {
+	/**  产物信息。 */
+	package: PackageInfo,
+	/**  自动校验结果。 */
+	validation: ValidationOutcome,
+};
+
 /**  解析大纲：右栏识别结果的只读展示，正文行不出 IPC。 */
 export type ParseOutline = {
 	/**  卷数（含无标题卷）。 */
@@ -484,6 +515,43 @@ export type UpdateInfo = {
 	/**  发布说明（`latest.json` 的 `body`，可能缺失） */
 	body: string | null,
 };
+
+/**  单条校验信息：`id` 沿用 epubcheck 系 message ID（如 `OPF-002`）。 */
+export type ValidationMessage = {
+	/**  严重度。 */
+	severity: ValidationSeverity,
+	/**  标准消息 ID。 */
+	id: string,
+	/**  人类可读描述（英文，`epubveri` 原文）。 */
+	message: string,
+	/**  归属文件（包内路径，无位置时为 `None`）。 */
+	path: string | null,
+	/**  行号（1-based，无位置时为 `None`）。 */
+	line: number | null,
+	/**  列号（1-based，无位置时为 `None`）。 */
+	column: number | null,
+};
+
+/**  校验结果：`valid` 为假当且仅当存在 `Fatal` / `Error`。 */
+export type ValidationOutcome = {
+	/**  是否通过（无 `Fatal` / `Error`）。 */
+	valid: boolean,
+	/**  全部信息（文档顺序）。 */
+	messages: ValidationMessage[],
+};
+
+/**  校验严重度：`epubveri` 五级词汇原样映射，前端按此着色与计数。 */
+export type ValidationSeverity = 
+/**  致命：校验中途停止。 */
+"fatal" | 
+/**  错误：判无效。 */
+"error" | 
+/**  警告：上报但不判无效。 */
+"warning" | 
+/**  信息：中性事实。 */
+"info" | 
+/**  建议：特性使用提示，永不判无效。 */
+"usage";
 
 /**  卷大纲：右栏识别结果的只读条目。 */
 export type VolumeOutline = {

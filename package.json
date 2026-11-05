@@ -2,7 +2,7 @@
   "name": "ebook-studio-desktop",
   "version": "0.1.0",
   "description": "Ebook editor desktop application.",
-  "license": "GPL-3.0-only",
+  "license": "AGPL-3.0-only",
   "author": "Alfred Clark",
   "homepage": "https://github.com/AlfredClark/ebook-studio-desktop",
   "repository": {

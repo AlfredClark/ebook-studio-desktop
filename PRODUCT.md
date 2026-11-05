@@ -48,7 +48,7 @@ web
 
 **约束：**
 
-- 许可证 GPL-3.0-only（派生项目闭源分发前必须评估传染性义务）；作者 Alfred Clark。
+- 许可证 AGPL-3.0-only（派生项目闭源分发前必须评估传染性义务，网络服务形态同样触发源码提供义务）；作者 Alfred Clark。
 - 语言仅 en / zh-CN 两个（`Locale` 枚举，禁裸 string；繁体归 zh-CN）。
 - 生成物禁手改：`bindings.ts` 只经 `cargo test` 重生成，`paraglide/` 只经 `pnpm i18n:compile`。
 - 应用身份：包名 `ebook-studio-desktop` / 展示名 `Ebook Studio` / 反向域名 / 深链 scheme `ebook-studio` / 更新密钥 / 图标均已确定为本产品所有。

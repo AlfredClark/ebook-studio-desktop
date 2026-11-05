@@ -8,7 +8,7 @@ repository = "https://github.com/AlfredClark/ebook-studio-desktop"
 keywords = ["tauri", "desktop", "ebook", "studio"]
 categories = ["gui"]
 readme = "../README.md"
-license = "GPL-3.0-only"
+license = "AGPL-3.0-only"
 
 [lib]
 name = "ebook_studio_desktop_lib"
@@ -50,6 +50,11 @@ lightningcss = "=1.0.0-alpha.72"
 tauri-plugin-system-fonts = "2.0.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
+# 小说打包：`build/` 目录树 → 标准 EPUB（`features/novel_package.rs`，`mimetype` 首条明存、其余 Deflate）
+zip = "9"
+# 打包校验：纯 Rust 的 epubcheck 平替（`features/novel_package.rs`，报告沿用 `RSC-*` / `OPF-*` 标准 ID）；
+# AGPL-3.0-only，本仓已整体转 AGPL-3.0-only 后引入，升级需人工评审 API 变更
+epubveri = "0.37"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"

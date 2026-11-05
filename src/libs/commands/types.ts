@@ -18,6 +18,8 @@ import type {
   Locale,
   NovelFilter,
   NovelTextStatus,
+  PackageInfo,
+  PackageOutcome,
   ParseOutline,
   ProjectInfo,
   ProjectMetadata,
@@ -26,6 +28,9 @@ import type {
   SystemInfo,
   TextSpan,
   UpdateInfo,
+  ValidationMessage,
+  ValidationOutcome,
+  ValidationSeverity,
   commands as rawCommands,
 } from "#libs/commands/bindings";
 import type { EnhancedCommand } from "#libs/commands/cores";
@@ -70,6 +75,8 @@ export type {
   Locale,
   NovelFilter,
   NovelTextStatus,
+  PackageInfo,
+  PackageOutcome,
   ParseOutline,
   ProjectInfo,
   ProjectMetadata,
@@ -78,4 +85,7 @@ export type {
   SystemInfo,
   TextSpan,
   UpdateInfo,
+  ValidationMessage,
+  ValidationOutcome,
+  ValidationSeverity,
 };
