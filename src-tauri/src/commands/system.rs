@@ -35,6 +35,14 @@ pub fn open_config_dir(app: tauri::AppHandle) -> CommandResult<()> {
     Ok(system::open_config_dir(&app)?)
 }
 
+/// 在系统文件管理器中打开导出目录（仅已存在的目录）
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_export_dir(app: tauri::AppHandle, dir: String) -> CommandResult<()> {
+    Ok(system::open_export_dir(&app, &dir)?)
+}
+
 /// 复制系统信息到剪贴板；文本由后端组装，前端只调命令
 #[tauri::command]
 #[specta::specta]

@@ -74,6 +74,8 @@
     if (typeof picked !== "string" || picked === "") {
       return;
     }
+    // 重选即换源：后端已清空解析、构建与打包产物，成功后 toast 提醒重新解析。
+    const wasReselect = status?.exists ?? false;
     importing = true;
     const result = await commands.importNovelText(uuid, picked).result();
     importing = false;
@@ -84,6 +86,9 @@
     status = result.data;
     // 新原文使旧大纲失效，待重新解析。
     outline = null;
+    if (wasReselect) {
+      toast.success(m.files_source_reselect_cleared());
+    }
   }
 
   /** 开始解析：调后端切分并落盘 content.json，大纲进右栏，失败 toast。 */
@@ -160,7 +165,7 @@
         {#if parsing}
           <p class="text-sm text-muted-foreground" aria-busy="true">{m.files_parsing()}</p>
         {:else if outline !== null}
-          <div class="min-h-0 flex-1 overflow-auto">
+          <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
             <ParseOutlineCard {outline} {renumbering} onRenumber={() => void handleRenumber()} />
           </div>
         {:else}

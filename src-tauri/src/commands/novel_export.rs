@@ -3,7 +3,8 @@
 
 use crate::cores::types::CommandResult;
 use crate::features::novel_export::{
-    self, ExportItems, ExportNaming, ExportOutcome, ExportStatus, TxtOptions, TxtTitleKind,
+    self, ChapterNumbering, ExportItems, ExportNaming, ExportOutcome, ExportStatus, TxtOptions,
+    TxtTitleKind,
 };
 
 /// 查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。
@@ -14,7 +15,7 @@ pub fn get_novel_export_status(app: tauri::AppHandle, id: String) -> CommandResu
     Ok(novel_export::export_status(&app, &id)?)
 }
 
-/// 预览标题格式：取首章渲染一行供下拉后方展示，失败时前端隐藏预览。
+/// 预览标题格式：按卷章取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
@@ -23,8 +24,12 @@ pub fn preview_novel_txt_title(
     id: String,
     kind: TxtTitleKind,
     pattern: String,
+    is_volume: bool,
+    numbering: ChapterNumbering,
 ) -> CommandResult<String> {
-    Ok(novel_export::preview_title(&app, &id, kind, &pattern)?)
+    Ok(novel_export::preview_title(
+        &app, &id, kind, &pattern, is_volume, numbering,
+    )?)
 }
 
 /// 导出小说：改名拷贝 EPUB / 封面、`content.json` 转 TXT，落到自选目录的 `<命名>/` 下。

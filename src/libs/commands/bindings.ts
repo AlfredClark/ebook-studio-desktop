@@ -72,7 +72,9 @@ export const commands = {
 	/**  全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。 */
 	filterNovelContent: (id: string, filter: NovelFilter) => typedError<FilterOutcome, CommandError>(__TAURI_INVOKE("filter_novel_content", { id, filter })),
 	/**  构建小说：清空构建目录后全量重生成，返回文件树。 */
-	buildNovelContent: (id: string) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_novel_content", { id })),
+	buildNovelContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_novel_content", { id, titles })),
+	/**  清空构建产物：删除 `build/` 目录，前端回到构建引导。 */
+	clearNovelBuildContent: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("clear_novel_build_content", { id })),
 	/**  读取构建树：未构建回 `None`，前端展示空态引导构建。 */
 	getNovelBuildTree: (id: string) => typedError<{
 	/**  构建根下的顶层节点（已排序，目录在前）。 */
@@ -105,8 +107,8 @@ export const commands = {
 	validateNovelPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_novel_package", { id })),
 	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
 	getNovelExportStatus: (id: string) => typedError<ExportStatus, CommandError>(__TAURI_INVOKE("get_novel_export_status", { id })),
-	/**  预览标题格式：取首章渲染一行供下拉后方展示，失败时前端隐藏预览。 */
-	previewNovelTxtTitle: (id: string, kind: TxtTitleKind, pattern: string) => typedError<string, CommandError>(__TAURI_INVOKE("preview_novel_txt_title", { id, kind, pattern })),
+	/**  预览标题格式：按卷章取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
+	previewNovelTxtTitle: (id: string, kind: TxtTitleKind, pattern: string, isVolume: boolean, numbering: ChapterNumbering) => typedError<string, CommandError>(__TAURI_INVOKE("preview_novel_txt_title", { id, kind, pattern, isVolume, numbering })),
 	/**  导出小说：改名拷贝 EPUB / 封面、`content.json` 转 TXT，落到自选目录的 `<命名>/` 下。 */
 	exportNovelContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ExportItems, txtOptions: TxtOptions) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_novel_content", { id, destDir, naming, customName, items, txtOptions })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
@@ -117,6 +119,8 @@ export const commands = {
 	openLogDir: () => typedError<null, CommandError>(__TAURI_INVOKE("open_log_dir")),
 	/**  在系统文件管理器中打开配置目录（`config.json` 所在目录） */
 	openConfigDir: () => typedError<null, CommandError>(__TAURI_INVOKE("open_config_dir")),
+	/**  在系统文件管理器中打开导出目录（仅已存在的目录） */
+	openExportDir: (dir: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_export_dir", { dir })),
 	/**  复制系统信息到剪贴板；文本由后端组装，前端只调命令 */
 	copySystemInfo: () => typedError<null, CommandError>(__TAURI_INVOKE("copy_system_info")),
 	/**  检查更新；无新版返回 `None`（仅桌面端有更新能力） */
@@ -179,6 +183,20 @@ export type BuildOutcome = {
 	file_count: number,
 };
 
+/**  构建标题选项：卷章标题格式 + 章编号方式（复用 TXT 标题模板引擎）；`build/` 落盘用。 */
+export type BuildTitleOptions = {
+	/**  章标题格式。 */
+	chapter_kind: TxtTitleKind,
+	/**  章自定义模板；非 `custom` 时忽略。 */
+	chapter_pattern: string,
+	/**  卷标题格式。 */
+	volume_kind: TxtTitleKind,
+	/**  卷自定义模板；非 `custom` 时忽略。 */
+	volume_pattern: string,
+	/**  章编号方式。 */
+	chapter_numbering: ChapterNumbering,
+};
+
 /**  单章正文：编辑页中栏的读写单位；标题只读展示，正文按行往返。 */
 export type ChapterContent = {
 	/**  章完整标题（只读展示用）。 */
@@ -196,6 +214,13 @@ export type ChapterMatches = {
 	/**  命中行（按行号升序）。 */
 	matches: LineMatch[],
 };
+
+/**  章编号方式：分卷书章标题渲染时的编号口径；平铺书两种等价。 */
+export type ChapterNumbering = 
+/**  跨卷连续：文档顺序全局序号，忽略解析号。 */
+"continuous" | 
+/**  分卷重置：解析出的卷内号（现状口径）。 */
+"per_volume";
 
 /**  章大纲：右栏识别结果的只读条目，字数仅计章正文。 */
 export type ChapterOutline = {
@@ -614,12 +639,18 @@ export type TextSpan = {
 	len: number,
 };
 
-/**  TXT 导出选项：标题格式 + 元数据清单；`items.txt` 为假时忽略。 */
+/**  TXT 导出选项：章标题格式 + 卷标题格式 + 章编号方式 + 元数据清单；`items.txt` 为假时忽略。 */
 export type TxtOptions = {
-	/**  标题格式。 */
-	title_kind: TxtTitleKind,
-	/**  自定义模板；非 `custom` 时忽略。 */
-	title_pattern: string,
+	/**  章标题格式。 */
+	chapter_kind: TxtTitleKind,
+	/**  章自定义模板；非 `custom` 时忽略。 */
+	chapter_pattern: string,
+	/**  卷标题格式。 */
+	volume_kind: TxtTitleKind,
+	/**  卷自定义模板；非 `custom` 时忽略。 */
+	volume_pattern: string,
+	/**  章编号方式。 */
+	chapter_numbering: ChapterNumbering,
 	/**  勾选的元数据字段。 */
 	metadata: MetadataField[],
 };

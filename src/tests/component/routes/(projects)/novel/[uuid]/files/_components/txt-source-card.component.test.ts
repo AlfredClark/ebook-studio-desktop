@@ -20,23 +20,37 @@ afterEach(() => {
 });
 
 describe("原文卡片", () => {
-  it("缺文件时显示空态与选择按钮", () => {
+  it("缺文件时显示空态与选择按钮，无重选提示", () => {
     render(TxtSourceCard, {
       props: { status: emptyStatus, importing: false, onChoose: chooseMock },
     });
 
     expect(screen.getByText("No source text imported yet")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Choose TXT…" })).not.toBeNull();
+    expect(
+      screen.queryByText(
+        "Re-selecting clears parse, build and package outputs; you'll need to parse, build and package again",
+      ),
+    ).toBeNull();
   });
 
-  it("已导入时显示大小与更新时间", () => {
+  it("已导入时显示文件大小与更新时间在同一行", () => {
     render(TxtSourceCard, {
       props: { status: filledStatus, importing: false, onChoose: chooseMock },
     });
 
-    expect(screen.getByText("Size")).not.toBeNull();
+    const sizeLabel = screen.getByText("File size");
+    expect(sizeLabel).not.toBeNull();
     expect(screen.getByText("2.0 KB")).not.toBeNull();
+    expect(screen.getByText("Updated at")).not.toBeNull();
+    // 文件大小与更新时间同处一行容器。
+    expect(sizeLabel.closest(".grid")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Choose again…" })).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Re-selecting clears parse, build and package outputs; you'll need to parse, build and package again",
+      ),
+    ).not.toBeNull();
   });
 
   it("导入中禁用按钮，点击走回调", async () => {

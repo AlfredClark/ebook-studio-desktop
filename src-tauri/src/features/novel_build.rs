@@ -174,11 +174,35 @@ fn body_paragraphs(lines: &[String]) -> String {
         .join("\n")
 }
 
+/// 同类数量位数（文件名补零宽度），最低 2 位，保证全书命名格式统一。
+fn count_width(count: usize) -> usize {
+    count.to_string().len().max(2)
+}
+
 /// 构建全量生成：先清空构建目录再写，调用前由前端确认框兜底。
+/// 文件命名：平铺沿用全局三位计数；分卷用 `chapter-<卷>-<章>`（文档顺序），
+/// 卷宽取卷总数位数、章宽取各卷最大章数位数（最低 2 位）。
 #[allow(clippy::too_many_lines)]
-pub fn build_in(project_dir: &Path, template_base: &Path) -> anyhow::Result<BuildOutcome> {
+pub fn build_in(
+    project_dir: &Path,
+    template_base: &Path,
+    titles: &super::novel_export::BuildTitleOptions,
+) -> anyhow::Result<BuildOutcome> {
     use super::epub_template::read_template_file_in;
+    use super::novel_export::{
+        ChapterNumbering, TxtTitleKind, chapter_number, chapter_number_width, heading,
+    };
     use super::project_metadata::load_or_init_metadata_in;
+
+    if matches!(titles.chapter_kind, TxtTitleKind::Custom)
+        && titles.chapter_pattern.trim().is_empty()
+    {
+        anyhow::bail!("custom chapter pattern must not be empty");
+    }
+    if matches!(titles.volume_kind, TxtTitleKind::Custom) && titles.volume_pattern.trim().is_empty()
+    {
+        anyhow::bail!("custom volume pattern must not be empty");
+    }
 
     let metadata = load_or_init_metadata_in(project_dir)?;
     let content: NovelContent = super::novel_files::read_content(project_dir)?;
@@ -204,16 +228,45 @@ pub fn build_in(project_dir: &Path, template_base: &Path) -> anyhow::Result<Buil
     let mut spine_items = Vec::new();
     let mut toc_entries = Vec::new();
     let mut chapter_counter = 0u32;
-    let mut volume_counter = 0u32;
     // 首个正文页：导览 landmarks 指向，卷页优先于章节页。
     let mut first_bodymatter: Option<String> = None;
 
-    for volume in &content.volumes {
+    // 分卷判定与识别卡同口径：多卷，或单卷有标题。
+    let grouped = content.volumes.len() > 1
+        || content
+            .volumes
+            .first()
+            .is_some_and(|v| v.full_title.is_some());
+    let volume_width = count_width(content.volumes.len());
+    let chapter_width = count_width(
+        content
+            .volumes
+            .iter()
+            .map(|volume| volume.chapters.len())
+            .max()
+            .unwrap_or(0),
+    );
+    // 跨卷连续的文件名章号取全局序号，宽度按全书总章数位数（最低 2 位）。
+    let continuous_width = count_width(
+        content
+            .volumes
+            .iter()
+            .map(|volume| volume.chapters.len())
+            .sum(),
+    );
+    // 标题模板数字补零宽度：与导出同口径（最低 2 位）。
+    let volume_number_width =
+        super::novel_export::number_width(content.volumes.iter().map(|volume| volume.number));
+    let chapter_number_width = chapter_number_width(&content, titles.chapter_numbering);
+    let mut global_seq = 0u32;
+
+    for (volume_index, volume) in content.volumes.iter().enumerate() {
+        let volume_no = volume_index + 1;
         // 有标题行才生成卷页；纯章节的隐式卷跳过，章节直接平铺。
         let mut volume_href: Option<String> = None;
         if let Some(full_title) = volume.full_title.as_deref() {
-            volume_counter += 1;
-            let file = format!("volume-{volume_counter:02}.xhtml");
+            let stem = format!("volume-{volume_no:0>volume_width$}");
+            let file = format!("{stem}.xhtml");
             let href = format!("EPUB/text/{file}");
             let intro = volume
                 .intro
@@ -221,40 +274,68 @@ pub fn build_in(project_dir: &Path, template_base: &Path) -> anyhow::Result<Buil
                 .map(|line| format!("      <p class=\"volume-intro\">{}</p>", xml_escape(line)))
                 .collect::<Vec<_>>()
                 .join("\n");
+            let rendered = heading(
+                titles.volume_kind,
+                &titles.volume_pattern,
+                full_title,
+                volume.title.as_deref().unwrap_or(""),
+                volume.number,
+                volume_number_width,
+                true,
+            );
             let page = volume_template
-                .replace("{{VOLUME_TITLE}}", &xml_escape(full_title))
+                .replace("{{VOLUME_TITLE}}", &xml_escape(&rendered))
                 .replace("{{VOLUME_INTRO}}", &intro);
             write_bytes(&build_dir, &href, page.as_bytes())?;
             manifest_items.push(format!(
-                "    <item id=\"volume-{volume_counter:02}\" href=\"text/{file}\" media-type=\"application/xhtml+xml\"/>"
+                "    <item id=\"{stem}\" href=\"text/{file}\" media-type=\"application/xhtml+xml\"/>"
             ));
-            spine_items.push(format!(
-                "    <itemref idref=\"volume-{volume_counter:02}\"/>"
-            ));
+            spine_items.push(format!("    <itemref idref=\"{stem}\"/>"));
             toc_entries.push(format!(
                 "        <li><a href=\"text/{file}\">{}</a>\n          <ol>",
-                xml_escape(full_title)
+                xml_escape(&rendered)
             ));
             volume_href = Some(href.clone());
             first_bodymatter.get_or_insert(href);
         }
-        for chapter in &volume.chapters {
-            chapter_counter += 1;
-            let file = format!("chapter-{chapter_counter:03}.xhtml");
+        for (chapter_index, chapter) in volume.chapters.iter().enumerate() {
+            global_seq += 1;
+            let stem = if grouped {
+                match titles.chapter_numbering {
+                    ChapterNumbering::Continuous => format!(
+                        "chapter-{volume_no:0>volume_width$}-{global_seq:0>continuous_width$}"
+                    ),
+                    ChapterNumbering::PerVolume => format!(
+                        "chapter-{volume_no:0>volume_width$}-{chapter_no:0>chapter_width$}",
+                        chapter_no = chapter_index + 1
+                    ),
+                }
+            } else {
+                chapter_counter += 1;
+                format!("chapter-{chapter_counter:03}")
+            };
+            let file = format!("{stem}.xhtml");
             let href = format!("EPUB/text/{file}");
+            let rendered = heading(
+                titles.chapter_kind,
+                &titles.chapter_pattern,
+                &chapter.full_title,
+                &chapter.title,
+                chapter_number(global_seq, chapter.number, titles.chapter_numbering),
+                chapter_number_width,
+                false,
+            );
             let page = chapter_template
-                .replace("{{CHAPTER_TITLE}}", &xml_escape(&chapter.full_title))
+                .replace("{{CHAPTER_TITLE}}", &xml_escape(&rendered))
                 .replace("{{CHAPTER_BODY}}", &body_paragraphs(&chapter.lines));
             write_bytes(&build_dir, &href, page.as_bytes())?;
             manifest_items.push(format!(
-                "    <item id=\"chapter-{chapter_counter:03}\" href=\"text/{file}\" media-type=\"application/xhtml+xml\"/>"
+                "    <item id=\"{stem}\" href=\"text/{file}\" media-type=\"application/xhtml+xml\"/>"
             ));
-            spine_items.push(format!(
-                "    <itemref idref=\"chapter-{chapter_counter:03}\"/>"
-            ));
+            spine_items.push(format!("    <itemref idref=\"{stem}\"/>"));
             let entry = format!(
                 "          <li><a href=\"text/{file}\">{}</a></li>",
-                xml_escape(&chapter.full_title)
+                xml_escape(&rendered)
             );
             if volume_href.is_some() {
                 toc_entries.push(format!("          {entry}"));
@@ -889,11 +970,31 @@ pub fn format_all_build_files(app: &tauri::AppHandle, id: &str) -> anyhow::Resul
 }
 
 /// 构建小说（`AppHandle` 入口）：清空后全量重生成，返回文件树。
-pub fn build_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<BuildOutcome> {
+pub fn build_novel(
+    app: &tauri::AppHandle,
+    id: &str,
+    titles: &super::novel_export::BuildTitleOptions,
+) -> anyhow::Result<BuildOutcome> {
     use super::epub_template::template_dir;
     let dir = super::projects::resolve_project_dir(app, id)?;
     let base = template_dir(app, ProjectType::Novel)?;
-    build_in(&dir, &base)
+    build_in(&dir, &base, titles)
+}
+
+/// 清空构建产物：删除 `build/` 目录（不存在视为成功），供确认重构建后回到引导。
+pub fn clear_in(project_dir: &Path) -> anyhow::Result<()> {
+    let build_dir = project_dir.join(BUILD_DIR);
+    if build_dir.exists() {
+        std::fs::remove_dir_all(&build_dir)
+            .with_context(|| format!("failed to clear {}", build_dir.display()))?;
+    }
+    Ok(())
+}
+
+/// 清空构建产物（`AppHandle` 入口）。
+pub fn clear_build(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    clear_in(&dir)
 }
 
 /// 读构建树（`AppHandle` 入口）：未构建回 `None`。
@@ -964,6 +1065,9 @@ pub fn write_build_file(
 mod tests {
     use std::path::PathBuf;
 
+    use super::super::novel_export::BuildTitleOptions;
+    use super::super::novel_export::ChapterNumbering;
+    use super::super::novel_export::TxtTitleKind;
     use super::super::novel_files;
     use super::super::projects;
     use super::super::projects::ProjectType;
@@ -1012,11 +1116,12 @@ mod tests {
             "full",
             "第一卷 开篇\n第一章 引子\n正文甲\n第二章 发展\n正文乙\n第二卷 承接\n第一章 再起\n正文丙\n",
         );
-        let outcome = build_in(&dir, &template_base()).expect("build");
+        let outcome =
+            build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         assert!(outcome.file_count >= 10);
 
-        // 章节页：标题转义 + 正文分段。
-        let chapter = read_built(&dir, "EPUB/text/chapter-001.xhtml");
+        // 章节页：标题转义 + 正文分段（分卷命名 chapter-<卷>-<章>）。
+        let chapter = read_built(&dir, "EPUB/text/chapter-01-01.xhtml");
         assert!(chapter.contains("<h1 class=\"chapter-title\">第一章 引子</h1>"));
         assert!(chapter.contains("<p>正文甲</p>"));
         // 卷页：标题 + 简介（本例简介为空，卷页仍生成）。
@@ -1024,23 +1129,24 @@ mod tests {
         assert!(volume.contains("<h1 class=\"volume-title\">第一卷 开篇</h1>"));
         // 目录嵌套 + 导览；opf 清单与书脊按文档顺序。
         let nav = read_built(&dir, "EPUB/nav.xhtml");
-        assert!(nav.contains("text/chapter-002.xhtml"));
+        assert!(nav.contains("text/chapter-01-02.xhtml"));
         assert!(nav.contains("bodymatter"));
         // 地标语义用官方词表无连字符形（`titlepage`），连字符形会吃 `OPF-088`。
         assert!(nav.contains("epub:type=\"titlepage\""));
         assert!(!nav.contains("title-page"));
         let opf = read_built(&dir, "EPUB/content.opf");
-        let manifest_pos = opf.find("chapter-001").expect("manifest");
+        let manifest_pos = opf.find("chapter-01-01").expect("manifest");
         let spine_pos = opf.find("<spine>").expect("spine");
         assert!(manifest_pos < spine_pos);
         assert!(opf.contains("<itemref idref=\"volume-02\"/>"));
+        assert!(opf.contains("<itemref idref=\"chapter-02-01\"/>"));
         // 生成文本无残留占位符。
         for rel in [
             "EPUB/content.opf",
             "EPUB/nav.xhtml",
             "EPUB/titlepage.xhtml",
             "EPUB/cover.xhtml",
-            "EPUB/text/chapter-001.xhtml",
+            "EPUB/text/chapter-01-01.xhtml",
             "EPUB/text/volume-01.xhtml",
         ] {
             assert!(
@@ -1055,9 +1161,71 @@ mod tests {
     }
 
     #[test]
+    fn builds_volume_chapters_with_title_kinds() {
+        let (root, dir) = fixture_project(
+            "titled",
+            "第一卷 开篇\n第一章 引子\n正文甲\n第二章 发展\n正文乙\n",
+        );
+        let options = BuildTitleOptions {
+            chapter_kind: TxtTitleKind::Padded,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Arabic,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::PerVolume,
+        };
+        build_in(&dir, &template_base(), &options).expect("build");
+        let chapter = read_built(&dir, "EPUB/text/chapter-01-01.xhtml");
+        assert!(chapter.contains("<h1 class=\"chapter-title\">第01章 引子</h1>"));
+        let volume = read_built(&dir, "EPUB/text/volume-01.xhtml");
+        assert!(volume.contains("<h1 class=\"volume-title\">第1卷 开篇</h1>"));
+        let nav = read_built(&dir, "EPUB/nav.xhtml");
+        assert!(nav.contains("第1卷 开篇"));
+        assert!(nav.contains("第01章 引子"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn builds_volume_chapters_with_continuous_numbering() {
+        let (root, dir) = fixture_project(
+            "continuous",
+            "第一卷 开篇\n第一章 起\n甲\n第二卷 续篇\n第一章 再起\n乙\n",
+        );
+        let options = BuildTitleOptions {
+            chapter_kind: TxtTitleKind::Padded,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Original,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::Continuous,
+        };
+        build_in(&dir, &template_base(), &options).expect("build");
+        // 文件名章号跟随编号方式：卷 2 首章是全书第 2 章。
+        let chapter = read_built(&dir, "EPUB/text/chapter-02-02.xhtml");
+        assert!(chapter.contains("<h1 class=\"chapter-title\">第02章 再起</h1>"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn rejects_empty_custom_title_patterns() {
+        let (root, dir) = fixture_project("custom-bad", "第一章 引子\n正文\n");
+        let options = BuildTitleOptions {
+            chapter_kind: TxtTitleKind::Custom,
+            chapter_pattern: "  ".to_string(),
+            ..BuildTitleOptions::default()
+        };
+        assert!(build_in(&dir, &template_base(), &options).is_err());
+        let options = BuildTitleOptions {
+            volume_kind: TxtTitleKind::Custom,
+            volume_pattern: "  ".to_string(),
+            ..BuildTitleOptions::default()
+        };
+        assert!(build_in(&dir, &template_base(), &options).is_err());
+        cleanup(&root);
+    }
+
+    #[test]
     fn escapes_xml_special_chars() {
         let (root, dir) = fixture_project("escape", "第一章 A&B<尾>\n正文含\"引号\"与<标签>\n");
-        build_in(&dir, &template_base()).expect("build");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         let chapter = read_built(&dir, "EPUB/text/chapter-001.xhtml");
         assert!(chapter.contains("A&amp;B&lt;尾&gt;"));
         assert!(chapter.contains("正文含&quot;引号&quot;与&lt;标签&gt;"));
@@ -1065,9 +1233,23 @@ mod tests {
     }
 
     #[test]
+    fn clears_build_output_back_to_guide() {
+        let (root, dir) = fixture_project("clear", "第一章 引子\n正文\n");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
+        assert!(tree_in(&dir).is_some());
+        clear_in(&dir).expect("clear");
+        assert!(tree_in(&dir).is_none());
+        assert!(!dir.join(BUILD_DIR).exists());
+        // 缺失时重复清空仍成功。
+        clear_in(&dir).expect("clear again");
+        cleanup(&root);
+    }
+
+    #[test]
     fn untitled_volume_skips_volume_page_and_flattens_toc() {
         let (root, dir) = fixture_project("flat", "第一章 引子\n正文\n第二章 发展\n正文\n");
-        let outcome = build_in(&dir, &template_base()).expect("build");
+        let outcome =
+            build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         let paths: Vec<String> = outcome.files.iter().flat_map(flatten).collect();
         assert!(!paths.iter().any(|p| p.contains("volume-")));
         let nav = read_built(&dir, "EPUB/nav.xhtml");
@@ -1087,7 +1269,8 @@ mod tests {
     fn tree_round_trips_and_rejects_fixed_and_traversal_writes() {
         let (root, dir) = fixture_project("tree", "第一章 引子\n正文\n");
         assert!(tree_in(&dir).is_none());
-        let outcome = build_in(&dir, &template_base()).expect("build");
+        let outcome =
+            build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         assert_eq!(tree_in(&dir), Some(outcome));
 
         // 固定文件只读：树中标记 + 写入拒绝。
@@ -1124,7 +1307,7 @@ mod tests {
         let source = root.join("cover-source.jpg");
         std::fs::write(&source, [0xFF, 0xD8, 0xFF, 0x00]).expect("write fake cover");
         super::super::project_metadata::import_cover_in(&dir, &source).expect("import cover");
-        build_in(&dir, &template_base()).expect("build");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         assert!(dir.join(BUILD_DIR).join("EPUB/images/cover.jpg").is_file());
         let opf = read_built(&dir, "EPUB/content.opf");
         assert!(opf.contains("cover-image"));
@@ -1154,18 +1337,19 @@ mod tests {
     #[test]
     fn formats_chapter_pretty_and_idempotent() {
         let (root, dir) = fixture_project("format-xml", "第一卷 开篇\n第一章 引子\n正文甲\n");
-        build_in(&dir, &template_base()).expect("build");
-        let first = format_file_in(&dir, "EPUB/text/chapter-001.xhtml").expect("format");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
+        // 单卷有标题按分卷口径命名。
+        let first = format_file_in(&dir, "EPUB/text/chapter-01-01.xhtml").expect("format");
         assert!(first.contains("<p>正文甲</p>"));
         assert!(first.ends_with(">\n") && !first.ends_with("\n\n"));
         assert!(!first.contains("{{"));
         // 幂等：格式化两次结果一致。
         std::fs::write(
-            dir.join(BUILD_DIR).join("EPUB/text/chapter-001.xhtml"),
+            dir.join(BUILD_DIR).join("EPUB/text/chapter-01-01.xhtml"),
             &first,
         )
         .expect("write");
-        let second = format_file_in(&dir, "EPUB/text/chapter-001.xhtml").expect("reformat");
+        let second = format_file_in(&dir, "EPUB/text/chapter-01-01.xhtml").expect("reformat");
         assert_eq!(first, second);
         cleanup(&root);
     }
@@ -1174,7 +1358,7 @@ mod tests {
     fn formats_inline_markup_without_extra_whitespace() {
         // 行内元素不断行：CJK 首尾不塞空格。
         let (root, dir) = fixture_project("format-inline", "第一章 引子\n正文\n");
-        build_in(&dir, &template_base()).expect("build");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         let nav = read_built(&dir, "EPUB/nav.xhtml");
         assert!(nav.contains("<li><a href=\"cover.xhtml\">封面</a></li>"));
         let out = format_xml(&nav).expect("format nav");
@@ -1187,7 +1371,7 @@ mod tests {
     #[test]
     fn formats_given_text_without_touching_disk() {
         let (root, dir) = fixture_project("format-text", "第一章 引子\n正文\n");
-        build_in(&dir, &template_base()).expect("build");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         let rel = "EPUB/text/chapter-001.xhtml";
         let before = std::fs::read_to_string(dir.join(BUILD_DIR).join(rel)).expect("read disk");
         // 输入与落盘不同：输出跟输入走，证明不读盘；落盘内容保持不动。
@@ -1208,7 +1392,7 @@ mod tests {
     #[test]
     fn formats_css_and_rejects_broken_input() {
         let (root, dir) = fixture_project("format-css", "第一章 引子\n正文\n");
-        build_in(&dir, &template_base()).expect("build");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         let out = format_file_in(&dir, "EPUB/styles/base.css").expect("format css");
         assert!(out.contains(".cover-frame"));
         // 非法输入直接报错，调用方保留原文。
@@ -1232,7 +1416,7 @@ mod tests {
             "format-all",
             "第一卷 开篇\n第一章 引子\n正文甲\n第二章 发展\n正文乙\n",
         );
-        build_in(&dir, &template_base()).expect("build");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
         let outcome = format_all_in(&dir).expect("format all");
         assert!(outcome.formatted > 0);
         assert!(outcome.failed.is_empty(), "unexpected format failures");

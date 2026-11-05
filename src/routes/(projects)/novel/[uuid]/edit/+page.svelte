@@ -105,6 +105,11 @@
     return null;
   }
 
+  /** 缺产物：大纲缺失或无可用章节时整页引导回文件步骤（与打包页同构）。 */
+  const isEmpty = $derived(
+    !loading && !loadFailed && (outline === null || firstChapter(outline) === null),
+  );
+
   /** 进页拉取大纲：缺失回落空态引导去文件步骤，正常默认选中首章。 */
   async function loadOutline(): Promise<void> {
     loading = true;
@@ -240,111 +245,105 @@
   });
 </script>
 
-<!-- 小说编辑页：左栏章节树 + 中栏正文编辑 + 右栏正文筛选 -->
+<!-- 小说编辑页：有产物时左栏章节树 + 中栏正文编辑 + 右栏正文筛选，缺产物整页引导回文件步骤 -->
 <svelte:window onkeydown={handleGlobalKeydown} />
 <h1 class="sr-only">{m.project_step_edit()}</h1>
-<div class="flex h-full min-h-0 w-full min-w-0">
-  <Resizable.PaneGroup direction="horizontal">
-    <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
-      <!-- 滚动容器自身无内边距：卷头吸顶才能通栏贴顶，缩进由树内部补回 -->
-      <div class="h-full min-h-0 overflow-y-auto">
-        {#if loading}
-          <p class="px-3 pt-3 text-sm text-muted-foreground" aria-busy="true">{m.edit_loading()}</p>
-        {:else if loadFailed}
-          <div class="flex flex-col items-center justify-center gap-3 px-2 py-8 text-center">
-            <p class="text-sm text-muted-foreground">{m.edit_load_failed()}</p>
-            <Button variant="outline" size="sm" onclick={() => void loadOutline()}>
-              {m.files_retry()}
-            </Button>
-          </div>
-        {:else if outline !== null && visibleSet !== null && visibleSet.size === 0}
-          <p class="px-3 pt-3 text-sm text-muted-foreground">{m.edit_filter_no_match()}</p>
-        {:else if outline !== null}
-          <ChapterTree {outline} {selected} visible={visibleSet} onSelect={requestSelect} />
-        {/if}
-      </div>
-    </Resizable.Pane>
-    <Resizable.Handle withHandle aria-label={m.edit_resize_left_label()} />
-    <Resizable.Pane defaultSize={56} minSize={30} class="min-w-0">
-      <div class="h-full min-h-0">
-        {#if loading || chapterLoading}
-          <div class="flex h-full min-h-0 items-center justify-center">
-            <p class="text-sm text-muted-foreground" aria-busy="true">
-              {chapterLoading ? m.edit_chapter_loading() : m.edit_loading()}
-            </p>
-          </div>
-        {:else if loadFailed}
-          <div
-            class="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center"
-          >
-            <FileTextIcon class="size-10 text-muted-foreground" />
-            <p class="text-sm text-muted-foreground">{m.edit_load_failed()}</p>
-            <Button variant="outline" size="sm" onclick={() => void loadOutline()}>
-              {m.files_retry()}
-            </Button>
-          </div>
-        {:else if outline === null || firstChapter(outline) === null}
-          <div
-            class="flex h-full min-h-0 flex-col items-center justify-center gap-2 p-6 text-center"
-          >
-            <FileTextIcon class="size-10 text-muted-foreground" />
-            <p class="text-sm font-medium">{m.edit_empty_title()}</p>
-            <p class="text-sm text-muted-foreground">{m.edit_empty_description()}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onclick={() => void goto(resolve(`/novel/${uuid}/files`))}
+{#if loading}
+  <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col p-6">
+    <div class="flex flex-1 items-center justify-center">
+      <p class="text-sm text-muted-foreground" aria-busy="true">{m.edit_loading()}</p>
+    </div>
+  </div>
+{:else if loadFailed}
+  <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col p-6">
+    <div class="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+      <p class="text-sm text-muted-foreground">{m.edit_load_failed()}</p>
+      <Button variant="outline" class="w-full max-w-md" onclick={() => void loadOutline()}>
+        {m.files_retry()}
+      </Button>
+    </div>
+  </div>
+{:else if isEmpty}
+  <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col p-6">
+    <div class="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+      <FileTextIcon class="size-10 text-muted-foreground" />
+      <p class="text-sm font-medium">{m.edit_empty_title()}</p>
+      <p class="text-sm text-muted-foreground">{m.edit_empty_description()}</p>
+      <Button class="w-full max-w-md" onclick={() => void goto(resolve(`/novel/${uuid}/files`))}>
+        {m.edit_goto_files()}
+      </Button>
+    </div>
+  </div>
+{:else}
+  <div class="flex h-full min-h-0 w-full min-w-0">
+    <Resizable.PaneGroup direction="horizontal">
+      <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
+        <!-- 滚动容器自身无内边距：卷头吸顶才能通栏贴顶，缩进由树内部补回 -->
+        <div class="h-full min-h-0 overflow-y-auto">
+          {#if outline !== null && visibleSet !== null && visibleSet.size === 0}
+            <p class="px-3 pt-3 text-sm text-muted-foreground">{m.edit_filter_no_match()}</p>
+          {:else if outline !== null}
+            <ChapterTree {outline} {selected} visible={visibleSet} onSelect={requestSelect} />
+          {/if}
+        </div>
+      </Resizable.Pane>
+      <Resizable.Handle withHandle aria-label={m.edit_resize_left_label()} />
+      <Resizable.Pane defaultSize={56} minSize={30} class="min-w-0">
+        <div class="h-full min-h-0">
+          {#if chapterLoading}
+            <div class="flex h-full min-h-0 items-center justify-center">
+              <p class="text-sm text-muted-foreground" aria-busy="true">
+                {m.edit_chapter_loading()}
+              </p>
+            </div>
+          {:else if chapterFailed || selected === null}
+            <div
+              class="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center"
             >
-              {m.edit_goto_files()}
-            </Button>
-          </div>
-        {:else if chapterFailed || selected === null}
-          <div
-            class="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center"
-          >
-            <FileTextIcon class="size-10 text-muted-foreground" />
-            <p class="text-sm text-muted-foreground">{m.edit_chapter_load_failed()}</p>
-            {#if selected !== null}
-              <Button variant="outline" size="sm" onclick={retryChapter}>
-                {m.files_retry()}
-              </Button>
-            {/if}
-          </div>
-        {:else}
-          <ChapterEditor
-            {docKey}
-            title={chapterTitle}
-            content={savedContent}
-            {dirty}
-            {saving}
-            matches={selectedMatches}
-            {stale}
-            {jumpTo}
-            onEdit={(text) => (draft = text)}
-            onSave={() => void handleSave()}
-            onJump={(line) => (jumpTo = { line, nonce: Date.now() })}
+              <FileTextIcon class="size-10 text-muted-foreground" />
+              <p class="text-sm text-muted-foreground">{m.edit_chapter_load_failed()}</p>
+              {#if selected !== null}
+                <Button variant="outline" size="sm" onclick={retryChapter}>
+                  {m.files_retry()}
+                </Button>
+              {/if}
+            </div>
+          {:else}
+            <ChapterEditor
+              {docKey}
+              title={chapterTitle}
+              content={savedContent}
+              {dirty}
+              {saving}
+              matches={selectedMatches}
+              {stale}
+              {jumpTo}
+              onEdit={(text) => (draft = text)}
+              onSave={() => void handleSave()}
+              onJump={(line) => (jumpTo = { line, nonce: Date.now() })}
+            />
+          {/if}
+        </div>
+      </Resizable.Pane>
+      <Resizable.Handle withHandle aria-label={m.edit_resize_right_label()} />
+      <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
+        <div class="h-full min-h-0 overflow-hidden">
+          <FilterPanel
+            bind:kind={filterKind}
+            bind:keyword={filterKeyword}
+            bind:caseSensitive={filterCase}
+            bind:pattern={filterPattern}
+            {filtering}
+            {canFilter}
+            hasOutcome={outcome != null}
+            onRun={() => void runFilter()}
+            onClear={clearFilter}
           />
-        {/if}
-      </div>
-    </Resizable.Pane>
-    <Resizable.Handle withHandle aria-label={m.edit_resize_right_label()} />
-    <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
-      <div class="h-full min-h-0 overflow-hidden">
-        <FilterPanel
-          bind:kind={filterKind}
-          bind:keyword={filterKeyword}
-          bind:caseSensitive={filterCase}
-          bind:pattern={filterPattern}
-          {filtering}
-          {canFilter}
-          hasOutcome={outcome != null}
-          onRun={() => void runFilter()}
-          onClear={clearFilter}
-        />
-      </div>
-    </Resizable.Pane>
-  </Resizable.PaneGroup>
-</div>
+        </div>
+      </Resizable.Pane>
+    </Resizable.PaneGroup>
+  </div>
+{/if}
 <ConfirmDialog
   bind:open={confirmOpen}
   title={m.edit_unsaved_title()}

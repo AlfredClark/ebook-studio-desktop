@@ -21,6 +21,10 @@ const CONTENT_FILE: &str = "content.txt";
 const MAX_TEXT_BYTES: u64 = 100 * 1024 * 1024;
 /// 解析产物文件名：落盘项目根目录，与 `metadata.json` 同级。
 const CONTENT_NAME: &str = "content.json";
+/// 下游构建目录：与 `features::novel_build::BUILD_DIR` 同值，重选原文时连带清空。
+const BUILD_DIR: &str = "build";
+/// 下游打包目录：与 `features::novel_package::DIST_DIR` 同值，重选原文时连带清空。
+const DIST_DIR: &str = "dist";
 /// `content.json` 的结构版本：初始开发阶段固定 `1`，不做跨版本迁移。
 const CONTENT_SCHEMA_VERSION: u32 = 1;
 /// 解析上限：超限报错而非截断，避免静默丢文。
@@ -69,6 +73,9 @@ pub fn status_in(project_dir: &Path) -> anyhow::Result<NovelTextStatus> {
 }
 
 /// 导入原文：校验通过后覆盖拷贝为 `sources/content.txt`，返回最新状态。
+///
+/// 重选即换源：成功后清空下游产物（`content.json`、`build/`、`dist/`），失败不删，
+/// 前端据此整页引导重新解析、构建与打包。
 pub fn import_txt_in(project_dir: &Path, source: &Path) -> anyhow::Result<NovelTextStatus> {
     if !source.is_file() {
         anyhow::bail!("text source is not a file: {}", source.display());
@@ -97,7 +104,15 @@ pub fn import_txt_in(project_dir: &Path, source: &Path) -> anyhow::Result<NovelT
     std::fs::create_dir_all(&sources)
         .with_context(|| format!("failed to create {}", sources.display()))?;
     std::fs::copy(source, sources.join(CONTENT_FILE)).context("failed to copy text")?;
+    clear_downstream(project_dir);
     status_in(project_dir)
+}
+
+/// 清空下游产物：解析、构建与打包结果全部过期，忽略删除失败（缺失即一致）。
+fn clear_downstream(project_dir: &Path) {
+    let _ = std::fs::remove_file(project_dir.join(CONTENT_NAME));
+    let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
+    let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
 }
 
 /// 查询原文状态（`AppHandle` 入口）：项目目录不存在视为目标缺失。
@@ -983,6 +998,36 @@ mod tests {
         assert!(status.exists);
         assert_eq!(
             std::fs::read_to_string(&stored).expect("read stored"),
+            "第二卷\n"
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn reimport_clears_downstream_outputs() {
+        let (root, dir) = test_project("import-clear");
+        write_content(&dir, "第一章 引子\n正文\n");
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        assert!(dir.join(CONTENT_NAME).is_file());
+        let build_dummy = dir.join("build").join("dummy.txt");
+        std::fs::create_dir_all(build_dummy.parent().expect("build parent")).expect("create build");
+        std::fs::write(&build_dummy, "build").expect("write build dummy");
+        let dist_dummy = dir.join("dist").join("dummy.epub");
+        std::fs::create_dir_all(dist_dummy.parent().expect("dist parent")).expect("create dist");
+        std::fs::write(&dist_dummy, "epub").expect("write dist dummy");
+        // 失败导入不删下游，避免丢数据。
+        let bad = write_source(&root, "note.md", "正文".as_bytes());
+        assert!(import_txt_in(&dir, &bad).is_err());
+        assert!(dir.join(CONTENT_NAME).is_file());
+        assert!(build_dummy.is_file());
+        assert!(dist_dummy.is_file());
+        let second = write_source(&root, "second.txt", "第二卷\n".as_bytes());
+        import_txt_in(&dir, &second).expect("reimport");
+        assert!(!dir.join(CONTENT_NAME).exists());
+        assert!(!dir.join("build").exists());
+        assert!(!dir.join("dist").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join(SOURCES_DIR).join(CONTENT_FILE)).expect("read stored"),
             "第二卷\n"
         );
         cleanup(&root);

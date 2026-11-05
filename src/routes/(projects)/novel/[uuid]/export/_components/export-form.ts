@@ -69,14 +69,19 @@ export function isValidTitlePattern(pattern: string): boolean {
   return pattern.trim().length > 0;
 }
 
-/** TXT 参数合法：自定义模板非空，元数据开启时至少选一项。 */
+/** TXT 参数合法：卷章自定义模板各自非空，元数据开启时至少选一项。 */
 export function isValidTxtOptions(
-  titleKind: TxtTitleKind,
-  titlePattern: string,
+  chapterKind: TxtTitleKind,
+  chapterPattern: string,
+  volumeKind: TxtTitleKind,
+  volumePattern: string,
   metaEnabled: boolean,
   metaFields: MetadataField[],
 ): boolean {
-  if (titleKind === "custom" && !isValidTitlePattern(titlePattern)) {
+  if (chapterKind === "custom" && !isValidTitlePattern(chapterPattern)) {
+    return false;
+  }
+  if (volumeKind === "custom" && !isValidTitlePattern(volumePattern)) {
     return false;
   }
   if (metaEnabled && metaFields.length === 0) {

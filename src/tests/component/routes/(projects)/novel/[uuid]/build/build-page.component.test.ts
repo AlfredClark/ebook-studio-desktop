@@ -1,20 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import type { BuildOutcome } from "../../../../../../../libs/commands/types";
+import type { BuildOutcome, ParseOutline } from "../../../../../../../libs/commands/types";
 import BuildPage from "../../../../../../../routes/(projects)/novel/[uuid]/build/+page.svelte";
 
 const treeMock = vi.hoisted(() => vi.fn());
+const outlineMock = vi.hoisted(() => vi.fn());
 const buildMock = vi.hoisted(() => vi.fn());
+const clearMock = vi.hoisted(() => vi.fn());
+const previewMock = vi.hoisted(() => vi.fn());
 const fileMock = vi.hoisted(() => vi.fn());
 const updateMock = vi.hoisted(() => vi.fn());
 const textMock = vi.hoisted(() => vi.fn());
 const formatAllMock = vi.hoisted(() => vi.fn());
+const gotoMock = vi.hoisted(() => vi.fn());
 
 vi.mock("#libs/commands", () => ({
   default: {
     getNovelBuildTree: treeMock,
+    getNovelContentOutline: outlineMock,
     buildNovelContent: buildMock,
+    clearNovelBuildContent: clearMock,
+    previewNovelTxtTitle: previewMock,
     getNovelBuildFile: fileMock,
     updateNovelBuildFile: updateMock,
     formatNovelBuildText: textMock,
@@ -28,6 +35,8 @@ vi.mock("$app/state", () => ({
     params: { uuid: "abc-uuid" },
   },
 }));
+
+vi.mock("$app/navigation", () => ({ goto: gotoMock }));
 
 // jsdom 缺少 CodeMirror 测量所需的 DOM API，此处用 textarea 语义替身承托查看器。
 const listeners = vi.hoisted(() => ({
@@ -112,6 +121,22 @@ const outcome: BuildOutcome = {
 
 function mockLoaded(): void {
   treeMock.mockReturnValue(fakeCommand({ status: "ok", data: outcome }));
+  outlineMock.mockReturnValue(
+    fakeCommand({
+      status: "ok",
+      data: {
+        volume_count: 1,
+        chapter_count: 1,
+        line_count: 1,
+        char_count: 3,
+        preface_lines: 0,
+        numbers_missing: false,
+        titles_missing: false,
+        issues: [],
+        volumes: [{ title: null, chapters: [{ title: "第一章 引子", chars: 3 }] }],
+      },
+    }),
+  );
   fileMock.mockImplementation((_: string, path: string) =>
     fakeCommand({
       status: "ok",
@@ -123,6 +148,10 @@ function mockLoaded(): void {
     }),
   );
   buildMock.mockReturnValue(fakeCommand({ status: "ok", data: outcome }));
+  clearMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
+  previewMock.mockImplementation((_: string, _kind: string, _pattern: string, isVolume: boolean) =>
+    fakeCommand({ status: "ok", data: isVolume ? "第一卷 开篇" : "第一章 引子" }),
+  );
   updateMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
   textMock.mockReturnValue(fakeCommand({ status: "ok", data: "<p>正文</p>\n" }));
   formatAllMock.mockReturnValue(
@@ -152,10 +181,20 @@ describe("构建页", () => {
     render(BuildPage);
 
     expect(await screen.findByText("No build yet")).not.toBeNull();
+    // 平铺书只显示章标题格式，卷格式与编号方式隐藏。
+    expect(screen.getByText("Chapter title format")).not.toBeNull();
+    expect(screen.queryByText("Volume title format")).toBeNull();
+    expect(screen.queryByText("Chapter numbering")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Build" }));
 
     expect(buildMock).toHaveBeenCalledOnce();
-    expect(buildMock).toHaveBeenCalledWith("abc-uuid");
+    expect(buildMock).toHaveBeenCalledWith("abc-uuid", {
+      chapter_kind: "original",
+      chapter_pattern: "",
+      volume_kind: "original",
+      volume_pattern: "",
+      chapter_numbering: "per_volume",
+    });
     // 构建后静默格式化全部文件。
     await vi.waitFor(() => expect(formatAllMock).toHaveBeenCalledOnce());
     expect(await screen.findByText("chapter-001.xhtml")).not.toBeNull();
@@ -164,6 +203,18 @@ describe("构建页", () => {
     expect(fileMock).not.toHaveBeenCalled();
     await openChapterFile(user);
     expect(fileMock).toHaveBeenCalledWith("abc-uuid", "EPUB/text/chapter-001.xhtml");
+  });
+
+  it("无解析产物时引导去文件步骤", async () => {
+    const user = userEvent.setup();
+    treeMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
+    outlineMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
+    render(BuildPage);
+
+    expect(await screen.findByText("No parsed content yet")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Go to Files" }));
+    expect(gotoMock).toHaveBeenCalledWith("/novel/abc-uuid/files");
+    expect(buildMock).not.toHaveBeenCalled();
   });
 
   it("固定文件只读展示无保存按钮，生成文件可编辑保存", async () => {
@@ -208,7 +259,60 @@ describe("构建页", () => {
     expect(await screen.findByText("Read-only")).not.toBeNull();
   });
 
-  it("重构建走确认框，确认后重生成", async () => {
+  it("分卷书显示编号方式，切连续后构建透传", async () => {
+    const user = userEvent.setup();
+    treeMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
+    mockLoaded();
+    treeMock.mockReturnValueOnce(fakeCommand({ status: "ok", data: null }));
+    const multiOutline: ParseOutline = {
+      volume_count: 2,
+      chapter_count: 3,
+      line_count: 3,
+      char_count: 9,
+      preface_lines: 0,
+      numbers_missing: false,
+      titles_missing: false,
+      issues: [],
+      volumes: [
+        {
+          title: "第一卷 开篇",
+          chapters: [
+            { title: "第一章 起", chars: 3 },
+            { title: "第二章 承", chars: 3 },
+          ],
+        },
+        { title: "第二卷 续篇", chapters: [{ title: "第一章 再起", chars: 3 }] },
+      ],
+    };
+    outlineMock.mockReturnValue(fakeCommand({ status: "ok", data: multiOutline }));
+    render(BuildPage);
+
+    expect(await screen.findByText("Chapter numbering")).not.toBeNull();
+    expect(screen.getByText("Volume title format")).not.toBeNull();
+    // 默认分卷重置选中。
+    expect(
+      (screen.getByRole("radio", { name: "Restart per volume" }) as HTMLElement).getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("true");
+    await user.click(screen.getByRole("radio", { name: "Continuous across volumes" }));
+    expect(
+      (
+        screen.getByRole("radio", { name: "Continuous across volumes" }) as HTMLElement
+      ).getAttribute("aria-checked"),
+    ).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Build" }));
+
+    expect(buildMock).toHaveBeenCalledWith("abc-uuid", {
+      chapter_kind: "original",
+      chapter_pattern: "",
+      volume_kind: "original",
+      volume_pattern: "",
+      chapter_numbering: "continuous",
+    });
+  });
+
+  it("重构建确认后删除产物并回到构建引导", async () => {
     const user = userEvent.setup();
     mockLoaded();
     render(BuildPage);
@@ -217,9 +321,17 @@ describe("构建页", () => {
     await user.click(screen.getByRole("button", { name: "Rebuild" }));
 
     expect(await screen.findByText("Rebuild?")).not.toBeNull();
+    // 确认后清空产物：再次拉树回空，后续走构建引导。
+    treeMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
     await user.click(screen.getByRole("button", { name: "Confirm rebuild" }));
 
-    expect(buildMock).toHaveBeenCalledOnce();
+    expect(clearMock).toHaveBeenCalledOnce();
+    expect(clearMock).toHaveBeenCalledWith("abc-uuid");
+    expect(buildMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("No build yet")).not.toBeNull();
+    // 平铺大纲回到引导：章格式保留，卷格式与编号方式隐藏。
+    expect(screen.getByText("Chapter title format")).not.toBeNull();
+    expect(screen.queryByText("Volume title format")).toBeNull();
   });
 
   it("单文件格式化回填编辑器并变脏，保存后清脏", async () => {
@@ -311,6 +423,7 @@ describe("构建页", () => {
         data: { content: "<container/>", editable: false, formattable: true },
       }),
     );
+    previewMock.mockReturnValue(fakeCommand({ status: "ok", data: "第一章 引子" }));
     render(BuildPage);
 
     // 点选只读文件：只读徽标在，无操作按钮。

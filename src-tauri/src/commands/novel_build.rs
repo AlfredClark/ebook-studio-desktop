@@ -5,13 +5,26 @@ use crate::cores::types::CommandResult;
 use crate::features::novel_build::{
     self, BuildFileContent, BuildImageInfo, BuildOutcome, FormatOutcome,
 };
+use crate::features::novel_export::BuildTitleOptions;
 
 /// 构建小说：清空构建目录后全量重生成，返回文件树。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
-pub fn build_novel_content(app: tauri::AppHandle, id: String) -> CommandResult<BuildOutcome> {
-    Ok(novel_build::build_novel(&app, &id)?)
+pub fn build_novel_content(
+    app: tauri::AppHandle,
+    id: String,
+    titles: BuildTitleOptions,
+) -> CommandResult<BuildOutcome> {
+    Ok(novel_build::build_novel(&app, &id, &titles)?)
+}
+
+/// 清空构建产物：删除 `build/` 目录，前端回到构建引导。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn clear_novel_build_content(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(novel_build::clear_build(&app, &id)?)
 }
 
 /// 读取构建树：未构建回 `None`，前端展示空态引导构建。

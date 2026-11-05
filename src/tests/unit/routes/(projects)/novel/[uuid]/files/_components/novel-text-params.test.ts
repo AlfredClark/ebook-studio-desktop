@@ -3,6 +3,7 @@ import {
   DEFAULT_CHAPTER_PATTERN,
   DEFAULT_VOLUME_PATTERN,
   formatBytes,
+  formatPaddedChapterRange,
   isValidPattern,
 } from "../../../../../../../../routes/(projects)/novel/[uuid]/files/_components/novel-text-params";
 
@@ -42,5 +43,13 @@ describe("小说原文参数", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2.0 KB");
     expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
+  });
+
+  it("章节范围按总章数位数补零", () => {
+    expect(formatPaddedChapterRange(1, 100, 205)).toEqual({ start: "001", end: "100" });
+    expect(formatPaddedChapterRange(101, 200, 205)).toEqual({ start: "101", end: "200" });
+    expect(formatPaddedChapterRange(201, 205, 205)).toEqual({ start: "201", end: "205" });
+    expect(formatPaddedChapterRange(1, 100, 1200)).toEqual({ start: "0001", end: "0100" });
+    expect(formatPaddedChapterRange(1, 2, 2)).toEqual({ start: "1", end: "2" });
   });
 });

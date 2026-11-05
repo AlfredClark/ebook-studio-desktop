@@ -48,7 +48,7 @@
     {/key}
   </div>
   {#if matches.length > 0}
-    <div class="max-h-56 shrink-0 overflow-y-auto border-t">
+    <div class="flex max-h-56 shrink-0 flex-col overflow-hidden border-t">
       <ChapterMatches {matches} {content} {stale} {onJump} />
     </div>
   {/if}

@@ -31,6 +31,33 @@ pub enum TxtTitleKind {
     Custom,
 }
 
+/// 构建标题选项：卷章标题格式 + 章编号方式（复用 TXT 标题模板引擎）；`build/` 落盘用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct BuildTitleOptions {
+    /// 章标题格式。
+    pub chapter_kind: TxtTitleKind,
+    /// 章自定义模板；非 `custom` 时忽略。
+    pub chapter_pattern: String,
+    /// 卷标题格式。
+    pub volume_kind: TxtTitleKind,
+    /// 卷自定义模板；非 `custom` 时忽略。
+    pub volume_pattern: String,
+    /// 章编号方式。
+    pub chapter_numbering: ChapterNumbering,
+}
+
+impl Default for BuildTitleOptions {
+    fn default() -> Self {
+        Self {
+            chapter_kind: TxtTitleKind::Original,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Original,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::PerVolume,
+        }
+    }
+}
+
 /// 元数据字段：导出勾选源；渲染顺序固定为著录序，与选择顺序无关。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -63,13 +90,29 @@ pub enum MetadataField {
     Description,
 }
 
-/// TXT 导出选项：标题格式 + 元数据清单；`items.txt` 为假时忽略。
+/// 章编号方式：分卷书章标题渲染时的编号口径；平铺书两种等价。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ChapterNumbering {
+    /// 跨卷连续：文档顺序全局序号，忽略解析号。
+    Continuous,
+    /// 分卷重置：解析出的卷内号（现状口径）。
+    PerVolume,
+}
+
+/// TXT 导出选项：章标题格式 + 卷标题格式 + 章编号方式 + 元数据清单；`items.txt` 为假时忽略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct TxtOptions {
-    /// 标题格式。
-    pub title_kind: TxtTitleKind,
-    /// 自定义模板；非 `custom` 时忽略。
-    pub title_pattern: String,
+    /// 章标题格式。
+    pub chapter_kind: TxtTitleKind,
+    /// 章自定义模板；非 `custom` 时忽略。
+    pub chapter_pattern: String,
+    /// 卷标题格式。
+    pub volume_kind: TxtTitleKind,
+    /// 卷自定义模板；非 `custom` 时忽略。
+    pub volume_pattern: String,
+    /// 章编号方式。
+    pub chapter_numbering: ChapterNumbering,
     /// 勾选的元数据字段。
     pub metadata: Vec<MetadataField>,
 }
@@ -77,8 +120,11 @@ pub struct TxtOptions {
 impl Default for TxtOptions {
     fn default() -> Self {
         Self {
-            title_kind: TxtTitleKind::Original,
-            title_pattern: String::new(),
+            chapter_kind: TxtTitleKind::Original,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Original,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::PerVolume,
             metadata: Vec::new(),
         }
     }
@@ -258,7 +304,7 @@ fn format_chinese(value: u32, upper: bool) -> String {
 /// 自定义模板渲染：`#n` 阿拉伯数字、`#N` 补零、`#c` 中文小写、`#C` 中文大写、
 /// `#T` 纯标题；`##` 转义为字面 `#`，未知占位符与孤 `#` 原样保留；
 /// 编号缺失时数字占位符原文保留，不做任何回落。
-fn render_title(pattern: &str, number: Option<u32>, width: usize, title: &str) -> String {
+pub fn render_title(pattern: &str, number: Option<u32>, width: usize, title: &str) -> String {
     let mut out = String::new();
     let mut chars = pattern.chars();
     while let Some(ch) = chars.next() {
@@ -387,8 +433,8 @@ fn metadata_block(
 }
 
 /// 卷章标题行：原文格式用完整标题行；内置格式统一为 `第<编号>卷/章 <标题>`
-///（卷行用 `卷`、章行用 `章`）；自定义卷章共用同一模板；缺号留位。
-fn heading(
+///（卷行用 `卷`、章行用 `章`）；自定义卷章各用其模板；缺号留位。
+pub fn heading(
     kind: TxtTitleKind,
     pattern: &str,
     full: &str,
@@ -414,8 +460,40 @@ fn heading(
 /// 分隔线：32 个 `―` 独占一行。
 const SEPARATOR_LINE: &str = "――――――――――――――――――――――――――――――――";
 
+/// 章编号宽度：连续模式取全书总章数位数，重置模式沿用解析号最大位数（最低 2 位）。
+pub fn chapter_number_width(content: &NovelContent, numbering: ChapterNumbering) -> usize {
+    match numbering {
+        ChapterNumbering::Continuous => content
+            .volumes
+            .iter()
+            .map(|volume| volume.chapters.len())
+            .sum::<usize>()
+            .to_string()
+            .len()
+            .max(2),
+        ChapterNumbering::PerVolume => number_width(
+            content
+                .volumes
+                .iter()
+                .flat_map(|volume| volume.chapters.iter())
+                .map(|chapter| chapter.number),
+        ),
+    }
+}
+
+/// 章标题编号：连续模式取文档顺序全局序号（忽略解析号），重置模式用解析号。
+pub const fn chapter_number(
+    global_seq: u32,
+    parsed: Option<u32>,
+    numbering: ChapterNumbering,
+) -> Option<u32> {
+    match numbering {
+        ChapterNumbering::Continuous => Some(global_seq),
+        ChapterNumbering::PerVolume => parsed,
+    }
+}
 /// 同类编号最大位数（补零宽度），最低 2 位；全缺号时宽度无意义，回落 2。
-fn number_width(numbers: impl Iterator<Item = Option<u32>>) -> usize {
+pub fn number_width(numbers: impl Iterator<Item = Option<u32>>) -> usize {
     numbers
         .flatten()
         .map(|n| n.to_string().len())
@@ -424,9 +502,10 @@ fn number_width(numbers: impl Iterator<Item = Option<u32>>) -> usize {
         .max(2)
 }
 
-/// 解析产物转标准 TXT：卷标题 / 卷简介 / 章标题各独行，章间空一行；前言不导出。
+/// 解析产物转标准 TXT：卷标题 / 卷简介 / 章标题 / 章正文依次成段，段间各空一行；
+/// 章正文结尾再多空一行（章与章之间共两个空行）；前言不导出。
 ///
-/// 标题行按 `options.title_kind` 渲染；勾选元数据时前置元数据块，块与正文之间
+/// 卷章标题行各按对应格式渲染；勾选元数据时前置元数据块，块与正文之间
 /// 以分隔线独占一行、前后各 1 空行分隔。换行一律 `LF`、无 `BOM`；
 /// 隐式卷跳过卷标题行；正文与元数据皆无可写行直接报错。
 fn build_txt(
@@ -434,53 +513,63 @@ fn build_txt(
     metadata: &super::project_metadata::ProjectMetadata,
     options: &TxtOptions,
 ) -> anyhow::Result<String> {
-    if matches!(options.title_kind, TxtTitleKind::Custom) && options.title_pattern.trim().is_empty()
+    if matches!(options.chapter_kind, TxtTitleKind::Custom)
+        && options.chapter_pattern.trim().is_empty()
     {
-        anyhow::bail!("custom title pattern must not be empty");
+        anyhow::bail!("custom chapter pattern must not be empty");
     }
-    let chapter_width = number_width(
-        content
-            .volumes
-            .iter()
-            .flat_map(|volume| volume.chapters.iter())
-            .map(|chapter| chapter.number),
-    );
+    if matches!(options.volume_kind, TxtTitleKind::Custom)
+        && options.volume_pattern.trim().is_empty()
+    {
+        anyhow::bail!("custom volume pattern must not be empty");
+    }
+    let chapter_width = chapter_number_width(content, options.chapter_numbering);
     let volume_width = number_width(content.volumes.iter().map(|volume| volume.number));
     let mut blocks: Vec<String> = Vec::new();
+    let mut global_seq = 0u32;
     for volume in &content.volumes {
         let mut block = String::new();
         if let Some(full_title) = volume.full_title.as_deref() {
             block.push_str(&heading(
-                options.title_kind,
-                &options.title_pattern,
+                options.volume_kind,
+                &options.volume_pattern,
                 full_title,
                 volume.title.as_deref().unwrap_or(""),
                 volume.number,
                 volume_width,
                 true,
             ));
-            block.push('\n');
+            // 卷标题与后文（卷简介或章标题）之间空一行。
+            block.push_str("\n\n");
         }
         for line in &volume.intro {
             block.push_str(line);
             block.push('\n');
         }
+        if !volume.intro.is_empty() && !volume.chapters.is_empty() {
+            // 卷简介与首章标题之间空一行。
+            block.push('\n');
+        }
         for chapter in &volume.chapters {
+            global_seq += 1;
             block.push_str(&heading(
-                options.title_kind,
-                &options.title_pattern,
+                options.chapter_kind,
+                &options.chapter_pattern,
                 &chapter.full_title,
                 &chapter.title,
-                chapter.number,
+                chapter_number(global_seq, chapter.number, options.chapter_numbering),
                 chapter_width,
                 false,
             ));
-            block.push('\n');
+            // 章标题与章正文之间空一行。
+            block.push_str("\n\n");
             for line in &chapter.lines {
                 block.push_str(line);
                 block.push('\n');
             }
-            block.push('\n');
+            // 章正文结尾额外空一行，章间共两个空行。
+            // 章正文结尾额外空一行，章间共两个空行。
+            block.push_str("\n\n");
         }
         let block = block.trim_end().to_string();
         if !block.is_empty() {
@@ -491,8 +580,8 @@ fn build_txt(
     if blocks.is_empty() && meta.is_none() {
         anyhow::bail!("no exportable text in content");
     }
-    // 有元数据无正文时只出元数据块。
-    let body = blocks.join("\n\n");
+    // 有元数据无正文时只出元数据块；卷与卷之间同样空两个空行。
+    let body = blocks.join("\n\n\n");
     let mut text = match meta {
         None => body,
         Some(meta) if body.is_empty() => meta,
@@ -515,33 +604,46 @@ fn cover_ext_of(path: &Path) -> anyhow::Result<String> {
     Ok(ext)
 }
 
-/// 标题格式预览：取首章按给定格式渲染一行，供前端下拉后方展示效果；
-/// 无章节直接报错，调用方隐藏预览。
+/// 标题格式预览：按卷章取首个标题渲染一行，供前端下拉后方展示效果；
+/// 无对应标题（纯章节书无卷标题）直接报错，调用方隐藏预览。
 pub fn preview_title_in(
     project_dir: &Path,
     kind: TxtTitleKind,
     pattern: &str,
+    is_volume: bool,
+    numbering: ChapterNumbering,
 ) -> anyhow::Result<String> {
     let content = super::novel_files::read_content(project_dir)?;
+    if is_volume {
+        let volume = content
+            .volumes
+            .iter()
+            .find(|volume| volume.full_title.is_some())
+            .context("no volumes to preview")?;
+        let width = number_width(content.volumes.iter().map(|volume| volume.number));
+        return Ok(heading(
+            kind,
+            pattern,
+            volume.full_title.as_deref().unwrap_or(""),
+            volume.title.as_deref().unwrap_or(""),
+            volume.number,
+            width,
+            true,
+        ));
+    }
     let chapter = content
         .volumes
         .iter()
         .flat_map(|volume| volume.chapters.iter())
         .next()
         .context("no chapters to preview")?;
-    let width = number_width(
-        content
-            .volumes
-            .iter()
-            .flat_map(|volume| volume.chapters.iter())
-            .map(|chapter| chapter.number),
-    );
+    let width = chapter_number_width(&content, numbering);
     Ok(heading(
         kind,
         pattern,
         &chapter.full_title,
         &chapter.title,
-        chapter.number,
+        chapter_number(1, chapter.number, numbering),
         width,
         false,
     ))
@@ -553,9 +655,11 @@ pub fn preview_title(
     id: &str,
     kind: TxtTitleKind,
     pattern: &str,
+    is_volume: bool,
+    numbering: ChapterNumbering,
 ) -> anyhow::Result<String> {
     let dir = super::projects::resolve_project_dir(app, id)?;
-    preview_title_in(&dir, kind, pattern)
+    preview_title_in(&dir, kind, pattern, is_volume, numbering)
 }
 
 /// 导出状态（`&Path` 入口）：只读探针，不建业务文件。
@@ -785,7 +889,7 @@ mod tests {
         let text = build_txt(&content, &metadata, &TxtOptions::default()).expect("build txt");
         assert_eq!(
             text,
-            "第一卷 开篇\n卷简介\n第一章 引子\n正文甲\n\n第二章 发展\n正文乙\n"
+            "第一卷 开篇\n\n卷简介\n\n第一章 引子\n\n正文甲\n\n\n第二章 发展\n\n正文乙\n"
         );
         assert!(!text.contains('\r'));
         cleanup(&root);
@@ -794,7 +898,8 @@ mod tests {
     #[test]
     fn exports_all_files_with_book_naming() {
         let (root, dir) = fixture_project("full", "第一章 引子\n正文甲\n");
-        novel_build::build_in(&dir, &template_base()).expect("build");
+        novel_build::build_in(&dir, &template_base(), &BuildTitleOptions::default())
+            .expect("build");
         novel_package::write_epub_in(&dir, None).expect("package");
         let source = root.join("cover-source.png");
         std::fs::write(&source, [0x89, 0x50, 0x4E, 0x47]).expect("write fake cover");
@@ -822,7 +927,7 @@ mod tests {
         assert!(target.join("雾镇.epub").is_file());
         assert!(target.join("雾镇.png").is_file());
         let txt = std::fs::read_to_string(target.join("雾镇.txt")).expect("read txt");
-        assert_eq!(txt, "第一章 引子\n正文甲\n");
+        assert_eq!(txt, "第一章 引子\n\n正文甲\n");
         assert_eq!(outcome.dir, target.to_str().expect("utf8 target"));
         cleanup(&root);
     }
@@ -1058,12 +1163,87 @@ mod tests {
     fn previews_first_chapter_title() {
         let (root, dir) = fixture_project("preview", "第一章 引子\n正文甲\n第二章 发展\n正文乙\n");
         assert_eq!(
-            preview_title_in(&dir, TxtTitleKind::Padded, "").expect("preview"),
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Original,
+                "",
+                false,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview original"),
+            "第一章 引子"
+        );
+        assert_eq!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Padded,
+                "",
+                false,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview"),
             "第01章 引子"
         );
         assert_eq!(
-            preview_title_in(&dir, TxtTitleKind::Custom, "第#N章 #T").expect("preview custom"),
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Custom,
+                "第#N章 #T",
+                false,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview custom"),
             "第01章 引子"
+        );
+        // 纯章节书无卷标题可预览。
+        assert!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Padded,
+                "",
+                true,
+                ChapterNumbering::PerVolume
+            )
+            .is_err()
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn previews_first_volume_title() {
+        let (root, dir) = fixture_project("preview-volume", "第一卷 开篇\n第一章 引子\n正文甲\n");
+        assert_eq!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Original,
+                "",
+                true,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview original"),
+            "第一卷 开篇"
+        );
+        assert_eq!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Padded,
+                "",
+                true,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview volume"),
+            "第01卷 开篇"
+        );
+        assert_eq!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Custom,
+                "第#N卷 #T",
+                true,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview volume custom"),
+            "第01卷 开篇"
         );
         cleanup(&root);
     }
@@ -1081,8 +1261,11 @@ mod tests {
         metadata.description = vec!["简介壹".to_string(), "简介贰".to_string()];
         metadata.subjects = vec!["玄幻".to_string(), String::new()];
         let options = TxtOptions {
-            title_kind: TxtTitleKind::Custom,
-            title_pattern: "第 #c 章： #T".to_string(),
+            chapter_kind: TxtTitleKind::Custom,
+            chapter_pattern: "第 #c 章： #T".to_string(),
+            volume_kind: TxtTitleKind::Custom,
+            volume_pattern: "第 #c 卷： #T".to_string(),
+            chapter_numbering: ChapterNumbering::PerVolume,
             metadata: vec![
                 MetadataField::Creator,
                 MetadataField::Subjects,
@@ -1093,16 +1276,117 @@ mod tests {
         let text = build_txt(&content, &metadata, &options).expect("build txt");
         assert_eq!(
             text,
-            "作者：作者甲\n版权：版权所有\n主题词：玄幻\n简介：\n简介壹\n简介贰\n\n――――――――――――――――――――――――――――――――\n\n第 一 章： 开篇\n第 一 章： 引子\n正文甲\n\n第 二 章： 发展\n正文乙\n"
+            "作者：作者甲\n版权：版权所有\n主题词：玄幻\n简介：\n简介壹\n简介贰\n\n――――――――――――――――――――――――――――――――\n\n第 一 卷： 开篇\n\n第 一 章： 引子\n\n正文甲\n\n\n第 二 章： 发展\n\n正文乙\n"
         );
         assert!(!text.contains('\r'));
-        // 空自定义模板直接报错。
+        // 空自定义模板直接报错（卷章各判）。
         let empty = TxtOptions {
-            title_kind: TxtTitleKind::Custom,
-            title_pattern: "  ".to_string(),
+            chapter_kind: TxtTitleKind::Custom,
+            chapter_pattern: "  ".to_string(),
+            volume_kind: TxtTitleKind::Original,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::PerVolume,
             metadata: Vec::new(),
         };
         assert!(build_txt(&content, &metadata, &empty).is_err());
+        let empty_volume = TxtOptions {
+            chapter_kind: TxtTitleKind::Original,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Custom,
+            volume_pattern: "  ".to_string(),
+            chapter_numbering: ChapterNumbering::PerVolume,
+            metadata: Vec::new(),
+        };
+        assert!(build_txt(&content, &metadata, &empty_volume).is_err());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn builds_txt_with_split_volume_chapter_kinds() {
+        let (root, dir) = fixture_project(
+            "split-kinds",
+            "第一卷 开篇\n第一章 引子\n正文甲\n第二章 发展\n正文乙\n",
+        );
+        let content = super::super::novel_files::read_content(&dir).expect("read");
+        let metadata = project_metadata::load_or_init_metadata_in(&dir).expect("metadata");
+        // 卷沿用原文，章用补零格式。
+        let options = TxtOptions {
+            chapter_kind: TxtTitleKind::Padded,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Original,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::PerVolume,
+            metadata: Vec::new(),
+        };
+        let text = build_txt(&content, &metadata, &options).expect("build txt");
+        assert_eq!(
+            text,
+            "第一卷 开篇\n\n第01章 引子\n\n正文甲\n\n\n第02章 发展\n\n正文乙\n"
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn builds_txt_with_continuous_numbering() {
+        let (root, dir) = fixture_project(
+            "continuous",
+            "第一卷 开篇\n第一章 起\n甲\n第二章 承\n乙\n第二卷 续篇\n第一章 再起\n丙\n",
+        );
+        let content = super::super::novel_files::read_content(&dir).expect("read");
+        let metadata = project_metadata::load_or_init_metadata_in(&dir).expect("metadata");
+        // 跨卷连续：章号按文档顺序全局累加，无视解析号。
+        let options = TxtOptions {
+            chapter_kind: TxtTitleKind::Padded,
+            chapter_pattern: String::new(),
+            volume_kind: TxtTitleKind::Original,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::Continuous,
+            metadata: Vec::new(),
+        };
+        let text = build_txt(&content, &metadata, &options).expect("build txt");
+        assert_eq!(
+            text,
+            "第一卷 开篇\n\n第01章 起\n\n甲\n\n\n第02章 承\n\n乙\n\n\n第二卷 续篇\n\n第03章 再起\n\n丙\n"
+        );
+        // 分卷重置：沿用解析出的卷内号。
+        let options = TxtOptions {
+            chapter_numbering: ChapterNumbering::PerVolume,
+            ..options
+        };
+        let text = build_txt(&content, &metadata, &options).expect("build txt");
+        assert_eq!(
+            text,
+            "第一卷 开篇\n\n第01章 起\n\n甲\n\n\n第02章 承\n\n乙\n\n\n第二卷 续篇\n\n第01章 再起\n\n丙\n"
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn previews_chapter_with_continuous_numbering() {
+        // 首章号不可解析时：重置模式留位，连续模式给全局序号。
+        let (root, dir) = fixture_project("preview-nonum", "第99999999999999999999章 杂记\n正文\n");
+        assert_eq!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Padded,
+                "",
+                false,
+                ChapterNumbering::PerVolume
+            )
+            .expect("preview per volume"),
+            "第#N章 杂记"
+        );
+        assert_eq!(
+            preview_title_in(
+                &dir,
+                TxtTitleKind::Padded,
+                "",
+                false,
+                ChapterNumbering::Continuous
+            )
+            .expect("preview continuous"),
+            "第01章 杂记"
+        );
         cleanup(&root);
     }
 }

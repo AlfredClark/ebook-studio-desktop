@@ -9,6 +9,7 @@
   import { Button } from "#components/shadcn-svelte/button";
   import { Checkbox } from "#components/shadcn-svelte/checkbox";
   import { Input } from "#components/shadcn-svelte/input";
+  import * as RadioGroup from "#components/shadcn-svelte/radio-group";
   import {
     Select,
     SelectContent,
@@ -23,12 +24,14 @@
     DialogTitle,
     Dialog,
   } from "#components/shadcn-svelte/dialog";
+  import { Card, CardContent } from "#components/shadcn-svelte/card";
   import CardSection from "#components/common/card-section.svelte";
   import commands from "#libs/commands";
   import type {
     ExportNaming,
     ExportOutcome,
     ExportStatus,
+    ChapterNumbering,
     MetadataField,
     TxtTitleKind,
   } from "#libs/commands/types";
@@ -56,12 +59,23 @@
   let customName = $state("");
   let exporting = $state(false);
   let outcome = $state<ExportOutcome | null>(null);
-  /** TXT 标题格式与自定义模板。 */
-  let titleKind = $state<TxtTitleKind>("original");
-  let titlePattern = $state("");
-  /** 格式示例：首章渲染一行；原文与自定义不展示，失败静默隐藏。 */
-  let titlePreview = $state<string | null>(null);
-  let previewNonce = $state(0);
+  /** 打开导出目录进行中：按钮禁用态。 */
+  let openingDir = $state(false);
+  /** TXT 卷章标题格式与自定义模板。 */
+  let chapterKind = $state<TxtTitleKind>("original");
+  let chapterPattern = $state("");
+  let volumeKind = $state<TxtTitleKind>("original");
+  let volumePattern = $state("");
+  /** 章编号方式：分卷重置为现状口径，跨卷连续按文档顺序全局累加。 */
+  let numbering = $state<ChapterNumbering>("per_volume");
+  /** 格式示例：首章/首卷各渲染一行；自定义按输入模板实时渲染（防抖），空白模板不展示，失败静默隐藏。 */
+  let chapterPreview = $state<string | null>(null);
+  let volumePreview = $state<string | null>(null);
+  let chapterNonce = $state(0);
+  let volumeNonce = $state(0);
+  /** 自定义模板输入防抖定时器：避免每敲一键一次 IPC。 */
+  let chapterDebounce: ReturnType<typeof setTimeout> | undefined;
+  let volumeDebounce: ReturnType<typeof setTimeout> | undefined;
   /** 元数据：行首复选 + 弹窗多选（草稿经确定提交）。 */
   let metaEnabled = $state(false);
   let metaFields = $state<MetadataField[]>([]);
@@ -88,12 +102,22 @@
           : `${kind === "book" ? m.export_naming_book() : m.export_naming_project()} · ${namingValue(kind, project_name, book_title)}`,
     }));
   });
+  /** 分卷书：多卷时展示卷标题格式与编号方式，单卷两种编号等价故隐藏。 */
+  const isVolumeBook = $derived(status !== null && (status.content?.volume_count ?? 0) > 1);
   /** 导出可用：有勾选、命名合法、TXT 参数合法、空闲中。 */
   const ready = $derived(
     status !== null &&
       canExport({ epub: checkEpub, txt: checkTxt, cover: checkCover }, status) &&
       (naming !== "custom" || isValidCustomName(customName)) &&
-      (!checkTxt || isValidTxtOptions(titleKind, titlePattern, metaEnabled, metaFields)) &&
+      (!checkTxt ||
+        isValidTxtOptions(
+          chapterKind,
+          chapterPattern,
+          volumeKind,
+          volumePattern,
+          metaEnabled,
+          metaFields,
+        )) &&
       !exporting &&
       !loading,
   );
@@ -171,11 +195,18 @@
     checkCover = status.has_cover;
     naming = "project";
     customName = "";
-    titleKind = "original";
-    titlePattern = "";
+    chapterKind = "original";
+    chapterPattern = "";
+    volumeKind = "original";
+    volumePattern = "";
+    numbering = "per_volume";
     metaEnabled = false;
     metaFields = [];
     outcome = null;
+    if (checkTxt) {
+      void refreshTitlePreview("volume");
+      void refreshTitlePreview("chapter");
+    }
   }
 
   /** 下拉给字符串，经候选项收窄后才提交，无类型断言。 */
@@ -185,26 +216,79 @@
     }
   }
 
-  /** 标题格式下拉：同上收窄，切换后刷新示例。 */
-  function handleTitleKindChange(value: string): void {
+  /** 标题格式下拉：同上收窄，切 custom 空模板时预填默认，切换后刷新对应示例。 */
+  function handleTitleKindChange(value: string, target: "chapter" | "volume"): void {
     if ((TXT_TITLE_KINDS as string[]).includes(value)) {
-      titleKind = value as TxtTitleKind;
-      void refreshTitlePreview();
+      if (target === "chapter") {
+        chapterKind = value as TxtTitleKind;
+        if (chapterKind === "custom" && chapterPattern.trim() === "") {
+          chapterPattern = "第#N章 #T";
+        }
+      } else {
+        volumeKind = value as TxtTitleKind;
+        if (volumeKind === "custom" && volumePattern.trim() === "") {
+          volumePattern = "第#N卷 #T";
+        }
+      }
+      void refreshTitlePreview(target);
     }
   }
 
-  /** 格式示例：内置格式取首章渲染，失败静默隐藏；序号防迟到覆盖。 */
-  async function refreshTitlePreview(): Promise<void> {
-    titlePreview = null;
-    if (!checkTxt || titleKind === "original" || titleKind === "custom") {
+  /** 编号方式切换：分卷重置为现状口径，跨卷连续按文档顺序全局累加；刷新章预览。 */
+  function handleNumberingChange(value: string): void {
+    if (value === "continuous" || value === "per_volume") {
+      numbering = value;
+      void refreshTitlePreview("chapter");
+    }
+  }
+
+  /** 自定义模板输入：更新后防抖 400ms 刷新预览。 */
+  function handlePatternInput(target: "chapter" | "volume", value: string): void {
+    if (target === "chapter") {
+      chapterPattern = value;
+      clearTimeout(chapterDebounce);
+      chapterDebounce = setTimeout(() => void refreshTitlePreview("chapter"), 400);
+    } else {
+      volumePattern = value;
+      clearTimeout(volumeDebounce);
+      volumeDebounce = setTimeout(() => void refreshTitlePreview("volume"), 400);
+    }
+  }
+
+  /** 格式示例：内置格式与原文取首章/首卷渲染，自定义按输入模板实时渲染；空模板不展示，失败静默隐藏；序号防迟到覆盖。 */
+  async function refreshTitlePreview(target: "chapter" | "volume"): Promise<void> {
+    const kind = target === "chapter" ? chapterKind : volumeKind;
+    const pattern = target === "chapter" ? chapterPattern : volumePattern;
+    if (target === "chapter") {
+      chapterPreview = null;
+    } else {
+      volumePreview = null;
+    }
+    if (!checkTxt) {
       return;
     }
-    const nonce = (previewNonce += 1);
-    const result = await commands.previewNovelTxtTitle(uuid, titleKind, "").result();
-    if (nonce !== previewNonce || result.status === "error") {
+    if (kind === "custom" && pattern.trim() === "") {
       return;
     }
-    titlePreview = result.data;
+    if (target === "chapter") {
+      const nonce = (chapterNonce += 1);
+      const result = await commands
+        .previewNovelTxtTitle(uuid, kind, kind === "custom" ? pattern : "", false, numbering)
+        .result();
+      if (nonce !== chapterNonce || result.status === "error") {
+        return;
+      }
+      chapterPreview = result.data;
+    } else {
+      const nonce = (volumeNonce += 1);
+      const result = await commands
+        .previewNovelTxtTitle(uuid, kind, kind === "custom" ? pattern : "", true, numbering)
+        .result();
+      if (nonce !== volumeNonce || result.status === "error") {
+        return;
+      }
+      volumePreview = result.data;
+    }
   }
 
   /** 打开源数据弹窗：有选择则以当前选择为草稿，否则默认全选，取消不回写。 */
@@ -250,8 +334,11 @@
           cover: checkCover,
         },
         {
-          title_kind: titleKind,
-          title_pattern: titlePattern,
+          chapter_kind: chapterKind,
+          chapter_pattern: chapterPattern,
+          volume_kind: volumeKind,
+          volume_pattern: volumePattern,
+          chapter_numbering: numbering,
           metadata: metaEnabled ? metaFields : [],
         },
       )
@@ -263,6 +350,19 @@
     }
     outcome = result.data;
     toast.success(m.export_success());
+  }
+
+  /** 打开导出目录：调系统文件管理器定位落盘目录，失败 toast。 */
+  async function openExportDir(): Promise<void> {
+    if (outcome == null || openingDir) {
+      return;
+    }
+    openingDir = true;
+    const result = await commands.openExportDir(outcome.dir).result();
+    openingDir = false;
+    if (result.status === "error") {
+      toast.error(m.export_open_dir_failed());
+    }
   }
 
   onMount(() => {
@@ -280,7 +380,7 @@
   {:else if loadFailed}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 text-center">
       <p class="text-sm text-muted-foreground">{m.export_status_failed()}</p>
-      <Button variant="outline" size="sm" onclick={() => void loadStatus()}>
+      <Button variant="outline" class="w-full max-w-md" onclick={() => void loadStatus()}>
         {m.files_retry()}
       </Button>
     </div>
@@ -289,7 +389,7 @@
       <DownloadIcon class="size-10 text-muted-foreground" />
       <p class="text-sm font-medium">{m.export_empty_title()}</p>
       <p class="text-sm text-muted-foreground">{m.export_empty_description()}</p>
-      <Button size="sm" onclick={() => void goto(resolve(`/novel/${uuid}/files`))}>
+      <Button class="w-full max-w-md" onclick={() => void goto(resolve(`/novel/${uuid}/files`))}>
         {m.export_goto_files()}
       </Button>
     </div>
@@ -321,7 +421,8 @@
             onCheckedChange={(value) => {
               checkTxt = value === true;
               if (checkTxt) {
-                void refreshTitlePreview();
+                void refreshTitlePreview("volume");
+                void refreshTitlePreview("chapter");
               }
             }}
           />
@@ -341,17 +442,68 @@
           </span>
         </label>
         {#if checkTxt}
+          {#if isVolumeBook}
+            <div class="flex items-center gap-2 py-2">
+              <span class="shrink-0 text-sm font-medium">{m.export_txt_volume_title_label()}</span>
+              <Select
+                type="single"
+                value={volumeKind}
+                items={titleKindItems}
+                onValueChange={(value) => handleTitleKindChange(value, "volume")}
+              >
+                <SelectTrigger
+                  class="w-36 shrink-0"
+                  aria-label={m.export_txt_volume_title_label()}
+                  disabled={exporting}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {#each TXT_TITLE_KINDS as kind (kind)}
+                    <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
+                  {/each}
+                </SelectContent>
+              </Select>
+              {#if volumeKind === "custom"}
+                <Input
+                  type="text"
+                  value={volumePattern}
+                  oninput={(event) => handlePatternInput("volume", event.currentTarget.value)}
+                  placeholder={m.export_txt_volume_custom_placeholder()}
+                  aria-label={m.export_txt_title_custom()}
+                  disabled={exporting}
+                  class="min-w-0 flex-1"
+                />
+              {:else if volumePreview !== null}
+                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {m.export_txt_preview_label()}: {volumePreview}
+                </span>
+              {/if}
+            </div>
+            {#if volumeKind === "custom"}
+              <div class="flex min-h-6 items-center gap-2 py-1">
+                {#if volumePreview !== null}
+                  <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    {m.export_txt_preview_label()}: {volumePreview}
+                  </span>
+                  <span class="shrink-0 text-xs text-muted-foreground">
+                    {m.export_txt_custom_legend()}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+          {/if}
           <div class="flex items-center gap-2 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.export_txt_title_label()}</span>
+            <span class="shrink-0 text-sm font-medium">{m.export_txt_chapter_title_label()}</span>
             <Select
               type="single"
-              value={titleKind}
+              value={chapterKind}
               items={titleKindItems}
-              onValueChange={handleTitleKindChange}
+              onValueChange={(value) => handleTitleKindChange(value, "chapter")}
             >
               <SelectTrigger
                 class="w-36 shrink-0"
-                aria-label={m.export_txt_title_label()}
+                aria-label={m.export_txt_chapter_title_label()}
                 disabled={exporting}
               >
                 <SelectValue />
@@ -362,28 +514,74 @@
                 {/each}
               </SelectContent>
             </Select>
-            {#if titleKind === "custom"}
+            {#if chapterKind === "custom"}
               <Input
                 type="text"
-                value={titlePattern}
-                oninput={(event) => (titlePattern = event.currentTarget.value)}
+                value={chapterPattern}
+                oninput={(event) => handlePatternInput("chapter", event.currentTarget.value)}
                 placeholder={m.export_txt_custom_placeholder()}
                 aria-label={m.export_txt_title_custom()}
                 disabled={exporting}
                 class="min-w-0 flex-1"
               />
-            {:else if titleKind !== "original" && titlePreview !== null}
+            {:else if chapterPreview !== null}
               <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                {m.export_txt_preview_label()}: {titlePreview}
+                {m.export_txt_preview_label()}: {chapterPreview}
               </span>
             {/if}
           </div>
+          {#if chapterKind === "custom"}
+            <div class="flex min-h-6 items-center gap-2 py-1">
+              {#if chapterPreview !== null}
+                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {m.export_txt_preview_label()}: {chapterPreview}
+                </span>
+                <span class="shrink-0 text-xs text-muted-foreground">
+                  {m.export_txt_custom_legend()}
+                </span>
+              {/if}
+            </div>
+          {/if}
+          {#if isVolumeBook}
+            <div class="flex items-center gap-x-4 py-2">
+              <span class="shrink-0 text-sm font-medium"
+                >{m.export_txt_chapter_numbering_label()}</span
+              >
+              <RadioGroup.Root
+                value={numbering}
+                onValueChange={handleNumberingChange}
+                class="flex items-center gap-x-4"
+              >
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="continuous"
+                    aria-label={m.export_txt_numbering_continuous()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.export_txt_numbering_continuous()}</span>
+                </label>
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="per_volume"
+                    aria-label={m.export_txt_numbering_per_volume()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.export_txt_numbering_per_volume()}</span>
+                </label>
+              </RadioGroup.Root>
+            </div>
+          {/if}
           <div class="flex items-center gap-2 py-2">
             <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm">
               <Checkbox
                 checked={metaEnabled}
                 disabled={exporting}
-                onCheckedChange={(value) => (metaEnabled = value === true)}
+                onCheckedChange={(value) => {
+                  metaEnabled = value === true;
+                  if (metaEnabled) {
+                    metaFields = [...METADATA_FIELDS];
+                  }
+                }}
               />
               <span class="font-medium">{m.export_meta_label()}</span>
             </label>
@@ -410,11 +608,14 @@
           {/if}
         </span>
       </label>
-    </CardSection>
-    <CardSection title={m.export_naming_title()}>
-      <div class="flex flex-col gap-1.5 py-3">
+      <div class="flex items-center gap-2 py-2">
+        <span class="shrink-0 text-sm font-medium">{m.export_naming_title()}</span>
         <Select type="single" value={naming} items={namingItems} onValueChange={handleNamingChange}>
-          <SelectTrigger class="w-full" aria-label={m.export_naming_title()}>
+          <SelectTrigger
+            class="min-w-0 flex-1"
+            aria-label={m.export_naming_title()}
+            disabled={exporting}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -427,29 +628,45 @@
             {/each}
           </SelectContent>
         </Select>
-        {#if naming === "custom"}
+      </div>
+      {#if naming === "custom"}
+        <div class="flex items-center gap-2 py-2">
           <Input
             type="text"
             value={customName}
             oninput={(event) => (customName = event.currentTarget.value)}
             placeholder={m.export_custom_placeholder()}
             aria-label={m.export_naming_custom()}
+            disabled={exporting}
+            class="min-w-0 flex-1"
           />
-        {/if}
-      </div>
+        </div>
+      {/if}
     </CardSection>
-    <Button size="sm" disabled={!ready} onclick={() => void runExport()}>
+    <Button class="w-full" disabled={!ready} onclick={() => void runExport()}>
       {exporting ? m.export_running() : m.export_start()}
     </Button>
     {#if outcome !== null}
-      <CardSection title={m.export_success()} description={m.export_dir_label()}>
-        <p class="py-3 font-mono text-xs break-all text-muted-foreground">{outcome.dir}</p>
-        <ul class="flex flex-col divide-y divide-border">
-          {#each outcome.files as file (file)}
-            <li class="truncate py-2 font-mono text-sm">{file}</li>
-          {/each}
-        </ul>
-      </CardSection>
+      <Card>
+        <CardContent class="flex items-center gap-2 py-3">
+          <span class="shrink-0 text-sm font-medium">{m.export_success()}</span>
+          <span
+            class="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground"
+            title={outcome.dir}
+          >
+            {outcome.dir}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            class="shrink-0"
+            disabled={openingDir}
+            onclick={() => void openExportDir()}
+          >
+            {m.export_open_dir()}
+          </Button>
+        </CardContent>
+      </Card>
     {/if}
     <Dialog bind:open={metaDialogOpen}>
       <DialogContent aria-label={m.export_meta_dialog_title()}>

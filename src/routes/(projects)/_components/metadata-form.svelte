@@ -89,6 +89,27 @@
     );
   });
 
+  /** 从作者名派生版权文案：空名回落空串，不拼残缺模板。 */
+  function autoRightsFor(name: string): string {
+    const trimmed = name.trim();
+    if (trimmed === "") {
+      return "";
+    }
+    return `Copyright © ${trimmed}. All rights reserved.`;
+  }
+
+  /** 版权自动填充快照：仅当版权为空或仍是上次自动值时跟随作者联动，手动改过的不覆盖。 */
+  let lastAutoRights = $state("");
+
+  /** 作者输入联动版权：单向静默填充（`bind:value` 回写作者，回调只处理版权）。 */
+  function handleCreatorInput(value: string): void {
+    const filled = autoRightsFor(value);
+    if (rights === "" || rights === lastAutoRights) {
+      rights = filled;
+    }
+    lastAutoRights = filled;
+  }
+
   /** 从传入元数据同步本地编辑态：挂载、后端保存返回、重置时共用。 */
   function syncFromMetadata(): void {
     title = metadata.title;
@@ -105,6 +126,7 @@
     volume = metadata.volume;
     source = metadata.source;
     pickerValue = toDateValue(datePublished);
+    lastAutoRights = autoRightsFor(metadata.creator);
   }
 
   // 后端保存返回新对象时同步回表单（字段值与提交一致，仅更新时间变化）。
@@ -228,6 +250,7 @@
           <Input
             id="metadata-creator"
             bind:value={creator}
+            oninput={(event) => handleCreatorInput(event.currentTarget.value)}
             type="text"
             maxlength={100}
             autocomplete="off"

@@ -32,14 +32,25 @@
 
 <CardSection title={m.files_source_section()} description={m.files_source_description()}>
   {#if status.exists}
-    <CardRow label={m.files_source_size()} value={formatBytes(status.size_bytes)} />
-    {#if updatedLabel !== ""}
-      <CardRow label={m.files_source_updated()} value={updatedLabel} />
-    {/if}
+    <div class="grid grid-cols-2 gap-x-4 py-3">
+      <div class="min-w-0">
+        <p class="text-sm font-medium">{m.files_source_size()}</p>
+        <p class="text-sm break-words tabular-nums">{formatBytes(status.size_bytes)}</p>
+      </div>
+      {#if updatedLabel !== ""}
+        <div class="min-w-0">
+          <p class="text-sm font-medium">{m.files_source_updated()}</p>
+          <p class="text-sm break-words tabular-nums">{updatedLabel}</p>
+        </div>
+      {/if}
+    </div>
   {:else}
     <CardRow label={m.files_source_empty()} description={m.files_source_hint()} />
   {/if}
-  <div class="py-3">
+  <div class="flex flex-col gap-2 py-3">
+    {#if status.exists}
+      <p class="text-xs text-muted-foreground">{m.files_source_reselect_note()}</p>
+    {/if}
     <Button class="w-full" disabled={importing} onclick={onChoose}>
       {importing
         ? m.files_source_importing()

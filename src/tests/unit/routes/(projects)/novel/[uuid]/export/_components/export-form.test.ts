@@ -53,10 +53,12 @@ describe("导出表单", () => {
   it("TXT 参数合法性", () => {
     expect(isValidTitlePattern("第 #c 章")).toBe(true);
     expect(isValidTitlePattern("   ")).toBe(false);
-    expect(isValidTxtOptions("original", "", false, [])).toBe(true);
-    expect(isValidTxtOptions("custom", "", false, [])).toBe(false);
-    expect(isValidTxtOptions("custom", "第 #n 章", false, [])).toBe(true);
-    expect(isValidTxtOptions("original", "", true, [])).toBe(false);
-    expect(isValidTxtOptions("original", "", true, ["creator"])).toBe(true);
+    expect(isValidTxtOptions("original", "", "original", "", false, [])).toBe(true);
+    expect(isValidTxtOptions("custom", "", "original", "", false, [])).toBe(false);
+    expect(isValidTxtOptions("custom", "第 #n 章", "original", "", false, [])).toBe(true);
+    expect(isValidTxtOptions("original", "", "custom", "", false, [])).toBe(false);
+    expect(isValidTxtOptions("original", "", "custom", "第 #n 卷", false, [])).toBe(true);
+    expect(isValidTxtOptions("original", "", "original", "", true, [])).toBe(false);
+    expect(isValidTxtOptions("original", "", "original", "", true, ["creator"])).toBe(true);
   });
 });

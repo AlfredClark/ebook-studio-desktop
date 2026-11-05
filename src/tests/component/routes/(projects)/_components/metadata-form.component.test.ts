@@ -110,6 +110,33 @@ describe("元数据表单", () => {
     expect(saveMock).not.toHaveBeenCalled();
   });
 
+  it("输入作者名后版权自动填充", async () => {
+    const user = userEvent.setup();
+    renderForm({ ...baseMetadata, creator: "", rights: "" }, "comic");
+
+    await user.type(screen.getByLabelText("Creator"), "雾镇");
+
+    expect((screen.getByLabelText("Rights") as HTMLInputElement).value).toBe(
+      "Copyright © 雾镇. All rights reserved.",
+    );
+  });
+
+  it("手动修改过的版权不受作者联动覆盖", async () => {
+    const user = userEvent.setup();
+    renderForm({ ...baseMetadata, creator: "", rights: "" }, "comic");
+
+    const creator = screen.getByLabelText("Creator");
+    const rights = screen.getByLabelText("Rights") as HTMLInputElement;
+    await user.type(creator, "雾镇");
+    expect(rights.value).toBe("Copyright © 雾镇. All rights reserved.");
+
+    await user.clear(rights);
+    await user.type(rights, "自定义版权");
+    await user.type(creator, "甲");
+
+    expect(rights.value).toBe("自定义版权");
+  });
+
   it("空标题禁用保存", async () => {
     const user = userEvent.setup();
     renderForm({ ...baseMetadata, title: "雾镇" }, "comic");

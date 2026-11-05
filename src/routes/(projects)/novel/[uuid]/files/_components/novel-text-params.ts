@@ -30,3 +30,16 @@ export function formatBytes(size: number): string {
   }
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/** 章节范围补零：宽度取总章数位数，起止同宽对齐（如 205 章取 3 位）。 */
+export function formatPaddedChapterRange(
+  start: number,
+  end: number,
+  total: number,
+): { start: string; end: string } {
+  const width = Math.max(String(Math.max(total, 1)).length, 1);
+  return {
+    start: String(start).padStart(width, "0"),
+    end: String(end).padStart(width, "0"),
+  };
+}

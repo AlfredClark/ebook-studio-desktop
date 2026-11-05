@@ -1,9 +1,10 @@
 <script lang="ts">
-  // 小说打包页：无构建引导去构建、无产物引导打包、有产物展示信息并自动校验；校验列表逐条可复制。
+  // 小说打包页：无解析产物引导去文件、无构建引导去构建、无产物引导打包、有产物展示信息并自动校验；校验列表逐条可复制。
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
+  import FileTextIcon from "@lucide/svelte/icons/file-text";
   import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
   import PackageIcon from "@lucide/svelte/icons/package";
   import { Badge } from "#components/shadcn-svelte/badge";
@@ -38,6 +39,8 @@
 
   let pkg = $state<PackageInfo | null>(null);
   let hasBuild = $state(false);
+  /** 是否有解析产物：无构建时决定整页引导去文件还是去构建。 */
+  let hasContent = $state(true);
   let loading = $state(true);
   let statusFailed = $state(false);
   let packaging = $state(false);
@@ -51,10 +54,11 @@
   /** 校验计数：汇总行展示用，无结果时不展示。 */
   const counts = $derived(validation == null ? null : countValidation(validation.messages));
 
-  /** 进页恢复：有产物直接展示并自动校验，无产物查构建树决定引导去向。 */
+  /** 进页恢复：有产物直接展示并自动校验，无产物查构建树与解析产物决定引导去向。 */
   async function loadStatus(): Promise<void> {
     loading = true;
     statusFailed = false;
+    hasContent = true;
     const status = await commands.getNovelPackageStatus(uuid).result();
     if (status.status === "error") {
       loading = false;
@@ -65,13 +69,26 @@
     pkg = status.data;
     if (pkg == null) {
       const tree = await commands.getNovelBuildTree(uuid).result();
-      loading = false;
       if (tree.status === "error") {
+        loading = false;
         statusFailed = true;
         toast.error(m.package_status_failed());
         return;
       }
       hasBuild = tree.data != null;
+      if (!hasBuild) {
+        const outlineResult = await commands.getNovelContentOutline(uuid).result();
+        if (outlineResult.status === "error") {
+          loading = false;
+          statusFailed = true;
+          toast.error(m.package_status_failed());
+          return;
+        }
+        const outline = outlineResult.data;
+        hasContent =
+          outline !== null && outline.volumes.some((volume) => volume.chapters.length > 0);
+      }
+      loading = false;
       return;
     }
     loading = false;
@@ -183,23 +200,31 @@
   {:else if statusFailed}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 text-center">
       <p class="text-sm text-muted-foreground">{m.package_status_failed()}</p>
-      <Button variant="outline" size="sm" onclick={() => void loadStatus()}>
+      <Button variant="outline" class="w-full max-w-md" onclick={() => void loadStatus()}>
         {m.files_retry()}
       </Button>
     </div>
   {:else if pkg === null}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 text-center">
-      <PackageIcon class="size-10 text-muted-foreground" />
-      {#if !hasBuild}
+      {#if !hasContent}
+        <FileTextIcon class="size-10 text-muted-foreground" />
+        <p class="text-sm font-medium">{m.edit_empty_title()}</p>
+        <p class="text-sm text-muted-foreground">{m.edit_empty_description()}</p>
+        <Button class="w-full max-w-md" onclick={() => void goto(resolve(`/novel/${uuid}/files`))}>
+          {m.edit_goto_files()}
+        </Button>
+      {:else if !hasBuild}
+        <PackageIcon class="size-10 text-muted-foreground" />
         <p class="text-sm font-medium">{m.package_no_build_title()}</p>
         <p class="text-sm text-muted-foreground">{m.package_no_build_description()}</p>
-        <Button size="sm" onclick={() => void goto(resolve(`/novel/${uuid}/build`))}>
+        <Button class="w-full max-w-md" onclick={() => void goto(resolve(`/novel/${uuid}/build`))}>
           {m.package_goto_build()}
         </Button>
       {:else}
+        <PackageIcon class="size-10 text-muted-foreground" />
         <p class="text-sm font-medium">{m.package_ready_title()}</p>
         <p class="text-sm text-muted-foreground">{m.package_ready_description()}</p>
-        <Button size="sm" disabled={packaging} onclick={() => void runPackage()}>
+        <Button class="w-full max-w-md" disabled={packaging} onclick={() => void runPackage()}>
           {packaging ? m.package_running() : m.package_start()}
         </Button>
         {@render progressView()}

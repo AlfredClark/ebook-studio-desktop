@@ -221,6 +221,22 @@ pub fn open_config_dir(app: &tauri::AppHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 在系统文件管理器中打开导出目录；仅允许已存在的目录。
+pub fn open_export_dir(app: &tauri::AppHandle, dir: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::path::Path;
+    use tauri_plugin_opener::OpenerExt;
+
+    let path = Path::new(dir);
+    if !path.is_dir() {
+        anyhow::bail!("export directory not found: {dir}");
+    }
+    app.opener()
+        .open_path(dir, None::<&str>)
+        .context("failed to open export dir")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

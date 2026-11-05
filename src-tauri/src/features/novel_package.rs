@@ -443,6 +443,7 @@ pub async fn validate_package(
 #[cfg(test)]
 mod tests {
     use super::super::novel_build;
+    use super::super::novel_export::BuildTitleOptions;
     use super::super::novel_files;
     use super::super::projects;
     use super::super::projects::ProjectType;
@@ -505,7 +506,8 @@ mod tests {
     #[test]
     fn packages_epub_with_mimetype_first_and_stored() {
         let (root, dir) = fixture_project("full", "第一章 引子\n正文甲\n第二章 发展\n正文乙\n");
-        novel_build::build_in(&dir, &template_base()).expect("build");
+        novel_build::build_in(&dir, &template_base(), &BuildTitleOptions::default())
+            .expect("build");
         let package = write_epub_in(&dir, None).expect("package");
         let outcome = PackageOutcome {
             package,
@@ -554,7 +556,8 @@ mod tests {
         )
         .expect("write real cover");
         super::super::project_metadata::import_cover_in(&dir, &source).expect("import cover");
-        novel_build::build_in(&dir, &template_base()).expect("build");
+        novel_build::build_in(&dir, &template_base(), &BuildTitleOptions::default())
+            .expect("build");
         let package = write_epub_in(&dir, None).expect("package");
         let outcome = PackageOutcome {
             package,
@@ -589,7 +592,8 @@ mod tests {
         use std::sync::Mutex;
 
         let (root, dir) = fixture_project("progress", "第一章 引子\n正文甲\n第二章 发展\n正文乙\n");
-        novel_build::build_in(&dir, &template_base()).expect("build");
+        novel_build::build_in(&dir, &template_base(), &BuildTitleOptions::default())
+            .expect("build");
         let calls = Mutex::new(Vec::new());
         let info = write_epub_in(
             &dir,
@@ -611,7 +615,8 @@ mod tests {
     #[test]
     fn keeps_single_package_on_repackage() {
         let (root, dir) = fixture_project("repack", "第一章 引子\n正文\n");
-        novel_build::build_in(&dir, &template_base()).expect("build");
+        novel_build::build_in(&dir, &template_base(), &BuildTitleOptions::default())
+            .expect("build");
         let first = write_epub_in(&dir, None).expect("first package");
         let second = write_epub_in(&dir, None).expect("second package");
         assert_eq!(first.file_name, second.file_name);

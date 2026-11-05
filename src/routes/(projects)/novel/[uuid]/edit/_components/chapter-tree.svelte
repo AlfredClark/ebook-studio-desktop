@@ -78,7 +78,7 @@
               <span class="min-w-0 flex-1 truncate text-left text-sm font-medium">
                 {volume.title ?? m.files_untitled_volume()}
               </span>
-              <span class="shrink-0 text-sm font-normal text-muted-foreground tabular-nums">
+              <span class="mr-2 shrink-0 text-sm font-normal text-muted-foreground tabular-nums">
                 {volumeCount(i, volume.chapters.length)}
               </span>
             </Accordion.Trigger>
@@ -90,17 +90,12 @@
       {/each}
     </Accordion.Root>
   {:else}
-    {#each outline.volumes as volume, i (i)}
-      {@const entries = visibleEntries(i)}
-      {#if entries.length > 0}
-        <!-- 平铺单卷标题同样吸顶，与分卷行为一致 -->
-        <p class="sticky top-0 z-10 bg-background px-3 text-sm font-medium">
-          {volume.title ?? m.files_untitled_volume()}
-        </p>
-        <div class="flex flex-col gap-0.5 px-3">
-          {@render chapterButtons(i, entries)}
-        </div>
-      {/if}
-    {/each}
+    {@const flatEntries = visibleEntries(0)}
+    {#if flatEntries.length > 0}
+      <!-- 纯章节单卷：无卷头，直接平铺章节按钮 -->
+      <div class="flex flex-col gap-0.5 px-3">
+        {@render chapterButtons(0, flatEntries)}
+      </div>
+    {/if}
   {/if}
 </nav>

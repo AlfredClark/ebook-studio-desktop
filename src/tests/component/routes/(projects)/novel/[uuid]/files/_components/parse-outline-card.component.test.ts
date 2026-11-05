@@ -154,13 +154,13 @@ describe("解析结果卡", () => {
     };
     render(ParseOutlineCard, { props: { outline: flat, onRenumber: renumberMock } });
 
-    expect(screen.getByText("Chapters 1–100")).not.toBeNull();
+    expect(screen.getByText("Chapters 001–100")).not.toBeNull();
     expect(screen.getByText("Chapters 101–200")).not.toBeNull();
     expect(screen.getByText("Chapters 201–205")).not.toBeNull();
-    const firstTrigger = screen.getByText("Chapters 1–100").closest("button");
+    const firstTrigger = screen.getByText("Chapters 001–100").closest("button");
     expect(firstTrigger?.getAttribute("aria-expanded")).toBe("false");
 
-    await user.click(screen.getByText("Chapters 1–100"));
+    await user.click(screen.getByText("Chapters 001–100"));
 
     expect(firstTrigger?.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("第1章")).not.toBeNull();

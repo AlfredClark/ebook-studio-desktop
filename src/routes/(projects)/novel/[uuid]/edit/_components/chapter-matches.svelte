@@ -1,5 +1,6 @@
 <script lang="ts">
-  // 选中章节命中行列表（哑组件）：行号 + 正文预览，点击跳到编辑器对应行；
+  // 选中章节命中行列表（哑组件）：标题栏固定、内部行列表滚动；
+  // 行号 + 正文预览，点击跳到编辑器对应行；
   // 预览取自筛选快照，正文改动后由过期提示说明偏差。
   import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
   import type { LineMatch } from "#libs/commands/types";
@@ -28,18 +29,20 @@
 
 <section
   aria-label={m.edit_filter_matches_title({ count: spanCount })}
-  class="flex flex-col gap-1 p-3"
+  class="flex min-h-0 flex-1 flex-col gap-1 p-3"
 >
-  <div class="flex items-baseline justify-between gap-2">
-    <h3 class="text-sm font-medium">{m.edit_filter_matches_title({ count: spanCount })}</h3>
+  <div class="shrink-0 pb-1">
+    <div class="flex items-baseline justify-between gap-2">
+      <h3 class="text-sm font-medium">{m.edit_filter_matches_title({ count: spanCount })}</h3>
+    </div>
+    {#if stale}
+      <p class="flex items-start gap-1.5 text-xs text-muted-foreground">
+        <TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
+        <span>{m.edit_filter_stale()}</span>
+      </p>
+    {/if}
   </div>
-  {#if stale}
-    <p class="flex items-start gap-1.5 text-xs text-muted-foreground">
-      <TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
-      <span>{m.edit_filter_stale()}</span>
-    </p>
-  {/if}
-  <div class="flex flex-col gap-0.5">
+  <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
     {#each matches as match (match.line)}
       <button
         type="button"
