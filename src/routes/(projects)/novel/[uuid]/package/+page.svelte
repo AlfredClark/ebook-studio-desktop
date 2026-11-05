@@ -15,6 +15,7 @@
     CardHeader,
     CardTitle,
   } from "#components/shadcn-svelte/card";
+  import { Progress } from "#components/shadcn-svelte/progress";
   import { ScrollArea } from "#components/shadcn-svelte/scroll-area";
   import CardSection from "#components/common/card-section.svelte";
   import ConfirmDialog from "#components/common/confirm-dialog.svelte";
@@ -27,15 +28,21 @@
     formatPackageSize,
     formatPackageTime,
   } from "./_components/package-format";
+  import { readCachedValidation, writeCachedValidation } from "./_components/validation-cache";
   import ValidationList from "./_components/validation-list.svelte";
 
   const uuid = $derived(page.params.uuid ?? "");
+
+  /** 打包进度事件名（见 Rust 侧 `features::novel_package::PACKAGE_PROGRESS_EVENT`）。 */
+  const PROGRESS_EVENT = "novel-package-progress";
 
   let pkg = $state<PackageInfo | null>(null);
   let hasBuild = $state(false);
   let loading = $state(true);
   let statusFailed = $state(false);
   let packaging = $state(false);
+  /** 打包进度：`zip` 确定性百分比 / `validate` 不确定态；`null` 表无可显示进度。 */
+  let progress = $state<{ stage: "zip" | "validate"; percent: number } | null>(null);
   let validation = $state<ValidationOutcome | null>(null);
   let validating = $state(false);
   let validateFailed = $state(false);
@@ -68,17 +75,53 @@
       return;
     }
     loading = false;
+    // 会话缓存命中直接展示，仅未命中才走后端校验。
+    const cached = readCachedValidation(uuid, pkg);
+    if (cached != null) {
+      validation = cached;
+      validateFailed = false;
+      return;
+    }
     await runValidate();
   }
 
-  /** 打包：落盘后后端已附带一次校验，直接落态展示。 */
+  /** 打包：进度经事件推送，落盘后后端已附带一次校验，直接落态展示。 */
   async function runPackage(): Promise<void> {
     if (packaging) {
       return;
     }
     packaging = true;
+    progress = null;
+    // 进度订阅：非 Tauri 环境（纯浏览器预览）无事件可订，按钮文案即反馈。
+    let unlisten: (() => void) | null = null;
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<{
+        id: string;
+        stage: "zip" | "validate";
+        done_files: number;
+        total_files: number;
+      }>(PROGRESS_EVENT, (event) => {
+        if (event.payload.id !== uuid) {
+          return;
+        }
+        if (event.payload.stage === "zip") {
+          const total = event.payload.total_files;
+          progress = {
+            stage: "zip",
+            percent: total === 0 ? 0 : Math.round((event.payload.done_files / total) * 100),
+          };
+        } else {
+          progress = { stage: "validate", percent: 100 };
+        }
+      });
+    } catch {
+      progress = null;
+    }
     const result = await commands.packageNovelContent(uuid).result();
     packaging = false;
+    progress = null;
+    unlisten?.();
     if (result.status === "error") {
       toast.error(m.package_failed());
       return;
@@ -86,10 +129,11 @@
     pkg = result.data.package;
     validation = result.data.validation;
     validateFailed = false;
+    writeCachedValidation(uuid, pkg, validation);
     toast.success(m.package_success());
   }
 
-  /** 手动校验：重跑已有产物的 `epubveri` 检查。 */
+  /** 手动校验：恒走后端（用户显式动作，不读缓存），成功后刷新缓存。 */
   async function runValidate(): Promise<void> {
     if (validating) {
       return;
@@ -104,6 +148,9 @@
       return;
     }
     validation = result.data;
+    if (pkg != null) {
+      writeCachedValidation(uuid, pkg, validation);
+    }
   }
 
   onMount(() => {
@@ -113,6 +160,21 @@
 
 <!-- 小说打包页：产物信息 + 自动校验 + 逐条可复制的校验列表 -->
 <h1 class="sr-only">{m.project_step_package()}</h1>
+{#snippet progressView()}
+  {#if packaging && progress !== null}
+    <div class="flex w-full flex-col gap-1.5" role="status" aria-live="polite">
+      <p class="text-sm text-muted-foreground">
+        {progress.stage === "zip" ? m.package_stage_zip() : m.package_stage_validate()}
+        {#if progress.stage === "zip"}
+          <span class="tabular-nums">{progress.percent}%</span>
+        {/if}
+      </p>
+      {#if progress.stage === "zip"}
+        <Progress value={progress.percent} />
+      {/if}
+    </div>
+  {/if}
+{/snippet}
 <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 overflow-hidden p-6">
   {#if loading}
     <div class="flex flex-1 items-center justify-center">
@@ -140,6 +202,7 @@
         <Button size="sm" disabled={packaging} onclick={() => void runPackage()}>
           {packaging ? m.package_running() : m.package_start()}
         </Button>
+        {@render progressView()}
       {/if}
     </div>
   {:else}
@@ -184,6 +247,7 @@
         {/if}
       </div>
     </div>
+    {@render progressView()}
     {#if validating}
       <p class="text-sm text-muted-foreground" aria-busy="true">{m.package_validating()}</p>
     {:else if validateFailed}

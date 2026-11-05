@@ -77,4 +77,18 @@ describe("构建文件树", () => {
     await user.click(screen.getByText("EPUB"));
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
   });
+
+  it("箭头跟随本节点展开态，不受祖先影响", async () => {
+    const user = userEvent.setup();
+    render(BuildTree, { props: { files, selected: null, onSelect: selectMock } });
+    const chevronClass = (name: string): string =>
+      screen.getByText(name).closest("button")?.querySelector("svg")?.getAttribute("class") ?? "";
+
+    // EPUB 展开、嵌套 text 收起：两者箭头方向必须不同。
+    expect(chevronClass("EPUB")).toContain("rotate-90");
+    expect(chevronClass("text")).not.toContain("rotate-90");
+    // 展开 text 后箭头翻转。
+    await user.click(screen.getByText("text"));
+    expect(chevronClass("text")).toContain("rotate-90");
+  });
 });

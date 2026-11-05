@@ -4,12 +4,15 @@
 use crate::cores::types::CommandResult;
 use crate::features::novel_package::{self, PackageInfo, PackageOutcome, ValidationOutcome};
 
-/// 打包小说：落盘 `dist/书名.epub` 后自动校验一次，返回产物与校验结果。
+/// 打包小说：落盘 `dist/书名.epub` 后自动校验一次，进度经 `novel-package-progress` 推送。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
-pub fn package_novel_content(app: tauri::AppHandle, id: String) -> CommandResult<PackageOutcome> {
-    Ok(novel_package::package_novel(&app, &id)?)
+pub async fn package_novel_content(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<PackageOutcome> {
+    Ok(novel_package::package_novel(&app, &id).await?)
 }
 
 /// 查询打包状态：无产物回 `None`，前端展示待打包空态。
@@ -27,9 +30,9 @@ pub fn get_novel_package_status(
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
-pub fn validate_novel_package(
+pub async fn validate_novel_package(
     app: tauri::AppHandle,
     id: String,
 ) -> CommandResult<ValidationOutcome> {
-    Ok(novel_package::validate_package(&app, &id)?)
+    Ok(novel_package::validate_package(&app, &id).await?)
 }

@@ -82,13 +82,15 @@ export const commands = {
 } | null, CommandError>(__TAURI_INVOKE("get_novel_build_tree", { id })),
 	/**  读取构建文件：二进制回 `content: None`，固定文件标记不可编辑。 */
 	getNovelBuildFile: (id: string, path: string) => typedError<BuildFileContent, CommandError>(__TAURI_INVOKE("get_novel_build_file", { id, path })),
+	/**  查询构建图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。 */
+	getNovelBuildImagePath: (id: string, path: string) => typedError<BuildImageInfo, CommandError>(__TAURI_INVOKE("get_novel_build_image_path", { id, path })),
 	/**  保存构建文件：固定文件与二进制拒绝写入。 */
 	updateNovelBuildFile: (id: string, path: string, content: string) => typedError<null, CommandError>(__TAURI_INVOKE("update_novel_build_file", { id, path, content })),
-	/**  格式化单个构建文件：只读内存返回格式化文本，不落盘。 */
-	formatNovelBuildFile: (id: string, path: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_novel_build_file", { id, path })),
+	/**  格式化编辑器文本：纯内存返回格式化文本，不读盘不落盘；路径仅作可格式化校验。 */
+	formatNovelBuildText: (id: string, path: string, content: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_novel_build_text", { id, path, content })),
 	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
 	formatAllNovelBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_novel_build_files", { id })),
-	/**  打包小说：落盘 `dist/书名.epub` 后自动校验一次，返回产物与校验结果。 */
+	/**  打包小说：落盘 `dist/书名.epub` 后自动校验一次，进度经 `novel-package-progress` 推送。 */
 	packageNovelContent: (id: string) => typedError<PackageOutcome, CommandError>(__TAURI_INVOKE("package_novel_content", { id })),
 	/**  查询打包状态：无产物回 `None`，前端展示待打包空态。 */
 	getNovelPackageStatus: (id: string) => typedError<{
@@ -103,8 +105,10 @@ export const commands = {
 	validateNovelPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_novel_package", { id })),
 	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
 	getNovelExportStatus: (id: string) => typedError<ExportStatus, CommandError>(__TAURI_INVOKE("get_novel_export_status", { id })),
+	/**  预览标题格式：取首章渲染一行供下拉后方展示，失败时前端隐藏预览。 */
+	previewNovelTxtTitle: (id: string, kind: TxtTitleKind, pattern: string) => typedError<string, CommandError>(__TAURI_INVOKE("preview_novel_txt_title", { id, kind, pattern })),
 	/**  导出小说：改名拷贝 EPUB / 封面、`content.json` 转 TXT，落到自选目录的 `<命名>/` 下。 */
-	exportNovelContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ExportItems) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_novel_content", { id, destDir, naming, customName, items })),
+	exportNovelContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ExportItems, txtOptions: TxtOptions) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_novel_content", { id, destDir, naming, customName, items, txtOptions })),
 	/**  采集运行平台信息；单项缺失时回落 `"unknown"`，绝不抛错 */
 	getSystemInfo: () => typedError<SystemInfo, CommandError>(__TAURI_INVOKE("get_system_info")),
 	/**  真退出应用进程；调用后进程结束，结果体永不可达（按 `CommandResult<()>` 保持命令类型统一） */
@@ -143,6 +147,8 @@ export type BuildFileContent = {
 	content: string | null,
 	/**  是否可编辑保存。 */
 	editable: boolean,
+	/**  是否可格式化（可编辑文件 + `container.xml`，后者只读、仅内存格式化）。 */
+	formattable: boolean,
 };
 
 /**  构建文件树节点：`children` 为 `Some` 即目录（不可编辑），`None` 即文件。 */
@@ -155,6 +161,14 @@ export type BuildFileNode = {
 	editable: boolean,
 	/**  子节点；目录为 `Some`，文件为 `None`。 */
 	children: BuildFileNode[] | null,
+};
+
+/**  构建图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示。 */
+export type BuildImageInfo = {
+	/**  图片绝对路径。 */
+	path: string,
+	/**  图片字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
 };
 
 /**  构建结果：文件树根节点清单与文件总数。 */
@@ -390,9 +404,9 @@ export type FilterOutcome = {
 	truncated: boolean,
 };
 
-/**  批量格式化结果：成功数 + 跳过（固定只读与二进制）+ 失败清单（内容保持原样）。 */
+/**  批量格式化结果：成功数 + 跳过（`mimetype` 与二进制）+ 失败清单（内容保持原样）。 */
 export type FormatOutcome = {
-	/**  成功格式化的可编辑文件数（含已规范无需改动的）。 */
+	/**  成功格式化的文件数（含已规范无需改动的）。 */
 	formatted: number,
 	/**  跳过的文件。 */
 	skipped: string[],
@@ -421,6 +435,35 @@ export type LineMatch = {
 
 /**  应用支持的语言 */
 export type Locale = "en" | "zh-CN";
+
+/**  元数据字段：导出勾选源；渲染顺序固定为著录序，与选择顺序无关。 */
+export type MetadataField = 
+/**  书名。 */
+"title" | 
+/**  副标题。 */
+"alternative" | 
+/**  作者。 */
+"creator" | 
+/**  贡献者。 */
+"contributor" | 
+/**  语言。 */
+"language" | 
+/**  出版社。 */
+"publisher" | 
+/**  系列名。 */
+"series" | 
+/**  卷次。 */
+"volume" | 
+/**  出版日期。 */
+"date_published" | 
+/**  版权。 */
+"rights" | 
+/**  来源。 */
+"source" | 
+/**  主题词（多值，`、` 连接）。 */
+"subjects" | 
+/**  简介（多行，`简介：` 独占首行）。 */
+"description";
 
 /**  筛选种类：右栏筛选器的前端契约；关键词含匹配与正则二选一。 */
 export type NovelFilter = 
@@ -570,6 +613,31 @@ export type TextSpan = {
 	/**  命中字符数。 */
 	len: number,
 };
+
+/**  TXT 导出选项：标题格式 + 元数据清单；`items.txt` 为假时忽略。 */
+export type TxtOptions = {
+	/**  标题格式。 */
+	title_kind: TxtTitleKind,
+	/**  自定义模板；非 `custom` 时忽略。 */
+	title_pattern: string,
+	/**  勾选的元数据字段。 */
+	metadata: MetadataField[],
+};
+
+/**  TXT 标题格式：原文之外的五种全部由模板引擎渲染。 */
+export type TxtTitleKind = 
+/**  原文格式：完整标题行原样。 */
+"original" | 
+/**  阿拉伯数字。 */
+"arabic" | 
+/**  数字补零（宽度按全书同类最大位数，最低 2 位）。 */
+"padded" | 
+/**  中文小写数字。 */
+"chinese_lower" | 
+/**  中文大写数字。 */
+"chinese_upper" | 
+/**  自定义模板（`#n #N #c #C #T`，`##` 转义）。 */
+"custom";
 
 /**  可用的更新信息：只含前端展示所需字段，插件的 `Update` 句柄不出命令边界 */
 export type UpdateInfo = {

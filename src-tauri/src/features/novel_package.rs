@@ -68,6 +68,32 @@ pub struct ValidationOutcome {
     pub messages: Vec<ValidationMessage>,
 }
 
+/// 打包进度事件名：前端据此订阅 `zip` / `validate` 两阶段进度；改名时两端同步。
+pub const PACKAGE_PROGRESS_EVENT: &str = "novel-package-progress";
+
+/// 打包阶段：`zip` 打包中（带确定性进度）/ `validate` 校验中（整块调用，无细分）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageStage {
+    /// 打包中。
+    Zip,
+    /// 校验中。
+    Validate,
+}
+
+/// 打包进度载荷：`id` 供前端多窗口过滤。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct PackageProgress {
+    /// 项目 id。
+    pub id: String,
+    /// 当前阶段。
+    pub stage: PackageStage,
+    /// 已写文件数（`validate` 阶段为 `0`）。
+    pub done_files: u32,
+    /// 构建文件总数（`validate` 阶段为 `0`）。
+    pub total_files: u32,
+}
+
 /// 打包产物信息：重进页恢复展示的唯一依据。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct PackageInfo {
@@ -248,8 +274,11 @@ fn from_report(report: &epubveri::report::Report) -> ValidationOutcome {
     }
 }
 
-/// 打包全量生成：`build/` → `dist/书名.epub`，随后自动校验一次。
-pub fn package_in(project_dir: &Path) -> anyhow::Result<PackageOutcome> {
+/// 打包写盘：`build/` → `dist/书名.epub`（不含校验）；进度回调逐文件推进，`None` 即静默。
+pub fn write_epub_in(
+    project_dir: &Path,
+    progress: Option<&dyn Fn(u32, u32)>,
+) -> anyhow::Result<PackageInfo> {
     use super::project_metadata::load_or_init_metadata_in;
 
     let build_dir = project_dir.join(BUILD_DIR);
@@ -297,7 +326,22 @@ pub fn package_in(project_dir: &Path) -> anyhow::Result<PackageOutcome> {
     .context("failed to write mimetype")?;
     zip.write_all(MIMETYPE_BYTES)
         .context("failed to write mimetype")?;
+    // 百分比节流推送：首包即发、整数百分比变化才发、收尾必达。
+    let total_files = u32::try_from(files.len()).unwrap_or(u32::MAX);
+    let mut last_pct = 101u32;
+    let mut report = |done: u32| {
+        if let Some(emit) = progress {
+            // 构建必含 `container.xml`，总数恒正；`max(1)` 纯为除法保底。
+            let pct = done.saturating_mul(100) / total_files.max(1);
+            if pct != last_pct {
+                last_pct = pct;
+                emit(done, total_files);
+            }
+        }
+    };
+    report(0);
     let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let mut done_files = 0u32;
     for rel in &files {
         if rel == "mimetype" {
             continue;
@@ -308,15 +352,14 @@ pub fn package_in(project_dir: &Path) -> anyhow::Result<PackageOutcome> {
             .with_context(|| format!("failed to add {rel}"))?;
         zip.write_all(&bytes)
             .with_context(|| format!("failed to add {rel}"))?;
+        done_files = done_files.saturating_add(1);
+        report(done_files);
     }
+    // `files` 含 `mimetype` 自身时计数口径：以实际写入为准，收尾补一次必达。
+    report(total_files);
     zip.finish().context("failed to finish epub")?;
 
-    let package = stat_package(&epub_path)?;
-    let validation = validate_in(project_dir)?;
-    Ok(PackageOutcome {
-        package,
-        validation,
-    })
+    stat_package(&epub_path)
 }
 
 /// 打包状态：无产物回 `None`，前端据此展示待打包空态。
@@ -335,10 +378,49 @@ pub fn validate_in(project_dir: &Path) -> anyhow::Result<ValidationOutcome> {
     Ok(from_report(&report))
 }
 
-/// 打包小说（`AppHandle` 入口）：落盘后自动校验一次。
-pub fn package_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<PackageOutcome> {
+/// 打包小说（`AppHandle` 入口）：落盘后自动校验一次；CPU 密集段进阻塞池并推送进度。
+pub async fn package_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<PackageOutcome> {
+    use tauri::Emitter;
+
     let dir = super::projects::resolve_project_dir(app, id)?;
-    package_in(&dir)
+    let write_dir = dir.clone();
+    let handle = app.clone();
+    let report_id = id.to_string();
+    let package = tauri::async_runtime::spawn_blocking(move || {
+        let on_progress = move |done: u32, total: u32| {
+            let _ = handle.emit(
+                PACKAGE_PROGRESS_EVENT,
+                PackageProgress {
+                    id: report_id.clone(),
+                    stage: PackageStage::Zip,
+                    done_files: done,
+                    total_files: total,
+                },
+            );
+        };
+        write_epub_in(&write_dir, Some(&on_progress))
+    })
+    .await
+    .context("package task panicked")??;
+    if let Err(error) = app.emit(
+        PACKAGE_PROGRESS_EVENT,
+        PackageProgress {
+            id: id.to_string(),
+            stage: PackageStage::Validate,
+            done_files: 0,
+            total_files: 0,
+        },
+    ) {
+        // 进度上报失败不阻断打包：调用方按命令返回值结算。
+        log::debug!("failed to emit package progress: {error:#}");
+    }
+    let validation = tauri::async_runtime::spawn_blocking(move || validate_in(&dir))
+        .await
+        .context("validate task panicked")??;
+    Ok(PackageOutcome {
+        package,
+        validation,
+    })
 }
 
 /// 打包状态（`AppHandle` 入口）：无产物回 `None`。
@@ -347,10 +429,15 @@ pub fn package_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Option
     status_in(&dir)
 }
 
-/// 校验产物（`AppHandle` 入口）：无包直接报错。
-pub fn validate_package(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ValidationOutcome> {
+/// 校验产物（`AppHandle` 入口）：无包直接报错；阻塞池执行，不占运行时。
+pub async fn validate_package(
+    app: &tauri::AppHandle,
+    id: &str,
+) -> anyhow::Result<ValidationOutcome> {
     let dir = super::projects::resolve_project_dir(app, id)?;
-    validate_in(&dir)
+    tauri::async_runtime::spawn_blocking(move || validate_in(&dir))
+        .await
+        .context("validate task panicked")?
 }
 
 #[cfg(test)]
@@ -409,7 +496,7 @@ mod tests {
     #[test]
     fn rejects_packaging_without_build() {
         let (root, dir) = fixture_project("no-build", "第一章 引子\n正文\n");
-        assert!(package_in(&dir).is_err());
+        assert!(write_epub_in(&dir, None).is_err());
         assert_eq!(status_in(&dir).expect("status"), None);
         assert!(validate_in(&dir).is_err());
         cleanup(&root);
@@ -419,7 +506,11 @@ mod tests {
     fn packages_epub_with_mimetype_first_and_stored() {
         let (root, dir) = fixture_project("full", "第一章 引子\n正文甲\n第二章 发展\n正文乙\n");
         novel_build::build_in(&dir, &template_base()).expect("build");
-        let outcome = package_in(&dir).expect("package");
+        let package = write_epub_in(&dir, None).expect("package");
+        let outcome = PackageOutcome {
+            package,
+            validation: validate_in(&dir).expect("validate"),
+        };
         assert_eq!(outcome.package.file_name, "雾镇.epub");
         assert!(outcome.package.size_bytes > 0);
 
@@ -449,13 +540,71 @@ mod tests {
     #[test]
     fn packaged_book_passes_epubveri() {
         let (root, dir) = fixture_project("valid", "第一卷 开篇\n第一章 引子\n正文甲\n");
+        // 带封面端到端：清单 `href` 写错相对路径会在此处被校验拦下。
+        // 1x1 透明 GIF 实物：`epubveri` 会嗅探图片头，假字节过不了 `PKG-021`。
+        let source = root.join("cover-source.gif");
+        std::fs::write(
+            &source,
+            [
+                0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xFF,
+                0xFF, 0xFF, 0x00, 0x00, 0x00, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
+                0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+                0x3B,
+            ],
+        )
+        .expect("write real cover");
+        super::super::project_metadata::import_cover_in(&dir, &source).expect("import cover");
         novel_build::build_in(&dir, &template_base()).expect("build");
-        let outcome = package_in(&dir).expect("package");
+        let package = write_epub_in(&dir, None).expect("package");
+        let outcome = PackageOutcome {
+            package,
+            validation: validate_in(&dir).expect("validate"),
+        };
         assert!(
             outcome.validation.valid,
             "own template output must validate: {:?}",
             outcome.validation.messages
         );
+        // 地标 `titlepage` 用官方词表形，不应再出现 `OPF-088`。
+        assert!(
+            outcome
+                .validation
+                .messages
+                .iter()
+                .all(|message| message.id != "OPF-088"),
+            "unexpected OPF-088: {:?}",
+            outcome.validation.messages
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn progress_event_name_is_stable() {
+        // 事件名与前端订阅会合，改名时两端同步。
+        assert_eq!(PACKAGE_PROGRESS_EVENT, "novel-package-progress");
+    }
+
+    #[test]
+    fn write_epub_reports_monotonic_progress() {
+        use std::sync::Mutex;
+
+        let (root, dir) = fixture_project("progress", "第一章 引子\n正文甲\n第二章 发展\n正文乙\n");
+        novel_build::build_in(&dir, &template_base()).expect("build");
+        let calls = Mutex::new(Vec::new());
+        let info = write_epub_in(
+            &dir,
+            Some(&|done, total| {
+                calls.lock().expect("lock").push((done, total));
+            }),
+        )
+        .expect("write");
+        assert_eq!(info.file_name, "雾镇.epub");
+        let calls = calls.into_inner().expect("calls");
+        let (last_done, last_total) = *calls.last().expect("at least one report");
+        assert!(last_total > 0);
+        assert_eq!(last_done, last_total);
+        assert!(calls.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+        assert!(calls.iter().all(|(_, total)| *total == last_total));
         cleanup(&root);
     }
 
@@ -463,9 +612,9 @@ mod tests {
     fn keeps_single_package_on_repackage() {
         let (root, dir) = fixture_project("repack", "第一章 引子\n正文\n");
         novel_build::build_in(&dir, &template_base()).expect("build");
-        let first = package_in(&dir).expect("first package");
-        let second = package_in(&dir).expect("second package");
-        assert_eq!(first.package.file_name, second.package.file_name);
+        let first = write_epub_in(&dir, None).expect("first package");
+        let second = write_epub_in(&dir, None).expect("second package");
+        assert_eq!(first.file_name, second.file_name);
         let entries: Vec<_> = std::fs::read_dir(dir.join(DIST_DIR))
             .expect("read dist")
             .filter_map(Result::ok)

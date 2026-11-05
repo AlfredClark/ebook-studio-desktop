@@ -20,6 +20,8 @@ use super::projects::ProjectType;
 const BUILD_DIR: &str = "build";
 /// 只读固定文件（相对构建根，POSIX 口径）：模板原样拷贝，不接受写入。
 const FIXED_FILES: &[&str] = &["mimetype", "META-INF/container.xml"];
+/// 只读但可格式化：`container.xml` 无占位符、无需手改，但允许空白规范化。
+const FORMATTABLE_FIXED: &[&str] = &["META-INF/container.xml"];
 /// 可编辑文本扩展名：命中才接受写入，其余按二进制处理。
 const EDITABLE_EXTS: &[&str] = &["xhtml", "opf", "css", "xml"];
 /// 封面落盘子目录与主干名：扩展名沿用导入时的原扩展名（小写）。
@@ -47,6 +49,17 @@ pub struct BuildFileContent {
     pub content: Option<String>,
     /// 是否可编辑保存。
     pub editable: bool,
+    /// 是否可格式化（可编辑文件 + `container.xml`，后者只读、仅内存格式化）。
+    pub formattable: bool,
+}
+
+/// 构建图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct BuildImageInfo {
+    /// 图片绝对路径。
+    pub path: String,
+    /// 图片字节数（`u32` 以满足 specta 导出约束，上限内足够）。
+    pub size_bytes: u32,
 }
 
 /// 构建结果：文件树根节点清单与文件总数。
@@ -58,10 +71,10 @@ pub struct BuildOutcome {
     pub file_count: u32,
 }
 
-/// 批量格式化结果：成功数 + 跳过（固定只读与二进制）+ 失败清单（内容保持原样）。
+/// 批量格式化结果：成功数 + 跳过（`mimetype` 与二进制）+ 失败清单（内容保持原样）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct FormatOutcome {
-    /// 成功格式化的可编辑文件数（含已规范无需改动的）。
+    /// 成功格式化的文件数（含已规范无需改动的）。
     pub formatted: u32,
     /// 跳过的文件。
     pub skipped: Vec<String>,
@@ -120,6 +133,14 @@ fn is_editable_text(rel_posix: &str) -> bool {
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| EDITABLE_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// 是否可格式化文本：可编辑文件 + 只读的 `container.xml`（`mimetype` 与二进制永不参与）。
+fn is_formattable(rel_posix: &str) -> bool {
+    if FORMATTABLE_FIXED.contains(&rel_posix) {
+        return true;
+    }
+    is_editable_text(rel_posix)
 }
 
 /// 封面扩展名到 EPUB 媒体类型：导入白名单的子集，未命中直接报错。
@@ -261,13 +282,16 @@ pub fn build_in(project_dir: &Path, template_base: &Path) -> anyhow::Result<Buil
         Some((href, media))
     });
     let (cover_item, cover_block) = match &cover_rel {
-        Some((href, media)) => (
-            format!("    <item id=\"cover-image\" href=\"{href}\" media-type=\"{media}\"/>"),
-            format!(
-                "      <img src=\"{href}\" alt=\"{book_title}\"/>",
-                href = href.trim_start_matches("EPUB/"),
-            ),
-        ),
+        // 清单 `href` 与正文 `src` 均相对 `EPUB/`（OPF 与 cover 页同级），包内写盘路径的前缀须剥掉。
+        Some((href, media)) => {
+            let opf_href = href.trim_start_matches("EPUB/");
+            (
+                format!(
+                    "    <item id=\"cover-image\" href=\"{opf_href}\" media-type=\"{media}\"/>"
+                ),
+                format!("      <img src=\"{opf_href}\" alt=\"{book_title}\"/>"),
+            )
+        }
         None => (
             String::new(),
             format!("      <p class=\"book-title\">{book_title}</p>"),
@@ -366,7 +390,7 @@ pub fn build_in(project_dir: &Path, template_base: &Path) -> anyhow::Result<Buil
     write_bytes(&build_dir, "EPUB/content.opf", opf.as_bytes())?;
 
     let landmarks = format!(
-        "        <li><a epub:type=\"cover\" href=\"cover.xhtml\">封面</a></li>\n        <li><a epub:type=\"title-page\" href=\"titlepage.xhtml\">扉页</a></li>\n        <li><a epub:type=\"bodymatter\" href=\"{}\">正文开始</a></li>",
+        "        <li><a epub:type=\"cover\" href=\"cover.xhtml\">封面</a></li>\n        <li><a epub:type=\"titlepage\" href=\"titlepage.xhtml\">扉页</a></li>\n        <li><a epub:type=\"bodymatter\" href=\"{}\">正文开始</a></li>",
         first_bodymatter
             .as_deref()
             .unwrap_or("titlepage.xhtml")
@@ -458,6 +482,16 @@ fn count_files(nodes: &[BuildFileNode]) -> u32 {
         .sum()
 }
 
+/// 是否图片：预览白名单，与前端 `isImageFile` 同口径。
+fn is_image(rel_posix: &str) -> bool {
+    Path::new(rel_posix)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["jpg", "jpeg", "png", "webp", "gif"].contains(&ext.to_ascii_lowercase().as_str())
+        })
+}
+
 /// 读构建文件：二进制回 `content: None`；固定文件标记不可编辑。
 pub fn read_file_in(project_dir: &Path, rel: &str) -> anyhow::Result<BuildFileContent> {
     let build_dir = project_dir.join(BUILD_DIR);
@@ -471,6 +505,7 @@ pub fn read_file_in(project_dir: &Path, rel: &str) -> anyhow::Result<BuildFileCo
     Ok(BuildFileContent {
         content: String::from_utf8(bytes).ok(),
         editable: is_editable_text(&rel_posix),
+        formattable: is_formattable(&rel_posix),
     })
 }
 
@@ -737,7 +772,21 @@ fn format_css(text: &str) -> anyhow::Result<String> {
     Ok(formatted)
 }
 
-/// 格式化单个构建文件：只读内存，不落盘；固定与二进制拒绝。
+/// 按扩展名格式化文本：纯内存，`xhtml` / `opf` / `xml` 走 XML 美化，`css` 走 CSS 美化。
+fn format_text_by_ext(rel: &str, text: &str) -> anyhow::Result<String> {
+    let ext = Path::new(rel)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "xhtml" | "opf" | "xml" => format_xml(text),
+        "css" => format_css(text),
+        _ => anyhow::bail!("unsupported file type: {rel}"),
+    }
+}
+
+/// 格式化单个构建文件：只读内存，不落盘；`mimetype` 与二进制拒绝。
 pub fn format_file_in(project_dir: &Path, rel: &str) -> anyhow::Result<String> {
     let build_dir = project_dir.join(BUILD_DIR);
     let path = resolve_build_path(&build_dir, rel)?;
@@ -745,52 +794,57 @@ pub fn format_file_in(project_dir: &Path, rel: &str) -> anyhow::Result<String> {
         path.strip_prefix(&build_dir)
             .context("build path escapes build dir")?,
     );
-    if !is_editable_text(&rel_posix) {
+    if !is_formattable(&rel_posix) {
         anyhow::bail!("build file is not formattable: {rel}");
     }
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let ext = Path::new(&rel_posix)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "xhtml" | "opf" | "xml" => format_xml(&text),
-        "css" => format_css(&text),
-        _ => anyhow::bail!("unsupported file type: {rel}"),
-    }
+    format_text_by_ext(&rel_posix, &text)
 }
 
-/// 收集可编辑文件路径（文档顺序）。
-fn editable_files(nodes: &[BuildFileNode], out: &mut Vec<String>) {
+/// 格式化给定文本：纯内存，不读盘不落盘；路径仅作穿越守卫与可格式化校验。
+pub fn format_text_in(project_dir: &Path, rel: &str, text: &str) -> anyhow::Result<String> {
+    let build_dir = project_dir.join(BUILD_DIR);
+    let path = resolve_build_path(&build_dir, rel)?;
+    let rel_posix = to_posix(
+        path.strip_prefix(&build_dir)
+            .context("build path escapes build dir")?,
+    );
+    if !is_formattable(&rel_posix) {
+        anyhow::bail!("build file is not formattable: {rel}");
+    }
+    format_text_by_ext(&rel_posix, text)
+}
+
+/// 收集可格式化文件路径（文档顺序）：可编辑文件 + `container.xml`。
+fn formattable_files(nodes: &[BuildFileNode], out: &mut Vec<String>) {
     for node in nodes {
         if let Some(children) = &node.children {
-            editable_files(children, out);
-        } else if node.editable {
+            formattable_files(children, out);
+        } else if is_formattable(&node.path) {
             out.push(node.path.clone());
         }
     }
 }
 
-/// 收集跳过文件路径（固定只读与二进制）。
+/// 收集跳过文件路径（`mimetype` 与二进制）。
 fn skipped_files(nodes: &[BuildFileNode], out: &mut Vec<String>) {
     for node in nodes {
         if let Some(children) = &node.children {
             skipped_files(children, out);
-        } else if !node.editable {
+        } else if !is_formattable(&node.path) {
             out.push(node.path.clone());
         }
     }
 }
 
-/// 批量格式化：逐个格式化可编辑文件并落盘（内容无变化则跳写）；
+/// 批量格式化：逐个格式化可格式化文件并落盘（内容无变化则跳写）；
 /// 单个失败不中断，其余继续，结果分别计数。
 pub fn format_all_in(project_dir: &Path) -> anyhow::Result<FormatOutcome> {
     let build_dir = project_dir.join(BUILD_DIR);
     let tree = tree_in(project_dir).context("no build output to format")?;
     let mut targets = Vec::new();
-    editable_files(&tree.files, &mut targets);
+    formattable_files(&tree.files, &mut targets);
     let mut formatted = 0u32;
     let mut failed = Vec::new();
     for rel in &targets {
@@ -817,10 +871,15 @@ pub fn format_all_in(project_dir: &Path) -> anyhow::Result<FormatOutcome> {
     })
 }
 
-/// 格式化单个构建文件（`AppHandle` 入口）：只读内存，不落盘。
-pub fn format_build_file(app: &tauri::AppHandle, id: &str, path: &str) -> anyhow::Result<String> {
+/// 格式化编辑器文本（`AppHandle` 入口）：纯内存，不读盘不落盘。
+pub fn format_build_text(
+    app: &tauri::AppHandle,
+    id: &str,
+    path: &str,
+    content: &str,
+) -> anyhow::Result<String> {
     let dir = super::projects::resolve_project_dir(app, id)?;
-    format_file_in(&dir, path)
+    format_text_in(&dir, path, content)
 }
 
 /// 批量格式化（`AppHandle` 入口）：落盘，单个失败不中断。
@@ -843,6 +902,31 @@ pub fn build_tree(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Option<Bui
     Ok(tree_in(&dir))
 }
 
+/// 构建图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或文件缺失直接报错。
+pub fn image_path_in(project_dir: &Path, rel: &str) -> anyhow::Result<BuildImageInfo> {
+    let build_dir = project_dir.join(BUILD_DIR);
+    let path = resolve_build_path(&build_dir, rel)?;
+    let meta =
+        std::fs::metadata(&path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!("build file not found: {rel}");
+    }
+    let rel_posix = to_posix(
+        path.strip_prefix(&build_dir)
+            .context("build path escapes build dir")?,
+    );
+    if !is_image(&rel_posix) {
+        anyhow::bail!("build file is not an image: {rel}");
+    }
+    Ok(BuildImageInfo {
+        path: path
+            .to_str()
+            .context("build path is not valid UTF-8")?
+            .to_string(),
+        size_bytes: u32::try_from(meta.len()).unwrap_or(u32::MAX),
+    })
+}
+
 /// 读构建文件（`AppHandle` 入口）。
 pub fn build_file(
     app: &tauri::AppHandle,
@@ -851,6 +935,16 @@ pub fn build_file(
 ) -> anyhow::Result<BuildFileContent> {
     let dir = super::projects::resolve_project_dir(app, id)?;
     read_file_in(&dir, path)
+}
+
+/// 构建图片信息（`AppHandle` 入口）。
+pub fn build_image_path(
+    app: &tauri::AppHandle,
+    id: &str,
+    path: &str,
+) -> anyhow::Result<BuildImageInfo> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    image_path_in(&dir, path)
 }
 
 /// 写构建文件（`AppHandle` 入口）：固定与二进制拒绝。
@@ -932,6 +1026,9 @@ mod tests {
         let nav = read_built(&dir, "EPUB/nav.xhtml");
         assert!(nav.contains("text/chapter-002.xhtml"));
         assert!(nav.contains("bodymatter"));
+        // 地标语义用官方词表无连字符形（`titlepage`），连字符形会吃 `OPF-088`。
+        assert!(nav.contains("epub:type=\"titlepage\""));
+        assert!(!nav.contains("title-page"));
         let opf = read_built(&dir, "EPUB/content.opf");
         let manifest_pos = opf.find("chapter-001").expect("manifest");
         let spine_pos = opf.find("<spine>").expect("spine");
@@ -1032,6 +1129,9 @@ mod tests {
         let opf = read_built(&dir, "EPUB/content.opf");
         assert!(opf.contains("cover-image"));
         assert!(opf.contains("image/jpeg"));
+        // 清单 `href` 相对 OPF 所在目录（`EPUB/`），包内写盘前缀须剥掉。
+        assert!(opf.contains("href=\"images/cover.jpg\""));
+        assert!(!opf.contains("EPUB/images/cover.jpg"));
         let cover = read_built(&dir, "EPUB/cover.xhtml");
         assert!(cover.contains("images/cover.jpg"));
         // 封面图片按二进制处理：内容空 + 不可写。
@@ -1039,6 +1139,15 @@ mod tests {
         assert_eq!(image.content, None);
         assert!(!image.editable);
         assert!(write_file_in(&dir, "EPUB/images/cover.jpg", "x").is_err());
+        // 图片预览信息：图片可取，非图片、缺失与穿越拒绝。
+        let image = image_path_in(&dir, "EPUB/images/cover.jpg").expect("image info");
+        assert!(
+            Path::new(&image.path).ends_with(Path::new("EPUB").join("images").join("cover.jpg"))
+        );
+        assert!(image.size_bytes > 0);
+        assert!(image_path_in(&dir, "EPUB/content.opf").is_err());
+        assert!(image_path_in(&dir, "EPUB/missing.png").is_err());
+        assert!(image_path_in(&dir, "../project.json").is_err());
         cleanup(&root);
     }
 
@@ -1076,6 +1185,27 @@ mod tests {
     }
 
     #[test]
+    fn formats_given_text_without_touching_disk() {
+        let (root, dir) = fixture_project("format-text", "第一章 引子\n正文\n");
+        build_in(&dir, &template_base()).expect("build");
+        let rel = "EPUB/text/chapter-001.xhtml";
+        let before = std::fs::read_to_string(dir.join(BUILD_DIR).join(rel)).expect("read disk");
+        // 输入与落盘不同：输出跟输入走，证明不读盘；落盘内容保持不动。
+        let out = format_text_in(&dir, rel, "<p>改</p>").expect("format text");
+        assert!(out.contains("<p>改</p>"));
+        assert!(!out.contains("正文"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join(BUILD_DIR).join(rel)).expect("reread"),
+            before
+        );
+        // 非法路径、不可格式化与坏输入拒绝。
+        assert!(format_text_in(&dir, "../project.json", "<p>x</p>").is_err());
+        assert!(format_text_in(&dir, "mimetype", "x").is_err());
+        assert!(format_text_in(&dir, rel, "<p>unclosed").is_err());
+        cleanup(&root);
+    }
+
+    #[test]
     fn formats_css_and_rejects_broken_input() {
         let (root, dir) = fixture_project("format-css", "第一章 引子\n正文\n");
         build_in(&dir, &template_base()).expect("build");
@@ -1086,9 +1216,13 @@ mod tests {
         assert!(format_xml("").is_err());
         // lightningcss 对缺省值/未闭合括号很宽容（自动修复），只断言真正非法的输入报错。
         assert!(format_css("{{{").is_err());
-        // 固定与二进制拒绝格式化。
+        // `mimetype` 与二进制拒绝格式化；只读的 `container.xml` 允许内存格式化。
         assert!(format_file_in(&dir, "mimetype").is_err());
-        assert!(format_file_in(&dir, "META-INF/container.xml").is_err());
+        let container = format_file_in(&dir, "META-INF/container.xml").expect("format container");
+        assert!(container.contains("EPUB/content.opf"));
+        assert!(container.ends_with(">\n"));
+        // 写入仍拒绝：只读不因可格式化而放行。
+        assert!(write_file_in(&dir, "META-INF/container.xml", "x").is_err());
         cleanup(&root);
     }
 
@@ -1103,6 +1237,11 @@ mod tests {
         assert!(outcome.formatted > 0);
         assert!(outcome.failed.is_empty(), "unexpected format failures");
         assert!(outcome.skipped.contains(&"mimetype".to_string()));
+        assert!(
+            !outcome
+                .skipped
+                .contains(&"META-INF/container.xml".to_string())
+        );
         // 再次执行内容不变：幂等。
         let again = format_all_in(&dir).expect("format all again");
         assert_eq!(again.formatted, outcome.formatted);

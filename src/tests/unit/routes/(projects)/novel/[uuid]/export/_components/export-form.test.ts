@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   canExport,
   isValidCustomName,
+  isValidTitlePattern,
+  isValidTxtOptions,
   namingKinds,
   namingValue,
 } from "../../../../../../../../routes/(projects)/novel/[uuid]/export/_components/export-form";
@@ -46,5 +48,15 @@ describe("导出表单", () => {
     // 勾选了不存在的产物不算数。
     expect(canExport({ epub: false, txt: false, cover: true }, status)).toBe(false);
     expect(canExport({ epub: false, txt: false, cover: false }, statusWith({}))).toBe(false);
+  });
+
+  it("TXT 参数合法性", () => {
+    expect(isValidTitlePattern("第 #c 章")).toBe(true);
+    expect(isValidTitlePattern("   ")).toBe(false);
+    expect(isValidTxtOptions("original", "", false, [])).toBe(true);
+    expect(isValidTxtOptions("custom", "", false, [])).toBe(false);
+    expect(isValidTxtOptions("custom", "第 #n 章", false, [])).toBe(true);
+    expect(isValidTxtOptions("original", "", true, [])).toBe(false);
+    expect(isValidTxtOptions("original", "", true, ["creator"])).toBe(true);
   });
 });

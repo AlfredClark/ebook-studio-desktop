@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { BuildOutcome } from "../../../../../../../libs/commands/types";
 import BuildPage from "../../../../../../../routes/(projects)/novel/[uuid]/build/+page.svelte";
 
@@ -8,7 +8,7 @@ const treeMock = vi.hoisted(() => vi.fn());
 const buildMock = vi.hoisted(() => vi.fn());
 const fileMock = vi.hoisted(() => vi.fn());
 const updateMock = vi.hoisted(() => vi.fn());
-const formatMock = vi.hoisted(() => vi.fn());
+const textMock = vi.hoisted(() => vi.fn());
 const formatAllMock = vi.hoisted(() => vi.fn());
 
 vi.mock("#libs/commands", () => ({
@@ -17,7 +17,7 @@ vi.mock("#libs/commands", () => ({
     buildNovelContent: buildMock,
     getNovelBuildFile: fileMock,
     updateNovelBuildFile: updateMock,
-    formatNovelBuildFile: formatMock,
+    formatNovelBuildText: textMock,
     formatAllNovelBuildFiles: formatAllMock,
   },
 }));
@@ -118,12 +118,13 @@ function mockLoaded(): void {
       data: {
         content: path === "mimetype" ? "application/epub+zip" : "<p>正文</p>",
         editable: path !== "mimetype",
+        formattable: path !== "mimetype",
       },
     }),
   );
   buildMock.mockReturnValue(fakeCommand({ status: "ok", data: outcome }));
   updateMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
-  formatMock.mockReturnValue(fakeCommand({ status: "ok", data: "<p>正文</p>\n" }));
+  textMock.mockReturnValue(fakeCommand({ status: "ok", data: "<p>正文</p>\n" }));
   formatAllMock.mockReturnValue(
     fakeCommand({
       status: "ok",
@@ -137,8 +138,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** 点选首个生成文件：顶层 `EPUB/` 默认展开，行直达可点；等待树渲染完成。 */
+async function openChapterFile(user: UserEvent): Promise<void> {
+  await user.click(await screen.findByText("chapter-001.xhtml"));
+}
+
 describe("构建页", () => {
-  it("无构建产物时引导构建，构建后展示树与首个文件", async () => {
+  it("无构建产物时引导构建，构建后展示树与待选空态", async () => {
     const user = userEvent.setup();
     treeMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
     mockLoaded();
@@ -153,6 +159,11 @@ describe("构建页", () => {
     // 构建后静默格式化全部文件。
     await vi.waitFor(() => expect(formatAllMock).toHaveBeenCalledOnce());
     expect(await screen.findByText("chapter-001.xhtml")).not.toBeNull();
+    // 不默认打开文件：右侧待选空态，点选后才加载。
+    expect(await screen.findByText("Select a file on the left to view")).not.toBeNull();
+    expect(fileMock).not.toHaveBeenCalled();
+    await openChapterFile(user);
+    expect(fileMock).toHaveBeenCalledWith("abc-uuid", "EPUB/text/chapter-001.xhtml");
   });
 
   it("固定文件只读展示无保存按钮，生成文件可编辑保存", async () => {
@@ -160,7 +171,9 @@ describe("构建页", () => {
     mockLoaded();
     render(BuildPage);
 
-    // 默认选中首个文件（可编辑）：保存按钮初始禁用。
+    // 未点选时右侧待选空态；点选生成文件后保存按钮初始禁用。
+    expect(await screen.findByText("Select a file on the left to view")).not.toBeNull();
+    await openChapterFile(user);
     expect(await screen.findByText("EPUB/text/chapter-001.xhtml")).not.toBeNull();
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
 
@@ -185,6 +198,7 @@ describe("构建页", () => {
     mockLoaded();
     render(BuildPage);
 
+    await openChapterFile(user);
     const editor = await screen.findByLabelText("EPUB/text/chapter-001.xhtml");
     await user.type(editor.querySelector(".cm-content") as Element, "改");
     await user.click(screen.getByText("mimetype"));
@@ -214,11 +228,12 @@ describe("构建页", () => {
     render(BuildPage);
 
     await screen.findByText("chapter-001.xhtml");
-    // 未改动时格式化按钮可用（脏态才禁用）。
+    await openChapterFile(user);
+    // 格式化整理编辑器当前文本：干净态直接可用。
     await user.click(screen.getByRole("button", { name: "Format" }));
 
-    expect(formatMock).toHaveBeenCalledOnce();
-    expect(formatMock).toHaveBeenCalledWith("abc-uuid", "EPUB/text/chapter-001.xhtml");
+    expect(textMock).toHaveBeenCalledOnce();
+    expect(textMock).toHaveBeenCalledWith("abc-uuid", "EPUB/text/chapter-001.xhtml", "<p>正文</p>");
     // 回填后视图同步为格式化结果，并变脏，保存可用。
     const formatted = screen
       .getByLabelText("EPUB/text/chapter-001.xhtml")
@@ -238,6 +253,7 @@ describe("构建页", () => {
     render(BuildPage);
 
     await screen.findByText("chapter-001.xhtml");
+    await openChapterFile(user);
     await user.click(screen.getByRole("button", { name: "Format all" }));
 
     expect(formatAllMock).toHaveBeenCalledOnce();
@@ -252,6 +268,7 @@ describe("构建页", () => {
     render(BuildPage);
 
     await screen.findByText("chapter-001.xhtml");
+    await openChapterFile(user);
     await fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     expect(updateMock).not.toHaveBeenCalled();
 
@@ -261,5 +278,65 @@ describe("构建页", () => {
     await fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     expect(updateMock).toHaveBeenCalledOnce();
     expect(updateMock).toHaveBeenCalledWith("abc-uuid", "EPUB/text/chapter-001.xhtml", "<p>改</p>");
+  });
+
+  it("只读的 container.xml 无格式化与保存按钮", async () => {
+    const user = userEvent.setup();
+    treeMock.mockReturnValue(
+      fakeCommand({
+        status: "ok",
+        data: {
+          files: [
+            {
+              name: "META-INF",
+              path: "META-INF",
+              editable: false,
+              children: [
+                {
+                  name: "container.xml",
+                  path: "META-INF/container.xml",
+                  editable: false,
+                  children: null,
+                },
+              ],
+            },
+          ],
+          file_count: 1,
+        } satisfies BuildOutcome,
+      }),
+    );
+    fileMock.mockReturnValue(
+      fakeCommand({
+        status: "ok",
+        data: { content: "<container/>", editable: false, formattable: true },
+      }),
+    );
+    render(BuildPage);
+
+    // 点选只读文件：只读徽标在，无操作按钮。
+    await user.click(await screen.findByText("container.xml"));
+    expect(await screen.findByText("Read-only")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(textMock).not.toHaveBeenCalled();
+  });
+
+  it("脏态下格式化整理当前文本而不丢弃修改", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(BuildPage);
+
+    await screen.findByText("chapter-001.xhtml");
+    await openChapterFile(user);
+    const editor = await screen.findByLabelText("EPUB/text/chapter-001.xhtml");
+    await user.clear(editor.querySelector(".cm-content") as Element);
+    await user.type(editor.querySelector(".cm-content") as Element, "<p>改</p>");
+    // 脏态下格式化按钮仍可用。
+    const formatButton = screen.getByRole("button", { name: "Format" });
+    expect((formatButton as HTMLButtonElement).disabled).toBe(false);
+    await user.click(formatButton);
+    // 送的是编辑器当前文本，而非落盘版本。
+    expect(textMock).toHaveBeenCalledOnce();
+    expect(textMock).toHaveBeenCalledWith("abc-uuid", "EPUB/text/chapter-001.xhtml", "<p>改</p>");
   });
 });

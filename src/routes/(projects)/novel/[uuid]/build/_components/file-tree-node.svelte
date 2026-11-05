@@ -1,11 +1,14 @@
 <script lang="ts">
-  // 文件树节点（递归）：文件夹用 Collapsible 折叠（默认展开），文件用 ghost 按钮选中；
+  // 文件树节点（递归）：文件夹用 Collapsible 折叠（展开集由树根持有，`onOpenChange` 回写），
+  // 文件用 ghost 按钮选中；箭头按本节点展开态直给 `rotate-90`（不用 group 选择器，
+  // 祖先目录的展开态会污染嵌套箭头）。
   // 实现逻辑对标 shadcn-svelte ai-elements file-tree；图片换图标，只读文件挂锁。
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
   import FileIcon from "@lucide/svelte/icons/file";
   import FileImageIcon from "@lucide/svelte/icons/file-image";
   import FolderIcon from "@lucide/svelte/icons/folder";
   import LockIcon from "@lucide/svelte/icons/lock";
+  import type { SvelteSet } from "svelte/reactivity";
   import { Button } from "#components/shadcn-svelte/button";
   import * as Collapsible from "#components/shadcn-svelte/collapsible";
   import type { BuildFileNode } from "#libs/commands/types";
@@ -17,20 +20,25 @@
     node,
     selected,
     onSelect,
+    expanded,
+    onToggle,
   }: {
     node: BuildFileNode;
     selected: string | null;
     onSelect: (path: string) => void;
+    expanded: SvelteSet<string>;
+    onToggle: (path: string, open: boolean) => void;
   } = $props();
 </script>
 
 {#if node.children != null}
-  <Collapsible.Root open class="group/folder">
+  {@const isOpen = expanded.has(node.path)}
+  <Collapsible.Root open={isOpen} onOpenChange={(open) => onToggle(node.path, open)}>
     <Collapsible.Trigger>
       {#snippet child({ props })}
         <Button {...props} variant="ghost" size="sm" class="w-full justify-start gap-1.5 px-2">
           <ChevronRightIcon
-            class="size-4 shrink-0 transition-transform group-data-[state=open]/folder:rotate-90"
+            class={cn("size-4 shrink-0 transition-transform", isOpen && "rotate-90")}
           />
           <FolderIcon class="size-4 shrink-0 text-muted-foreground" />
           <span class="min-w-0 flex-1 truncate text-left">{node.name}</span>
@@ -40,7 +48,7 @@
     <Collapsible.Content>
       <div class="ml-4 flex flex-col">
         {#each node.children as child (child.path)}
-          <FileTreeNode node={child} {selected} {onSelect} />
+          <FileTreeNode node={child} {selected} {onSelect} {expanded} {onToggle} />
         {/each}
       </div>
     </Collapsible.Content>
