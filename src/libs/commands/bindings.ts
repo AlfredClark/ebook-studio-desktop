@@ -21,6 +21,8 @@ export const commands = {
 	renameProject: (id: string, name: string) => typedError<ProjectInfo, CommandError>(__TAURI_INVOKE("rename_project", { id, name })),
 	/**  批量删除项目：永久递归删除对应目录，不存在的 id 跳过，返回实际删除数 */
 	deleteProjects: (ids: string[]) => typedError<number, CommandError>(__TAURI_INVOKE("delete_projects", { ids })),
+	/**  在系统文件管理器中打开项目目录 */
+	openProjectDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_project_dir", { id })),
 	/**  读取项目元数据；文件缺失时按项目信息新建并落盘后返回。 */
 	getProjectMetadata: (id: string) => typedError<ProjectMetadata, CommandError>(__TAURI_INVOKE("get_project_metadata", { id })),
 	/**  保存项目元数据：服务端字段（标识 / 版本 / 小说语言 / 存量封面）一律回填，返回写后的完整内容。 */

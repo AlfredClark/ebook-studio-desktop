@@ -46,6 +46,8 @@
   "projects_detail_created": "创建时间",
   "projects_detail_updated": "更新时间",
   "projects_detail_empty": "选择一个项目查看详情",
+  "projects_detail_open_dir": "打开项目目录",
+  "projects_detail_open_dir_failed": "打开项目目录失败",
   "projects_create_dialog_title_novel": "新建小说",
   "projects_create_dialog_title_comic": "新建漫画",
   "projects_create_name_label": "项目名称",

@@ -62,6 +62,21 @@ pub fn resolve_project_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<P
     Ok(dir)
 }
 
+/// 在系统文件管理器中打开项目目录；id 非法（路径穿越守卫）或目录缺失直接报错。
+pub fn open_project_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use tauri_plugin_opener::OpenerExt;
+
+    let dir = resolve_project_dir(app, id)?;
+    let dir = dir
+        .to_str()
+        .context("project dir path is not valid UTF-8")?;
+    app.opener()
+        .open_path(dir, None::<&str>)
+        .context("failed to open project dir")?;
+    Ok(())
+}
+
 /// 校验展示名：非空（去首尾空白后）且不超长；名称不参与路径，无需字符黑名单。
 fn sanitize_name(name: &str) -> anyhow::Result<String> {
     let trimmed = name.trim();

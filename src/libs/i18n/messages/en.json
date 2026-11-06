@@ -46,6 +46,8 @@
   "projects_detail_created": "Created",
   "projects_detail_updated": "Updated",
   "projects_detail_empty": "Select a project to view details",
+  "projects_detail_open_dir": "Open folder",
+  "projects_detail_open_dir_failed": "Failed to open folder",
   "projects_create_dialog_title_novel": "New novel",
   "projects_create_dialog_title_comic": "New comic",
   "projects_create_name_label": "Project name",

@@ -42,3 +42,11 @@ pub fn rename_project(
 pub fn delete_projects(app: tauri::AppHandle, ids: Vec<String>) -> CommandResult<u32> {
     Ok(projects::delete_projects(&app, &ids)?)
 }
+
+/// 在系统文件管理器中打开项目目录
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_project_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(projects::open_project_dir(&app, &id)?)
+}

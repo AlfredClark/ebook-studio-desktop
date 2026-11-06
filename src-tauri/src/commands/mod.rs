@@ -29,6 +29,7 @@ macro_rules! collect_commands {
             $crate::commands::projects::create_project,
             $crate::commands::projects::rename_project,
             $crate::commands::projects::delete_projects,
+            $crate::commands::projects::open_project_dir,
             $crate::commands::metadata::get_project_metadata,
             $crate::commands::metadata::update_project_metadata,
             $crate::commands::metadata::reset_project_metadata,

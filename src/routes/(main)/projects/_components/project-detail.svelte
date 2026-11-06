@@ -1,20 +1,24 @@
 <script lang="ts">
-  // 右栏详情：只读展示选中项目的封面与元数据；无选中走空态，
+  // 右栏详情：展示选中项目的封面与元数据，标题栏附带打开项目目录入口；无选中走空态，
   // 无元数据回落默认封面（2:3 项目名）与项目创建时间。
   // 作者 / 主题词 / 简介常显，其余属性收进末尾的更多信息折叠区。
   import { convertFileSrc } from "@tauri-apps/api/core";
   import * as Accordion from "#components/shadcn-svelte/accordion";
   import { Badge } from "#components/shadcn-svelte/badge";
+  import { Button } from "#components/shadcn-svelte/button";
   import commands from "#libs/commands";
   import type { ProjectInfo, ProjectMetadata, ProjectOverview } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
   import { getLocale } from "#libs/i18n/paraglide/runtime";
+  import { toast } from "#libs/utils/toast";
   import { formatDateTime } from "./project-data";
 
   let { project }: { project: ProjectInfo | undefined } = $props();
 
   let overview = $state<ProjectOverview | null>(null);
   let coverUrl = $state<string | null>(null);
+  /** 打开目录在途时禁用按钮，避免重复调起文件管理器。 */
+  let openingDir = $state(false);
 
   /** 折叠区是否有内容：九项附加属性任一非空即展示。 */
   function hasMoreInfo(meta: ProjectMetadata): boolean {
@@ -40,6 +44,20 @@
     }
   }
 
+  /** 打开项目目录：调系统文件管理器定位项目文件夹，失败 toast。 */
+  async function openProjectDir(): Promise<void> {
+    const id = project?.id;
+    if (id == null || openingDir) {
+      return;
+    }
+    openingDir = true;
+    const result = await commands.openProjectDir(id).result();
+    // 切走选中时不碰残留态：按钮禁用态由 openingDir 统一收尾。
+    openingDir = false;
+    if (result.status === "error") {
+      toast.error(m.projects_detail_open_dir_failed());
+    }
+  }
   /** 拉取概览快照：只读不建文件；失败静默回落默认展示（后端已记日志）。 */
   async function loadOverview(id: string): Promise<void> {
     const result = await commands.getProjectOverview(id).result();
@@ -67,6 +85,15 @@
     {@const meta = overview?.metadata}
     <div class="flex min-w-0 items-center gap-2">
       <h2 class="min-w-0 flex-1 truncate text-lg font-medium">{meta?.title || project.name}</h2>
+      <Button
+        variant="outline"
+        size="sm"
+        class="shrink-0"
+        disabled={openingDir}
+        onclick={() => void openProjectDir()}
+      >
+        {m.projects_detail_open_dir()}
+      </Button>
       <Badge variant="outline" class="shrink-0">
         {project.type === "novel" ? m.projects_type_novel() : m.projects_type_comic()}
       </Badge>

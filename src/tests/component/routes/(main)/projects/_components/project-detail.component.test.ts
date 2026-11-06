@@ -5,10 +5,19 @@ import type { ProjectInfo } from "../../../../../../libs/commands/types";
 import ProjectDetail from "../../../../../../routes/(main)/projects/_components/project-detail.svelte";
 
 const getOverviewMock = vi.hoisted(() => vi.fn());
+const openProjectDirMock = vi.hoisted(() => vi.fn());
+const toastMocks = vi.hoisted(() => ({
+  loading: vi.fn(() => 1),
+  dismiss: vi.fn(),
+  success: vi.fn(),
+  error: vi.fn(),
+}));
 
 vi.mock("#libs/commands", () => ({
-  default: { getProjectOverview: getOverviewMock },
+  default: { getProjectOverview: getOverviewMock, openProjectDir: openProjectDirMock },
 }));
+
+vi.mock("#libs/utils/toast", () => ({ toast: toastMocks }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `https://asset.localhost/${path}`,
@@ -132,5 +141,37 @@ describe("项目详情", () => {
     expect(screen.getAllByText("雾镇")).toHaveLength(2);
     expect(screen.getByText("Created")).not.toBeNull();
     expect(screen.queryByAltText("Cover preview")).toBeNull();
+  });
+
+  it("点击打开项目目录按 id 调命令，失败时提示", async () => {
+    const user = userEvent.setup();
+    getOverviewMock.mockReturnValue(
+      fakeCommand({ status: "ok", data: { metadata: null, cover_path: null } }),
+    );
+    openProjectDirMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
+    render(ProjectDetail, { props: { project } });
+
+    await user.click(screen.getByRole("button", { name: "Open folder" }));
+
+    expect(openProjectDirMock).toHaveBeenCalledWith("abc-uuid");
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
+  it("打开项目目录失败时 toast 提示", async () => {
+    const user = userEvent.setup();
+    getOverviewMock.mockReturnValue(
+      fakeCommand({ status: "ok", data: { metadata: null, cover_path: null } }),
+    );
+    openProjectDirMock.mockReturnValue(
+      fakeCommand({ status: "error", error: { kind: "Internal", message: "no dir" } }),
+    );
+    render(ProjectDetail, { props: { project } });
+
+    await user.click(screen.getByRole("button", { name: "Open folder" }));
+
+    expect(openProjectDirMock).toHaveBeenCalledWith("abc-uuid");
+    await vi.waitFor(() => {
+      expect(toastMocks.error).toHaveBeenCalled();
+    });
   });
 });
