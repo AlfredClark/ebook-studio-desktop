@@ -591,8 +591,8 @@ fn build_txt(
     Ok(text)
 }
 
-/// 封面扩展名（小写）：导入白名单的子集，未命中直接报错。
-fn cover_ext_of(path: &Path) -> anyhow::Result<String> {
+/// 封面扩展名（小写）：导入白名单的子集，未命中直接报错（漫画导出共用）。
+pub fn cover_ext_of(path: &Path) -> anyhow::Result<String> {
     let ext = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -686,8 +686,8 @@ pub fn status_in(project_dir: &Path) -> anyhow::Result<ExportStatus> {
     })
 }
 
-/// 目标子目录：`<自选目录>/<命名>/`；已存在且非空直接报错。
-fn target_dir(dest: &Path, stem: &str) -> anyhow::Result<PathBuf> {
+/// 目标子目录：`<自选目录>/<命名>/`；已存在且非空直接报错（漫画导出共用）。
+pub fn target_dir(dest: &Path, stem: &str) -> anyhow::Result<PathBuf> {
     let target = dest.join(stem);
     if target.exists() {
         if !target.is_dir() {

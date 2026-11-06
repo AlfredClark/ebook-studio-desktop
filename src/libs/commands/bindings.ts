@@ -80,6 +80,13 @@ export const commands = {
 } | null, CommandError>(__TAURI_INVOKE("get_comic_package_status", { id })),
 	/**  校验已有产物：无包直接报错，前端引导先打包。 */
 	validateComicPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_comic_package", { id })),
+	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
+	getComicExportStatus: (id: string) => typedError<ComicExportStatus, CommandError>(__TAURI_INVOKE("get_comic_export_status", { id })),
+	/**
+	 *  导出漫画：改名拷贝 EPUB / 封面、原图按话建目录拷贝或打成压缩包，落到自选目录的 `<命名>/` 下；
+	 *  阻塞池执行并推送原图落盘进度，前端据此渲染进度条。
+	 */
+	exportComicContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ComicExportItems, titles: BuildTitleOptions, imagesMode: ComicImagesMode) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_comic_content", { id, destDir, naming, customName, items, titles, imagesMode })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
 	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */
@@ -326,6 +333,40 @@ export type CleanupPreset =
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
 
+/**  漫画导出勾选：EPUB / 原图 / 封面。 */
+export type ComicExportItems = {
+	/**  EPUB 电子书。 */
+	epub: boolean,
+	/**  原图（文件夹或压缩包，见 `ComicImagesMode`）。 */
+	images: boolean,
+	/**  封面图片。 */
+	cover: boolean,
+};
+
+/**  漫画导出状态：进页一次查全，前端据此渲染表单与禁用态。 */
+export type ComicExportStatus = {
+	/**  是否有可导出的解析产物。 */
+	has_content: boolean,
+	/**  话数。 */
+	volume_count: number,
+	/**  图片总页数。 */
+	page_count: number,
+	/**  图片总字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	total_bytes: number,
+	/**  是否有可导出的打包产物。 */
+	has_epub: boolean,
+	/**  打包文件名；无产物时为 `None`。 */
+	epub_name: string | null,
+	/**  是否有可导出的封面。 */
+	has_cover: boolean,
+	/**  封面扩展名（小写）；无封面时为 `None`。 */
+	cover_ext: string | null,
+	/**  项目名。 */
+	project_name: string,
+	/**  书名。 */
+	book_title: string,
+};
+
 /**  漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示。 */
 export type ComicImageInfo = {
 	/**  图片绝对路径。 */
@@ -333,6 +374,13 @@ export type ComicImageInfo = {
 	/**  图片字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
 	size_bytes: number,
 };
+
+/**  原图导出形态：文件夹 mirror 落盘，或打成单个压缩包。 */
+export type ComicImagesMode = 
+/**  文件夹：`dest/<命名>/` 下按话建子目录。 */
+"folder" | 
+/**  压缩包：`dest/<命名>.zip`，包内与文件夹模式同结构。 */
+"zip";
 
 /**  漫画原稿状态：左栏文件卡片的只读展示；缺目录时 `exists` 为假。 */
 export type ComicImagesStatus = {

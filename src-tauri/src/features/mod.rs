@@ -2,6 +2,7 @@
 //! 命令层只负责参数校验与结果转换，真正干活的是这里；多个业务通用或共享的逻辑抽取到 `cores`。
 
 pub mod comic_build;
+pub mod comic_export;
 pub mod comic_files;
 pub mod comic_package;
 pub mod epub_template;

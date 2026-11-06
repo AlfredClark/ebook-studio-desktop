@@ -1,7 +1,10 @@
 import type {
   CleanupPreset,
   CloseBehavior,
+  ComicExportItems,
+  ComicExportStatus,
   ComicImageInfo,
+  ComicImagesMode,
   ComicImagesStatus,
   ComicMode,
   ComicOutline,
@@ -78,7 +81,10 @@ export type EnhancedCommands = { [K in keyof CommandsMap]: WrappedFn<CommandsMap
 export type {
   CleanupPreset,
   CloseBehavior,
+  ComicExportItems,
+  ComicExportStatus,
   ComicImageInfo,
+  ComicImagesMode,
   ComicImagesStatus,
   ComicMode,
   ComicOutline,
