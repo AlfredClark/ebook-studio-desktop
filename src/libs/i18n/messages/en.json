@@ -403,7 +403,7 @@
   "build_load_failed": "Failed to load build output",
   "build_rebuild": "Rebuild",
   "build_rebuild_confirm_title": "Rebuild?",
-  "build_rebuild_confirm_description": "This deletes everything in the build directory and returns to the build guide, where you can pick title formats and build again. This cannot be undone.",
+  "build_rebuild_confirm_description": "This deletes everything in the build and package directories and returns to the build guide, where you can pick title formats and build again. This cannot be undone.",
   "build_rebuild_confirm_ok": "Confirm rebuild",
   "build_empty_title": "No build yet",
   "build_empty_description": "Build the EPUB directory structure from the current text and metadata",

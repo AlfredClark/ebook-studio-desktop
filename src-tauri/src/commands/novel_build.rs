@@ -19,12 +19,14 @@ pub fn build_novel_content(
     Ok(novel_build::build_novel(&app, &id, &titles)?)
 }
 
-/// 清空构建产物：删除 `build/` 目录，前端回到构建引导。
+/// 清空构建产物：删除 `build/` 与打包目录 `dist/`，前端回到构建引导，
+/// 下游打包与导出页回到空态；目录不存在视为成功。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
 pub fn clear_novel_build_content(app: tauri::AppHandle, id: String) -> CommandResult<()> {
-    Ok(novel_build::clear_build(&app, &id)?)
+    novel_build::clear_build(&app, &id)?;
+    Ok(crate::features::novel_package::clear_dist(&app, &id)?)
 }
 
 /// 读取构建树：未构建回 `None`，前端展示空态引导构建。

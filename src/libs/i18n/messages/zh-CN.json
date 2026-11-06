@@ -403,7 +403,7 @@
   "build_load_failed": "构建产物加载失败",
   "build_rebuild": "重新构建",
   "build_rebuild_confirm_title": "重新构建？",
-  "build_rebuild_confirm_description": "将删除构建目录下的全部产物并回到构建引导，可重新选择标题格式后构建，此操作不可撤销。",
+  "build_rebuild_confirm_description": "将删除构建目录与打包目录下的全部产物并回到构建引导，可重新选择标题格式后构建，此操作不可撤销。",
   "build_rebuild_confirm_ok": "确认重建",
   "build_empty_title": "尚未构建",
   "build_empty_description": "基于当前正文与元数据生成 EPUB 打包目录结构",

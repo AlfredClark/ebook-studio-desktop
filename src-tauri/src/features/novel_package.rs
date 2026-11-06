@@ -429,6 +429,24 @@ pub fn package_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Option
     status_in(&dir)
 }
 
+/// 清空打包产物：删除 `dist/` 目录（不存在视为成功），重构建后下游回到空态。
+pub fn clear_dist_in(project_dir: &Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let dist_dir = project_dir.join(DIST_DIR);
+    if dist_dir.exists() {
+        std::fs::remove_dir_all(&dist_dir)
+            .with_context(|| format!("failed to clear {}", dist_dir.display()))?;
+    }
+    Ok(())
+}
+
+/// 清空打包产物（`AppHandle` 入口）。
+pub fn clear_dist(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    clear_dist_in(&dir)
+}
+
 /// 校验产物（`AppHandle` 入口）：无包直接报错；阻塞池执行，不占运行时。
 pub async fn validate_package(
     app: &tauri::AppHandle,
@@ -481,6 +499,19 @@ mod tests {
 
     fn cleanup(root: &Path) {
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn clears_dist_dir_and_tolerates_missing() {
+        let (root, dir) = fixture_project("clear-dist", "第一章 引子\n正文\n");
+        let dist = dir.join(DIST_DIR);
+        std::fs::create_dir_all(&dist).expect("create dist");
+        std::fs::write(dist.join("雾镇.epub"), b"fake").expect("write fake epub");
+        clear_dist_in(&dir).expect("clear dist");
+        assert!(!dist.exists());
+        // 缺失时重复清空仍成功。
+        clear_dist_in(&dir).expect("clear again");
+        cleanup(&root);
     }
 
     #[test]

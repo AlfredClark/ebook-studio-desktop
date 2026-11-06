@@ -75,7 +75,10 @@ export const commands = {
 	filterNovelContent: (id: string, filter: NovelFilter) => typedError<FilterOutcome, CommandError>(__TAURI_INVOKE("filter_novel_content", { id, filter })),
 	/**  构建小说：清空构建目录后全量重生成，返回文件树。 */
 	buildNovelContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_novel_content", { id, titles })),
-	/**  清空构建产物：删除 `build/` 目录，前端回到构建引导。 */
+	/**
+	 *  清空构建产物：删除 `build/` 与打包目录 `dist/`，前端回到构建引导，
+	 *  下游打包与导出页回到空态；目录不存在视为成功。
+	 */
 	clearNovelBuildContent: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("clear_novel_build_content", { id })),
 	/**  读取构建树：未构建回 `None`，前端展示空态引导构建。 */
 	getNovelBuildTree: (id: string) => typedError<{
