@@ -59,7 +59,7 @@ pub fn get_comic_image_path(
     Ok(comic_files::image_path(&app, &id, &path)?)
 }
 
-/// 全量更新漫画分卷结构：标题可改、卷可增删排序，页须全量覆盖，落盘后返回新大纲。
+/// 全量更新漫画分话结构：标题可改、话可增删排序，页须全量覆盖，落盘后返回新大纲。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]

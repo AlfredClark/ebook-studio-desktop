@@ -6,6 +6,7 @@
 
 #![allow(clippy::unnecessary_wraps)]
 
+pub mod comic_build;
 pub mod comic_files;
 pub mod config;
 pub mod metadata;
@@ -32,6 +33,15 @@ macro_rules! collect_commands {
             $crate::commands::comic_files::get_comic_content_outline,
             $crate::commands::comic_files::get_comic_image_path,
             $crate::commands::comic_files::update_comic_volumes,
+            $crate::commands::comic_build::build_comic_content,
+            $crate::commands::comic_build::preview_comic_txt_title,
+            $crate::commands::comic_build::clear_comic_build_content,
+            $crate::commands::comic_build::get_comic_build_tree,
+            $crate::commands::comic_build::get_comic_build_file,
+            $crate::commands::comic_build::get_comic_build_image_path,
+            $crate::commands::comic_build::update_comic_build_file,
+            $crate::commands::comic_build::format_comic_build_text,
+            $crate::commands::comic_build::format_all_comic_build_files,
             $crate::commands::projects::list_projects,
             $crate::commands::projects::create_project,
             $crate::commands::projects::rename_project,

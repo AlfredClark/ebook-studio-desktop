@@ -21,7 +21,7 @@ describe("漫画文件展示", () => {
 
   it("取 POSIX 路径的文件名", () => {
     expect(pageFileName("001.jpg")).toBe("001.jpg");
-    expect(pageFileName("第1卷/001.jpg")).toBe("001.jpg");
+    expect(pageFileName("第1话/001.jpg")).toBe("001.jpg");
     expect(pageFileName("extra/cover.png")).toBe("cover.png");
   });
 });

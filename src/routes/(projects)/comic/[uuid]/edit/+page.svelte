@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 漫画编辑页：左栏页序树（拖拽 + Alt+方向键跨卷重排，脏态+保存）+ 中栏大图预览 +
+  // 漫画编辑页：左栏页序树（拖拽 + Alt+方向键跨话重排，脏态+保存）+ 中栏大图预览 +
   // 右栏页信息占位；无解析产物时沿用步骤引导。
   import { onMount } from "svelte";
   import { page } from "$app/state";
@@ -39,7 +39,7 @@
   let loading = $state(true);
   let loadFailed = $state(false);
 
-  /** 工作卷（拖拽只改本地）与已落盘快照：JSON 比对判定脏态。 */
+  /** 工作话（拖拽只改本地）与已落盘快照：JSON 比对判定脏态。 */
   let working = $state<WorkingVolume[]>([]);
   let saved = $state<WorkingVolume[]>([]);
   const dirty = $derived(!sameOrder(working, saved));
@@ -66,7 +66,7 @@
     ),
   );
 
-  /** 选中位置：卷下标 + 卷内序号 + 全局序号，供工具条与右栏展示。 */
+  /** 选中位置：话下标 + 话内序号 + 全局序号，供工具条与右栏展示。 */
   const location = $derived.by(() => {
     if (selectedPath == null) {
       return null;
@@ -108,7 +108,7 @@
     selectFirstPage();
   }
 
-  /** 默认选中首卷首个有效页。 */
+  /** 默认选中首话首个有效页。 */
   function selectFirstPage(): void {
     const first = working.flatMap((volume) => volume.pages)[0] ?? null;
     selectedPath = first;
@@ -126,17 +126,17 @@
     void loadPreview(path);
   }
 
-  /** 拖拽/键盘提交移动：只改本地工作卷，选中按 path 跟随。 */
+  /** 拖拽/键盘提交移动：只改本地工作话，选中按 path 跟随。 */
   function handleMove(from: PageRef, to: DropTarget): void {
     working = movePage(working, from, to);
   }
 
-  /** 拖拽/键盘提交卷移动：只改本地工作卷顺序。 */
+  /** 拖拽/键盘提交话移动：只改本地工作话顺序。 */
   function handleMoveVolume(from: number, to: VolumeMoveTarget): void {
     working = moveVolume(working, from, to);
   }
 
-  /** 改名提交：标题已由树组件校验，直接落本地工作卷。 */
+  /** 改名提交：标题已由树组件校验，直接落本地工作话。 */
   function handleRename(volume: number, title: string): void {
     if (working[volume] == null) {
       return;
@@ -144,7 +144,7 @@
     working[volume] = { ...working[volume], title };
   }
 
-  /** 删除空卷：请求时弹确认框，确认后移除。 */
+  /** 删除空话：请求时弹确认框，确认后移除。 */
   let deleteConfirmOpen = $state(false);
   let pendingDelete = $state<number | null>(null);
   const deleteTargetTitle = $derived(
@@ -168,7 +168,7 @@
     }
   }
 
-  /** 新建分卷：内联输入态，提交时做非空 / 长度 / 重名校验。 */
+  /** 新建分话：内联输入态，提交时做非空 / 长度 / 重名校验。 */
   let creatingVolume = $state(false);
   let newTitle = $state("");
   /** 新建输入框：挂载后聚焦（不用 autofocus 属性，a11y 规则不推荐）。 */
@@ -187,15 +187,15 @@
   function handleCreateVolume(): void {
     const error = titleErrorOf(newTitle);
     if (error === "empty") {
-      toast.error(m.comic_edit_volume_title_empty());
+      toast.error(m.comic_edit_episode_title_empty());
       return;
     }
     if (error === "duplicate") {
-      toast.error(m.comic_edit_volume_title_duplicate());
+      toast.error(m.comic_edit_episode_title_duplicate());
       return;
     }
     if (error === "too_long") {
-      toast.error(m.comic_edit_volume_title_too_long());
+      toast.error(m.comic_edit_episode_title_too_long());
       return;
     }
     working = [...working, { title: newTitle.trim(), pages: [] }];
@@ -203,7 +203,7 @@
     creatingVolume = false;
   }
 
-  /** 保存：全量分卷结构覆写落盘，成功后快照同步、失败保留本地可再保存。 */
+  /** 保存：全量分话结构覆写落盘，成功后快照同步、失败保留本地可再保存。 */
   async function handleSave(): Promise<void> {
     if (!dirty || saving) {
       return;
@@ -226,7 +226,7 @@
     toast.success(m.comic_edit_save_success());
   }
 
-  /** 删除页记录：只从工作卷移除顺序记录，sources/images 中的图片文件保留； 未保存前可在左栏放弃更改找回。 */
+  /** 删除页记录：只从工作话移除顺序记录，sources/images 中的图片文件保留； 未保存前可在左栏放弃更改找回。 */
   function handleDeletePage(): void {
     if (selectedPath == null) {
       return;
@@ -277,7 +277,7 @@
     }
   }
 
-  /** 键盘重排：在卷内换位，到边界自动跨入相邻卷首 / 末。 */
+  /** 键盘重排：在话内换位，到边界自动跨入相邻话首 / 末。 */
   function keyboardMove(delta: 1 | -1): void {
     if (selectedPath == null) {
       return;
@@ -345,7 +345,7 @@
     }
   }
 
-  /** 键盘卷重排：选中页所在卷整体上移 / 下移一位。 */
+  /** 键盘话重排：选中页所在话整体上移 / 下移一位。 */
   function keyboardMoveVolume(delta: 1 | -1): void {
     if (selectedPath == null) {
       return;
@@ -442,8 +442,8 @@
               <input
                 bind:this={newVolumeInput}
                 bind:value={newTitle}
-                aria-label={m.comic_edit_volume_new()}
-                placeholder={m.comic_edit_volume_name_placeholder()}
+                aria-label={m.comic_edit_episode_new()}
+                placeholder={m.comic_edit_episode_name_placeholder()}
                 onkeydown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
@@ -458,7 +458,7 @@
               />
               <div class="flex gap-2">
                 <Button class="flex-1" size="sm" disabled={saving} onclick={handleCreateVolume}>
-                  {m.comic_edit_volume_create()}
+                  {m.comic_edit_episode_create()}
                 </Button>
                 <Button
                   variant="outline"
@@ -482,7 +482,7 @@
                   newTitle = "";
                 }}
               >
-                {m.comic_edit_volume_new()}
+                {m.comic_edit_episode_new()}
               </Button>
             {/if}
           </div>
@@ -581,8 +581,8 @@
           <CardSection title={m.comic_edit_info_section()}>
             {#if location != null && selectedPath != null}
               <CardRow
-                label={m.comic_edit_info_volume()}
-                description={location.title ?? m.files_untitled_volume()}
+                label={m.comic_edit_info_episode()}
+                description={location.title ?? m.comic_untitled_episode()}
               />
               <CardRow label={m.comic_edit_info_file()} description={pageFileName(selectedPath)} />
               <CardRow label={m.comic_edit_info_path()} description={selectedPath} />
@@ -615,11 +615,11 @@
 />
 <ConfirmDialog
   bind:open={deleteConfirmOpen}
-  title={m.comic_edit_volume_delete_title()}
-  description={m.comic_edit_volume_delete_description({
-    title: deleteTargetTitle ?? m.files_untitled_volume(),
+  title={m.comic_edit_episode_delete_title()}
+  description={m.comic_edit_episode_delete_description({
+    title: deleteTargetTitle ?? m.comic_untitled_episode(),
   })}
   cancelLabel={m.projects_create_cancel()}
-  confirmLabel={m.comic_edit_volume_delete_ok()}
+  confirmLabel={m.comic_edit_episode_delete_ok()}
   onConfirm={handleDeleteConfirm}
 />

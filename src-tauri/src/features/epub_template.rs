@@ -130,7 +130,7 @@ mod tests {
             "structural placeholders must stay intact until apply phase"
         );
         let comic = fixture_root(ProjectType::Comic);
-        let page = read_template_file_in(&comic, "EPUB/page/page-template.xhtml")
+        let page = read_template_file_in(&comic, "EPUB/pages/page-template.xhtml")
             .expect("read comic page");
         assert!(page.contains("{{PAGE_IMAGE_HREF}}"));
     }

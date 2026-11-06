@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use super::novel_files::NovelContent;
+use super::project_metadata::ProjectMetadata;
 use super::projects::ProjectType;
 
 /// 构建产物目录：`<uuid>/build/`，与 `sources/` / `metadata.json` 同级。
@@ -82,8 +83,8 @@ pub struct FormatOutcome {
     pub failed: Vec<String>,
 }
 
-/// XML 文本转义：`&` 必须最先替换，避免二次转义。
-fn xml_escape(text: &str) -> String {
+/// XML 文本转义：`&` 必须最先替换，避免二次转义（漫画构建共用）。
+pub fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -143,8 +144,8 @@ fn is_formattable(rel_posix: &str) -> bool {
     is_editable_text(rel_posix)
 }
 
-/// 封面扩展名到 EPUB 媒体类型：导入白名单的子集，未命中直接报错。
-fn cover_media_type(ext: &str) -> anyhow::Result<&'static str> {
+/// 封面扩展名到 EPUB 媒体类型：导入白名单的子集，未命中直接报错（漫画构建共用）。
+pub fn cover_media_type(ext: &str) -> anyhow::Result<&'static str> {
     match ext {
         "jpg" | "jpeg" => Ok("image/jpeg"),
         "png" => Ok("image/png"),
@@ -154,8 +155,8 @@ fn cover_media_type(ext: &str) -> anyhow::Result<&'static str> {
     }
 }
 
-/// 构建产物写入：建父目录后落盘。
-fn write_bytes(build_dir: &Path, rel: &str, bytes: &[u8]) -> anyhow::Result<()> {
+/// 构建产物写入：建父目录后落盘（漫画构建共用）。
+pub fn write_bytes(build_dir: &Path, rel: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let path = resolve_build_path(build_dir, rel)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -163,6 +164,91 @@ fn write_bytes(build_dir: &Path, rel: &str, bytes: &[u8]) -> anyhow::Result<()> 
     }
     std::fs::write(&path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// 其它元数据：空值省略，系列三件套成组出现（漫画构建共用同口径）。
+pub fn other_metadata_xml(metadata: &ProjectMetadata) -> String {
+    let mut other_metadata = Vec::new();
+    if !metadata.publisher.is_empty() {
+        other_metadata.push(format!(
+            "    <dc:publisher>{}</dc:publisher>",
+            xml_escape(&metadata.publisher)
+        ));
+    }
+    for subject in &metadata.subjects {
+        other_metadata.push(format!(
+            "    <dc:subject>{}</dc:subject>",
+            xml_escape(subject)
+        ));
+    }
+    if let Some(date) = metadata.date_published.as_deref() {
+        other_metadata.push(format!("    <dc:date>{}</dc:date>", xml_escape(date)));
+    }
+    if !metadata.rights.is_empty() {
+        other_metadata.push(format!(
+            "    <dc:rights>{}</dc:rights>",
+            xml_escape(&metadata.rights)
+        ));
+    }
+    if !metadata.series.is_empty() {
+        other_metadata.push(format!(
+            "    <meta property=\"belongs-to-collection\" id=\"series\">{}</meta>",
+            xml_escape(&metadata.series)
+        ));
+        other_metadata.push(
+            "    <meta refines=\"#series\" property=\"collection-type\">series</meta>".to_string(),
+        );
+        if !metadata.volume.is_empty() {
+            other_metadata.push(format!(
+                "    <meta refines=\"#series\" property=\"group-position\">{}</meta>",
+                xml_escape(&metadata.volume)
+            ));
+        }
+    }
+    if !metadata.source.is_empty() {
+        other_metadata.push(format!(
+            "    <dc:source>{}</dc:source>",
+            xml_escape(&metadata.source)
+        ));
+    }
+    other_metadata.join("\n")
+}
+
+/// 封面资源：有导入才拷贝图片并挂清单，无封面回落书名块（漫画构建共用）。
+/// 清单 `href` 与正文 `src` 均相对 `EPUB/`（OPF 与 cover 页同级），包内写盘路径的前缀须剥掉。
+pub fn cover_assets_in(
+    project_dir: &Path,
+    build_dir: &Path,
+    metadata: &ProjectMetadata,
+    book_title_escaped: &str,
+) -> (String, String) {
+    let cover_rel = metadata.cover.as_deref().and_then(|rel| {
+        let source = project_dir.join(rel);
+        let bytes = std::fs::read(&source).ok()?;
+        let ext = source
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)?;
+        let media = cover_media_type(&ext).ok()?;
+        let href = format!("{COVER_DIR}/{COVER_STEM}.{ext}");
+        write_bytes(build_dir, &href, &bytes).ok()?;
+        Some((href, media))
+    });
+    match &cover_rel {
+        Some((href, media)) => {
+            let opf_href = href.trim_start_matches("EPUB/");
+            (
+                format!(
+                    "    <item id=\"cover-image\" href=\"{opf_href}\" media-type=\"{media}\"/>"
+                ),
+                format!("      <img src=\"{opf_href}\" alt=\"{book_title_escaped}\"/>"),
+            )
+        }
+        None => (
+            String::new(),
+            format!("      <p class=\"book-title\">{book_title_escaped}</p>"),
+        ),
+    }
 }
 
 /// 正文行转段落：每行一个 `<p>`，空行已在解析口径丢弃。
@@ -174,8 +260,8 @@ fn body_paragraphs(lines: &[String]) -> String {
         .join("\n")
 }
 
-/// 同类数量位数（文件名补零宽度），最低 2 位，保证全书命名格式统一。
-fn count_width(count: usize) -> usize {
+/// 同类数量位数（文件名补零宽度），最低 2 位，保证全书命名格式统一（漫画构建共用）。
+pub fn count_width(count: usize) -> usize {
     count.to_string().len().max(2)
 }
 
@@ -352,34 +438,8 @@ pub fn build_in(
     }
 
     // 封面：有导入才拷贝图片并挂清单，无封面回落书名块。
-    let cover_rel = metadata.cover.as_deref().and_then(|rel| {
-        let source = project_dir.join(rel);
-        let bytes = std::fs::read(&source).ok()?;
-        let ext = source
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)?;
-        let media = cover_media_type(&ext).ok()?;
-        let href = format!("{COVER_DIR}/{COVER_STEM}.{ext}");
-        write_bytes(&build_dir, &href, &bytes).ok()?;
-        Some((href, media))
-    });
-    let (cover_item, cover_block) = match &cover_rel {
-        // 清单 `href` 与正文 `src` 均相对 `EPUB/`（OPF 与 cover 页同级），包内写盘路径的前缀须剥掉。
-        Some((href, media)) => {
-            let opf_href = href.trim_start_matches("EPUB/");
-            (
-                format!(
-                    "    <item id=\"cover-image\" href=\"{opf_href}\" media-type=\"{media}\"/>"
-                ),
-                format!("      <img src=\"{opf_href}\" alt=\"{book_title}\"/>"),
-            )
-        }
-        None => (
-            String::new(),
-            format!("      <p class=\"book-title\">{book_title}</p>"),
-        ),
-    };
+    let (cover_item, cover_block) =
+        cover_assets_in(project_dir, &build_dir, &metadata, &book_title);
 
     // 扉页：简介非空才出描述块。
     let description_block = if metadata.description.is_empty() {
@@ -400,49 +460,7 @@ pub fn build_in(
     };
 
     // 其它元数据：空值省略，系列三件套成组出现。
-    let mut other_metadata = Vec::new();
-    if !metadata.publisher.is_empty() {
-        other_metadata.push(format!(
-            "    <dc:publisher>{}</dc:publisher>",
-            xml_escape(&metadata.publisher)
-        ));
-    }
-    for subject in &metadata.subjects {
-        other_metadata.push(format!(
-            "    <dc:subject>{}</dc:subject>",
-            xml_escape(subject)
-        ));
-    }
-    if let Some(date) = metadata.date_published.as_deref() {
-        other_metadata.push(format!("    <dc:date>{}</dc:date>", xml_escape(date)));
-    }
-    if !metadata.rights.is_empty() {
-        other_metadata.push(format!(
-            "    <dc:rights>{}</dc:rights>",
-            xml_escape(&metadata.rights)
-        ));
-    }
-    if !metadata.series.is_empty() {
-        other_metadata.push(format!(
-            "    <meta property=\"belongs-to-collection\" id=\"series\">{}</meta>",
-            xml_escape(&metadata.series)
-        ));
-        other_metadata.push(
-            "    <meta refines=\"#series\" property=\"collection-type\">series</meta>".to_string(),
-        );
-        if !metadata.volume.is_empty() {
-            other_metadata.push(format!(
-                "    <meta refines=\"#series\" property=\"group-position\">{}</meta>",
-                xml_escape(&metadata.volume)
-            ));
-        }
-    }
-    if !metadata.source.is_empty() {
-        other_metadata.push(format!(
-            "    <dc:source>{}</dc:source>",
-            xml_escape(&metadata.source)
-        ));
-    }
+    let other_metadata = other_metadata_xml(&metadata);
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut opf = template("EPUB/content.opf")?
@@ -451,7 +469,7 @@ pub fn build_in(
         .replace("{{BOOK_MODIFIED}}", &now)
         .replace("{{BOOK_AUTHOR}}", &book_author)
         .replace("{{CONTRIBUTOR}}", &xml_escape(&metadata.contributor))
-        .replace("{{OTHER_METADATA}}", &other_metadata.join("\n"))
+        .replace("{{OTHER_METADATA}}", &other_metadata)
         .replace("{{COVER_ITEM}}", &cover_item)
         .replace("{{MANIFEST_ITEMS}}", &manifest_items.join("\n"))
         .replace("{{NAV_ITEMREF}}", "")

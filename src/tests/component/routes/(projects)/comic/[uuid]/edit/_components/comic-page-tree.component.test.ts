@@ -14,7 +14,7 @@ const deleteRequestMock = vi.hoisted(() => vi.fn());
 function volumes(): WorkingVolume[] {
   return [
     { title: null, pages: ["a.jpg", "b.jpg"] },
-    { title: "第1卷", pages: ["第1卷/01.jpg"] },
+    { title: "第1话", pages: ["第1话/01.jpg"] },
   ];
 }
 
@@ -60,14 +60,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/** 分卷默认折叠：先点开全部卷头，再操作行。 */
+/** 分话默认折叠：先点开全部话头，再操作行。 */
 async function expandAll() {
   await fireEvent.click(screen.getByRole("button", { name: /Untitled/ }));
-  await fireEvent.click(screen.getByRole("button", { name: /第1卷/ }));
+  await fireEvent.click(screen.getByRole("button", { name: /第1话/ }));
 }
 
 describe("页序树拖拽", () => {
-  it("分卷默认折叠，点击卷头后展开行", async () => {
+  it("分话默认折叠，点击话头后展开行", async () => {
     renderTree();
     expect(screen.queryByRole("button", { name: /a\.jpg/ })).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: /Untitled/ }));
@@ -109,21 +109,21 @@ describe("页序树拖拽", () => {
     expect(moveMock).not.toHaveBeenCalled();
   });
 
-  it("放在卷头追加到该卷末尾，支持跨卷", async () => {
+  it("放在话头追加到该话末尾，支持跨话", async () => {
     renderTree();
-    // 卷头本身始终可见：展开源卷取行，直接往折叠卷头上放。
+    // 话头本身始终可见：展开源话取行，直接往折叠话头上放。
     await fireEvent.click(screen.getByRole("button", { name: /Untitled/ }));
     const transfer = makeTransfer();
     const source = screen.getByRole("button", { name: /a\.jpg/ });
     await fireEvent(source, dragEvent("dragstart", transfer));
-    const header = screen.getByRole("button", { name: /第1卷/ });
+    const header = screen.getByRole("button", { name: /第1话/ });
     await fireEvent(header, dragEvent("dragover", transfer));
     await fireEvent(header, dragEvent("drop", transfer));
     expect(moveMock).toHaveBeenCalledOnce();
     expect(moveMock).toHaveBeenCalledWith({ volume: 0, index: 0 }, { volume: 1, edge: "append" });
   });
 
-  it("拖卷头到另一卷头提交卷排序", async () => {
+  it("拖话头到另一话头提交话排序", async () => {
     const { container } = renderTree();
     const headers = container.querySelectorAll('button[draggable="true"]');
     expect(headers.length).toBe(2);
@@ -137,22 +137,22 @@ describe("页序树拖拽", () => {
 
   it("改名提交走回调，空标题内联报错不提交", async () => {
     renderTree();
-    const pencils = screen.getAllByRole("button", { name: /Rename volume/ });
+    const pencils = screen.getAllByRole("button", { name: /Rename episode/ });
     await fireEvent.click(pencils[1]);
     const input = screen.getByRole("textbox");
-    await fireEvent.input(input, { target: { value: "  新卷  " } });
+    await fireEvent.input(input, { target: { value: "  新话  " } });
     await fireEvent.keyDown(input, { key: "Enter" });
     expect(renameMock).toHaveBeenCalledOnce();
-    expect(renameMock).toHaveBeenCalledWith(1, "新卷");
+    expect(renameMock).toHaveBeenCalledWith(1, "新话");
 
     vi.clearAllMocks();
-    const freshPencils = screen.getAllByRole("button", { name: /Rename volume/ });
+    const freshPencils = screen.getAllByRole("button", { name: /Rename episode/ });
     await fireEvent.click(freshPencils[0]);
     const emptyInput = screen.getByRole("textbox");
     await fireEvent.input(emptyInput, { target: { value: "   " } });
     await fireEvent.keyDown(emptyInput, { key: "Enter" });
     expect(renameMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Volume title is required")).not.toBeNull();
+    expect(screen.getByText("Episode title is required")).not.toBeNull();
   });
 
   it("行尾展示图片大小，缺失不展示", async () => {
@@ -163,12 +163,12 @@ describe("页序树拖拽", () => {
     expect(screen.queryAllByText("0 B").length).toBe(0);
   });
 
-  it("仅空卷显示删除按钮，点击走删除请求", async () => {
+  it("仅空话显示删除按钮，点击走删除请求", async () => {
     renderTree([
-      { title: "空卷", pages: [] },
+      { title: "空话", pages: [] },
       { title: "正文", pages: ["b.jpg"] },
     ]);
-    const deletes = screen.getAllByRole("button", { name: /Delete volume/ });
+    const deletes = screen.getAllByRole("button", { name: /Delete episode/ });
     expect(deletes.length).toBe(1);
     expect(screen.getByTitle("Move all pages out before deleting")).not.toBeNull();
     await fireEvent.click(deletes[0]);

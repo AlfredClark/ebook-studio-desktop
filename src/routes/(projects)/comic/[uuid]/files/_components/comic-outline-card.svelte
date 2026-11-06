@@ -1,13 +1,13 @@
 <script lang="ts">
-  // 识别结果卡（哑组件）：统计置顶 + 卷页树中层独占滚动；
-  // 分卷按卷折叠（默认收起），平铺超 100 页按序号分段折叠，
-  // 大卷内再按 100 页分组展示，页按钮点选后由步骤页加载预览。
+  // 识别结果卡（哑组件）：统计置顶 + 话页树中层独占滚动；
+  // 分话按话折叠（默认收起），平铺超 100 页按序号分段折叠，
+  // 大话内再按 100 页分组展示，页按钮点选后由步骤页加载预览。
   import * as Accordion from "#components/shadcn-svelte/accordion";
   import type { ComicOutline, ComicPageOutline } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
   import { formatBytes, formatPaddedPageRange, pageFileName } from "./comic-files";
 
-  /** 未分卷时的分组大小：超限按序号分段折叠；大卷内同口径分组。 */
+  /** 未分话时的分组大小：超限按序号分段折叠；大话内同口径分组。 */
   const PAGE_GROUP_SIZE = 100;
 
   let {
@@ -20,10 +20,10 @@
     onSelect: (path: string) => void;
   } = $props();
 
-  /** 是否按卷折叠：多卷，或单卷有标题时折叠；单个无标题卷按分组规则处理。 */
+  /** 是否按话折叠：多话，或单话有标题时折叠；单个无标题话按分组规则处理。 */
   const grouped = $derived(outline.volumes.length > 1 || outline.volumes[0]?.title != null);
 
-  /** 未分卷时的序号分组：仅一组时不折叠。 */
+  /** 未分话时的序号分组：仅一组时不折叠。 */
   const flatGroups = $derived(
     !grouped && outline.volumes.length === 1
       ? chunk(outline.volumes[0].pages, PAGE_GROUP_SIZE)
@@ -40,12 +40,12 @@
     return groups;
   }
 
-  /** 卷内分组：大卷按 100 页分段展示组头，避免一次性渲染上千按钮。 */
+  /** 话内分组：大话按 100 页分段展示组头，避免一次性渲染上千按钮。 */
   function volumeGroups(pages: ComicPageOutline[]): ComicPageOutline[][] {
     return chunk(pages, PAGE_GROUP_SIZE);
   }
 
-  /** 卷内序号基址：分组头按卷内序号展示范围。 */
+  /** 话内序号基址：分组头按话内序号展示范围。 */
   function groupRange(
     volume: { pages: ComicPageOutline[] },
     groupIndex: number,
@@ -62,7 +62,7 @@
   <div class="flex shrink-0 flex-col divide-y divide-border border-b border-border">
     <div class="grid grid-cols-2 gap-x-4 py-3">
       <div class="flex items-baseline justify-between gap-2">
-        <p class="text-sm font-medium">{m.comic_files_source_volumes()}</p>
+        <p class="text-sm font-medium">{m.comic_files_source_episodes()}</p>
         <p class="text-sm tabular-nums">{outline.volume_count}</p>
       </div>
       <div class="flex items-baseline justify-between gap-2">
@@ -89,10 +89,10 @@
           >
             <Accordion.Trigger>
               <span class="min-w-0 flex-1 truncate text-left text-sm font-medium">
-                {volume.title ?? m.files_untitled_volume()}
+                {volume.title ?? m.comic_untitled_episode()}
               </span>
               <span class="mr-2 shrink-0 text-sm font-normal text-muted-foreground tabular-nums">
-                {m.comic_files_outline_volume_pages({ count: volume.pages.length })}
+                {m.comic_files_outline_episode_pages({ count: volume.pages.length })}
               </span>
             </Accordion.Trigger>
             <Accordion.Content>
@@ -142,7 +142,7 @@
                 {m.comic_files_outline_page_range({ start: range.start, end: range.end })}
               </span>
               <span class="mr-2 shrink-0 text-sm font-normal text-muted-foreground tabular-nums">
-                {m.comic_files_outline_volume_pages({ count: group.length })}
+                {m.comic_files_outline_episode_pages({ count: group.length })}
               </span>
             </Accordion.Trigger>
             <Accordion.Content>
@@ -171,7 +171,7 @@
     {:else}
       {#each outline.volumes as volume, i (i)}
         <div class="flex flex-col gap-1 py-3">
-          <p class="text-sm font-medium">{volume.title ?? m.files_untitled_volume()}</p>
+          <p class="text-sm font-medium">{volume.title ?? m.comic_untitled_episode()}</p>
           <div class="flex flex-col gap-0.5">
             {#each volume.pages as page (page.path)}
               <button

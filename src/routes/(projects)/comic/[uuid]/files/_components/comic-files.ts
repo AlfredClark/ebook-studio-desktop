@@ -25,7 +25,7 @@ export function formatPaddedPageRange(
   };
 }
 
-/** 取 POSIX 路径的文件名：`第1卷/001.jpg` 取 `001.jpg`。 */
+/** 取 POSIX 路径的文件名：`第1话/001.jpg` 取 `001.jpg`。 */
 export function pageFileName(path: string): string {
   const index = path.lastIndexOf("/");
   return index < 0 ? path : path.slice(index + 1);

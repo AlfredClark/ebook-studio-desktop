@@ -23,7 +23,7 @@ export const commands = {
 	getComicContentOutline: (id: string) => typedError<{
 	/**  组织形态。 */
 	mode: ComicMode,
-	/**  卷数。 */
+	/**  话数。 */
 	volume_count: number,
 	/**  图片总页数。 */
 	page_count: number,
@@ -31,13 +31,39 @@ export const commands = {
 	total_bytes: number,
 	/**  复制与解析时跳过的无效文件数：导入元信息记账 + 落盘扫描合并，展示用。 */
 	ignored_count: number,
-	/**  卷页树（已排序）。 */
+	/**  话页树（已排序）。 */
 	volumes: ComicVolumeOutline[],
 } | null, CommandError>(__TAURI_INVOKE("get_comic_content_outline", { id })),
 	/**  查询漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。 */
 	getComicImagePath: (id: string, path: string) => typedError<ComicImageInfo, CommandError>(__TAURI_INVOKE("get_comic_image_path", { id, path })),
-	/**  全量更新漫画分卷结构：标题可改、卷可增删排序，页须全量覆盖，落盘后返回新大纲。 */
+	/**  全量更新漫画分话结构：标题可改、话可增删排序，页须全量覆盖，落盘后返回新大纲。 */
 	updateComicVolumes: (id: string, volumes: ComicVolumeInput[]) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("update_comic_volumes", { id, volumes })),
+	/**  构建漫画：清空构建目录后全量重生成，返回文件树。 */
+	buildComicContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_comic_content", { id, titles })),
+	/**  预览标题格式：按话取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
+	previewComicTxtTitle: (id: string, kind: TxtTitleKind, pattern: string, isVolume: boolean, numbering: ChapterNumbering) => typedError<string, CommandError>(__TAURI_INVOKE("preview_comic_txt_title", { id, kind, pattern, isVolume, numbering })),
+	/**
+	 *  清空构建产物：删除 `build/` 与打包目录 `dist/`，前端回到构建引导，
+	 *  下游打包与导出页回到空态；目录不存在视为成功。
+	 */
+	clearComicBuildContent: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("clear_comic_build_content", { id })),
+	/**  读取构建树：未构建回 `None`，前端展示空态引导构建。 */
+	getComicBuildTree: (id: string) => typedError<{
+	/**  构建根下的顶层节点（已排序，目录在前）。 */
+	files: BuildFileNode[],
+	/**  全部文件数（不计目录）。 */
+	file_count: number,
+} | null, CommandError>(__TAURI_INVOKE("get_comic_build_tree", { id })),
+	/**  读取构建文件：二进制回 `content: None`，固定文件标记不可编辑。 */
+	getComicBuildFile: (id: string, path: string) => typedError<BuildFileContent, CommandError>(__TAURI_INVOKE("get_comic_build_file", { id, path })),
+	/**  查询构建图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。 */
+	getComicBuildImagePath: (id: string, path: string) => typedError<BuildImageInfo, CommandError>(__TAURI_INVOKE("get_comic_build_image_path", { id, path })),
+	/**  保存构建文件：固定文件与二进制拒绝写入。 */
+	updateComicBuildFile: (id: string, path: string, content: string) => typedError<null, CommandError>(__TAURI_INVOKE("update_comic_build_file", { id, path, content })),
+	/**  格式化编辑器文本：纯内存返回格式化文本，不读盘不落盘；路径仅作可格式化校验。 */
+	formatComicBuildText: (id: string, path: string, content: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_comic_build_text", { id, path, content })),
+	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
+	formatAllComicBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_comic_build_files", { id })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
 	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */
@@ -296,7 +322,7 @@ export type ComicImageInfo = {
 export type ComicImagesStatus = {
 	/**  `sources/images` 是否存在且含有效图片。 */
 	exists: boolean,
-	/**  卷数：平铺为 1（含收纳卷在内按实际卷计数）。 */
+	/**  话数：平铺为 1（含收纳话在内按实际话计数）。 */
 	volume_count: number,
 	/**  图片总页数。 */
 	page_count: number,
@@ -306,14 +332,14 @@ export type ComicImagesStatus = {
 	updated_at: string | null,
 };
 
-/**  漫画组织形态：平铺单卷，或按子目录分卷。 */
+/**  漫画组织形态：平铺单话，或按子目录分话。 */
 export type ComicMode = "flat" | "volumes";
 
 /**  解析大纲：右栏识别结果的只读展示，图片二进制不出 IPC，只出清单。 */
 export type ComicOutline = {
 	/**  组织形态。 */
 	mode: ComicMode,
-	/**  卷数。 */
+	/**  话数。 */
 	volume_count: number,
 	/**  图片总页数。 */
 	page_count: number,
@@ -321,7 +347,7 @@ export type ComicOutline = {
 	total_bytes: number,
 	/**  复制与解析时跳过的无效文件数：导入元信息记账 + 落盘扫描合并，展示用。 */
 	ignored_count: number,
-	/**  卷页树（已排序）。 */
+	/**  话页树（已排序）。 */
 	volumes: ComicVolumeOutline[],
 };
 
@@ -333,19 +359,19 @@ export type ComicPageOutline = {
 	size_bytes: number,
 };
 
-/**  卷输入：编辑页全量提交的单卷（标题可改、卷可增删排序，页须全量覆盖）。 */
+/**  话输入：编辑页全量提交的单话（标题可改、话可增删排序，页须全量覆盖）。 */
 export type ComicVolumeInput = {
-	/**  卷标题；`None` 仅允许单卷（平铺保持无标题）。 */
+	/**  话标题；`None` 仅允许单话（平铺保持无标题）。 */
 	title: string | null,
-	/**  卷内有序路径（相对 `images/` 的 POSIX 路径）。 */
+	/**  话内有序路径（相对 `images/` 的 POSIX 路径）。 */
 	pages: string[],
 };
 
-/**  卷大纲：右栏识别结果的只读条目。 */
+/**  话大纲：右栏识别结果的只读条目。 */
 export type ComicVolumeOutline = {
-	/**  卷标题；平铺无标题卷为 `None`，前端回落“未分卷”。 */
+	/**  话标题；平铺无标题话为 `None`，前端回落“未分话”。 */
 	title: string | null,
-	/**  卷内页面（含路径与字节数）。 */
+	/**  话内页面（含路径与字节数）。 */
 	pages: ComicPageOutline[],
 };
 

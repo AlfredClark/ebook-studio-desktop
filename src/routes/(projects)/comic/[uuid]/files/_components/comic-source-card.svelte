@@ -37,7 +37,7 @@
   {#if status.exists}
     <div class="grid grid-cols-2 gap-x-4 py-3">
       <div class="min-w-0">
-        <p class="text-sm font-medium">{m.comic_files_source_volumes()}</p>
+        <p class="text-sm font-medium">{m.comic_files_source_episodes()}</p>
         <p class="text-sm break-words tabular-nums">{status.volume_count}</p>
       </div>
       <div class="min-w-0">

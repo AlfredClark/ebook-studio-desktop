@@ -1,9 +1,9 @@
 <script lang="ts">
-  // 漫画页序树（哑组件）：平铺直列，分卷用自有可折叠卷（默认折叠，拖拽悬停展开）；
+  // 漫画页序树（哑组件）：平铺直列，分话用自有可折叠话（默认折叠，拖拽悬停展开）；
   // 不用 Accordion——折叠卸载重建会替换被拖节点导致拖拽夭折，且跨组件事件透传不可靠；
-  // 页行原生 HTML5 拖拽（上下半区定插入点），卷头整行可拖拽排序；
-  // 页拖到卷头 / 卷内容区为追加，卷拖到卷头为排序、拖到行忽略；
-  // 卷头支持改名（内联输入）与删空卷；只改本地工作卷，落盘走父组件保存回调。
+  // 页行原生 HTML5 拖拽（上下半区定插入点），话头整行可拖拽排序；
+  // 页拖到话头 / 话内容区为追加，话拖到话头为排序、拖到行忽略；
+  // 话头支持改名（内联输入）与删空话；只改本地工作话，落盘走父组件保存回调。
   import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
   import GripVerticalIcon from "@lucide/svelte/icons/grip-vertical";
   import PencilIcon from "@lucide/svelte/icons/pencil";
@@ -14,10 +14,10 @@
   import { validateVolumeTitle, type VolumeTitleError } from "./comic-order";
   import { formatBytes, pageFileName } from "../../files/_components/comic-files";
 
-  /** 折叠卷悬停展开延迟：给用户把页拖进去的机会，太短易误触。 */
+  /** 折叠话悬停展开延迟：给用户把页拖进去的机会，太短易误触。 */
   const HOVER_EXPAND_MS = 450;
 
-  /** 拖拽载荷：页带来源与 path 自检，卷只带下标。 */
+  /** 拖拽载荷：页带来源与 path 自检，话只带下标。 */
   type DragPayload =
     | { kind: "page"; volume: number; index: number; path: string }
     | { kind: "volume"; index: number };
@@ -43,16 +43,16 @@
     onDeleteRequest: (volume: number) => void;
   } = $props();
 
-  /** 是否按卷折叠：多卷，或单卷有标题时折叠；单个无标题卷平铺。 */
+  /** 是否按话折叠：多话，或单话有标题时折叠；单个无标题话平铺。 */
   const grouped = $derived(volumes.length > 1 || volumes[0]?.title != null);
-  /** 展开卷：默认全折叠（拖拽悬停自动展开）。 */
+  /** 展开话：默认全折叠（拖拽悬停自动展开）。 */
   let openVolumes = $state<string[]>([]);
-  /** 拖拽源：页 path 或卷下标，行 / 卷头半透明 + 放置自检用。 */
+  /** 拖拽源：页 path 或话下标，行 / 话头半透明 + 放置自检用。 */
   let dragPage = $state<string | null>(null);
   let dragVolume = $state<number | null>(null);
-  /** 放置提示：行间插入位、卷末追加或卷间排序位。 */
+  /** 放置提示：行间插入位、话末追加或话间排序位。 */
   let hint = $state<DropTarget | null>(null);
-  /** 改名态：正在编辑的卷与草稿，错误内联展示。 */
+  /** 改名态：正在编辑的话与草稿，错误内联展示。 */
   let editingVolume = $state<number | null>(null);
   let draft = $state("");
   let editError = $state<VolumeTitleError | null>(null);
@@ -61,20 +61,20 @@
   $effect(() => {
     renameInput?.focus();
   });
-  /** 折叠卷悬停展开计时器：离开 / 放下 / 结束时清理。 */
+  /** 折叠话悬停展开计时器：离开 / 放下 / 结束时清理。 */
   let expandTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** 卷标识：下标稳定（本页不跨组件复用，按渲染序即可）。 */
+  /** 话标识：下标稳定（本页不跨组件复用，按渲染序即可）。 */
   function volumeId(volume: number): string {
     return `volume-${volume}`;
   }
 
-  /** 卷是否展开。 */
+  /** 话是否展开。 */
   function isOpen(volume: number): boolean {
     return openVolumes.includes(volumeId(volume));
   }
 
-  /** 卷头点击：展开 / 折叠切换。 */
+  /** 话头点击：展开 / 折叠切换。 */
   function toggleVolume(volume: number): void {
     const id = volumeId(volume);
     openVolumes = isOpen(volume)
@@ -144,7 +144,7 @@
     clearExpandTimer();
   }
 
-  /** 行拖起：写入页载荷，标记源行，冒泡到卷头前截停。 */
+  /** 行拖起：写入页载荷，标记源行，冒泡到话头前截停。 */
   function handleRowDragStart(event: DragEvent, volume: number, index: number, path: string): void {
     event.stopPropagation();
     event.dataTransfer?.setData(
@@ -157,7 +157,7 @@
     dragPage = path;
   }
 
-  /** 卷拖起：写入卷载荷，标记源卷。 */
+  /** 话拖起：写入话载荷，标记源话。 */
   function handleVolumeDragStart(event: DragEvent, volume: number): void {
     event.dataTransfer?.setData("text/plain", JSON.stringify({ kind: "volume", index: volume }));
     if (event.dataTransfer != null) {
@@ -166,7 +166,7 @@
     dragVolume = volume;
   }
 
-  /** 行悬停：页载荷定插入提示，卷载荷忽略，冒泡到卷容器前截停。 */
+  /** 行悬停：页载荷定插入提示，话载荷忽略，冒泡到话容器前截停。 */
   function handleRowDragOver(event: DragEvent, volume: number, index: number): void {
     event.preventDefault();
     event.stopPropagation();
@@ -188,7 +188,7 @@
     }
   }
 
-  /** 行放下：页载荷自检参照项后提交，卷载荷忽略。 */
+  /** 行放下：页载荷自检参照项后提交，话载荷忽略。 */
   function handleRowDrop(event: DragEvent, volume: number, index: number): void {
     event.preventDefault();
     event.stopPropagation();
@@ -208,7 +208,7 @@
     );
   }
 
-  /** 卷追加 / 排序悬停：页载荷追加，卷载荷排序；折叠卷悬停展开。 */
+  /** 话追加 / 排序悬停：页载荷追加，话载荷排序；折叠话悬停展开。 */
   function handleHeaderDragOver(event: DragEvent, volume: number): void {
     event.preventDefault();
     event.stopPropagation();
@@ -251,7 +251,7 @@
     }
   }
 
-  /** 卷头放下：页载荷追加，卷载荷按边排序。 */
+  /** 话头放下：页载荷追加，话载荷按边排序。 */
   function handleHeaderDrop(event: DragEvent, volume: number): void {
     event.preventDefault();
     event.stopPropagation();
@@ -286,7 +286,7 @@
     }
   }
 
-  /** 离开卷区时清追加提示并取消悬停展开。 */
+  /** 离开话区时清追加提示并取消悬停展开。 */
   function handleVolumeDragLeave(event: DragEvent, volume: number): void {
     const current = targetOf(event);
     if (current == null) {
@@ -338,12 +338,12 @@
     return null;
   }
 
-  /** 卷是否命中追加提示。 */
+  /** 话是否命中追加提示。 */
   function appendHinted(volume: number): boolean {
     return hint?.volume === volume && hint?.edge === "append";
   }
 
-  /** 卷是否命中排序提示：返回边，无命中回 null。 */
+  /** 话是否命中排序提示：返回边，无命中回 null。 */
   function volumeHintEdge(volume: number): "before" | "after" | null {
     if (hint?.volume === volume && hint?.index === undefined && hint?.edge !== "append") {
       return hint.edge;
@@ -424,7 +424,7 @@
   {@const open = isOpen(volume)}
   {@const orderEdge = volumeHintEdge(volume)}
   {@const editing = editingVolume === volume}
-  <section aria-label={title ?? m.files_untitled_volume()}>
+  <section aria-label={title ?? m.comic_untitled_episode()}>
     {#if orderEdge === "before"}
       <div class="mx-3 h-0.5 rounded-full bg-primary" aria-hidden="true"></div>
     {/if}
@@ -439,7 +439,7 @@
           <input
             bind:this={renameInput}
             bind:value={draft}
-            aria-label={m.comic_edit_volume_rename()}
+            aria-label={m.comic_edit_episode_rename()}
             placeholder={title ?? ""}
             onkeydown={(event) => {
               if (event.key === "Enter") {
@@ -454,11 +454,13 @@
             class="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:border-ring"
           />
           {#if editError === "empty"}
-            <p class="shrink-0 text-xs text-destructive">{m.comic_edit_volume_title_empty()}</p>
+            <p class="shrink-0 text-xs text-destructive">{m.comic_edit_episode_title_empty()}</p>
           {:else if editError === "duplicate"}
-            <p class="shrink-0 text-xs text-destructive">{m.comic_edit_volume_title_duplicate()}</p>
+            <p class="shrink-0 text-xs text-destructive">
+              {m.comic_edit_episode_title_duplicate()}
+            </p>
           {:else if editError === "too_long"}
-            <p class="shrink-0 text-xs text-destructive">{m.comic_edit_volume_title_too_long()}</p>
+            <p class="shrink-0 text-xs text-destructive">{m.comic_edit_episode_title_too_long()}</p>
           {/if}
         {:else}
           <button
@@ -483,16 +485,16 @@
               )}
             />
             <span class="min-w-0 flex-1 truncate">
-              {title ?? m.files_untitled_volume()}
+              {title ?? m.comic_untitled_episode()}
             </span>
             <span class="shrink-0 text-sm font-normal text-muted-foreground tabular-nums">
-              {m.comic_files_outline_volume_pages({ count: pages.length })}
+              {m.comic_files_outline_episode_pages({ count: pages.length })}
             </span>
           </button>
           <button
             type="button"
-            aria-label={m.comic_edit_volume_rename()}
-            title={m.comic_edit_volume_rename()}
+            aria-label={m.comic_edit_episode_rename()}
+            title={m.comic_edit_episode_rename()}
             onclick={() => startRename(volume)}
             ondragstart={(event) => {
               event.preventDefault();
@@ -505,8 +507,8 @@
           {#if pages.length === 0}
             <button
               type="button"
-              aria-label={m.comic_edit_volume_delete()}
-              title={m.comic_edit_volume_delete()}
+              aria-label={m.comic_edit_episode_delete()}
+              title={m.comic_edit_episode_delete()}
               onclick={() => onDeleteRequest(volume)}
               ondragstart={(event) => {
                 event.preventDefault();
@@ -519,8 +521,8 @@
           {:else}
             <span
               role="img"
-              aria-label={m.comic_edit_volume_delete_disabled_hint()}
-              title={m.comic_edit_volume_delete_disabled_hint()}
+              aria-label={m.comic_edit_episode_delete_disabled_hint()}
+              title={m.comic_edit_episode_delete_disabled_hint()}
               class="shrink-0 rounded-md p-1 text-muted-foreground/40"
             >
               <TrashIcon class="size-4" />
@@ -532,7 +534,7 @@
     {#if open}
       <div
         role="group"
-        aria-label={title ?? m.files_untitled_volume()}
+        aria-label={title ?? m.comic_untitled_episode()}
         ondragover={(event) => handleHeaderDragOver(event, volume)}
         ondragleave={(event) => handleVolumeDragLeave(event, volume)}
         ondrop={(event) => handleHeaderDrop(event, volume)}
@@ -540,7 +542,7 @@
       >
         {#if pages.length === 0}
           <p class="px-2 py-3 text-center text-xs text-muted-foreground">
-            {m.comic_edit_empty_volume()}
+            {m.comic_edit_empty_episode()}
           </p>
         {:else}
           {#each pages as path, index (path)}
@@ -571,7 +573,7 @@
   {:else}
     <div
       role="group"
-      aria-label={volumes[0]?.title ?? m.files_untitled_volume()}
+      aria-label={volumes[0]?.title ?? m.comic_untitled_episode()}
       class="flex flex-col gap-0.5 px-3"
       ondragover={(event) => handleHeaderDragOver(event, 0)}
       ondragleave={(event) => handleVolumeDragLeave(event, 0)}

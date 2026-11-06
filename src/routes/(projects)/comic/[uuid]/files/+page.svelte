@@ -20,7 +20,7 @@
   let loading = $state(true);
   let loadFailed = $state(false);
   let importing = $state(false);
-  /** 识别大纲：解析成功后落本地态，右栏渲染卷页树。 */
+  /** 识别大纲：解析成功后落本地态，右栏渲染话页树。 */
   let outline = $state<ComicOutline | null>(null);
   let parsing = $state(false);
   /** 预览选中：相对 images/ 的 POSIX 路径，与大纲数组同源。 */
@@ -60,7 +60,7 @@
     selectFirstPage();
   }
 
-  /** 默认选中首卷首个有效页，便于右侧直接预览。 */
+  /** 默认选中首话首个有效页，便于右侧直接预览。 */
   function selectFirstPage(): void {
     const first = outline?.volumes.find((volume) => volume.pages.length > 0)?.pages[0];
     selectedPath = first?.path ?? null;
