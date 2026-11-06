@@ -180,8 +180,8 @@ fn count_width(count: usize) -> usize {
 }
 
 /// 构建全量生成：先清空构建目录再写，调用前由前端确认框兜底。
-/// 文件命名：平铺沿用全局三位计数；分卷用 `chapter-<卷>-<章>`（文档顺序），
-/// 卷宽取卷总数位数、章宽取各卷最大章数位数（最低 2 位）。
+/// 文件命名：平铺沿用全局计数（宽度按总数位数、最低 3 位，历史三位命名不受影响）；
+/// 分卷用 `chapter-<卷>-<章>`（文档顺序），卷宽取卷总数位数、章宽取各卷最大章数位数（最低 2 位）。
 #[allow(clippy::too_many_lines)]
 pub fn build_in(
     project_dir: &Path,
@@ -254,6 +254,8 @@ pub fn build_in(
             .map(|volume| volume.chapters.len())
             .sum(),
     );
+    // 平铺计数宽度：沿用历史三位保底（chapter-001），总数超千时按总数位数扩宽。
+    let flat_width = continuous_width.max(3);
     // 标题模板数字补零宽度：与导出同口径（最低 2 位）。
     let volume_number_width =
         super::novel_export::number_width(content.volumes.iter().map(|volume| volume.number));
@@ -312,7 +314,7 @@ pub fn build_in(
                 }
             } else {
                 chapter_counter += 1;
-                format!("chapter-{chapter_counter:03}")
+                format!("chapter-{chapter_counter:0>flat_width$}")
             };
             let file = format!("{stem}.xhtml");
             let href = format!("EPUB/text/{file}");
@@ -1254,6 +1256,26 @@ mod tests {
         assert!(!paths.iter().any(|p| p.contains("volume-")));
         let nav = read_built(&dir, "EPUB/nav.xhtml");
         assert!(!nav.contains("<ol>\n          <ol>"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn flat_naming_widens_beyond_999_chapters() {
+        // 平铺保底三位：超千时按总数位数扩宽，1-999 同步补零到 4 位。
+        let mut text = String::new();
+        for i in 1..=1001 {
+            use std::fmt::Write as _;
+            write!(text, "第{i}章 标题{i}\n正文{i}\n").expect("write fixture");
+        }
+        let (root, dir) = fixture_project("flat-wide", &text);
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
+        let first = read_built(&dir, "EPUB/text/chapter-0001.xhtml");
+        assert!(first.contains("标题1"));
+        let last = read_built(&dir, "EPUB/text/chapter-1001.xhtml");
+        assert!(last.contains("标题1001"));
+        let nav = read_built(&dir, "EPUB/nav.xhtml");
+        assert!(nav.contains("text/chapter-0001.xhtml"));
+        assert!(nav.contains("text/chapter-1001.xhtml"));
         cleanup(&root);
     }
 
