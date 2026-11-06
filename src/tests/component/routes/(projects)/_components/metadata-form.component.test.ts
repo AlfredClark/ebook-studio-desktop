@@ -1,8 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import type { ProjectMetadata } from "../../../../../libs/commands/types";
 import MetadataForm from "../../../../../routes/(projects)/_components/metadata-form.svelte";
+
+// jsdom 缺少浮动定位所需的浏览器 API，bits-ui 弹窗用得到，仅在本文件内就地补齐。
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+if (typeof ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver;
+}
 
 // 表单纯展示：不调后端命令，回调 mock 即可覆盖提交路径。
 const saveMock = vi.hoisted(() => vi.fn());
@@ -145,5 +162,41 @@ describe("元数据表单", () => {
 
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
     expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("日历选日期后触发器展示并随保存提交，同步回填不回滚用户选择", async () => {
+    // 回归：同步 effect 曾订阅本地 datePublished，选中即被回滚为空，表现为"选择后无变化"。
+    const user = userEvent.setup();
+    renderForm({ ...baseMetadata, date_published: null }, "novel");
+
+    // 触发器经 label 关联命名（内容文案是占位符，读不到选中值）。
+    await fireEvent.click(screen.getByRole("button", { name: "Publication date" }));
+    let day15: HTMLElement | undefined;
+    await waitFor(
+      () => {
+        const days = [...document.querySelectorAll("div[data-bits-day]")];
+        day15 = days.find((el) => el.textContent?.trim() === "15") as HTMLElement | undefined;
+        expect(day15 != null).toBe(true);
+      },
+      { timeout: 8000 },
+    );
+    await user.click(day15 as HTMLElement);
+
+    // 选中即落本地态：清除按钮出现，提交携带 YYYY-MM-15。
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("button", { name: "Clear date" })).not.toBeNull();
+      },
+      { timeout: 8000 },
+    );
+    // 清除按钮叠在输入框内部：与触发器同属一个 relative 容器，而非并排兄弟。
+    const trigger = screen.getByRole("button", { name: "Publication date" });
+    const clear = screen.getByRole("button", { name: "Clear date" });
+    expect(clear.closest(".relative")).not.toBeNull();
+    expect(clear.closest(".relative")).toBe(trigger.closest(".relative"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(saveMock).toHaveBeenCalledOnce();
+    const submitted = saveMock.mock.calls[0][0] as ProjectMetadata;
+    expect(submitted.date_published).toMatch(/^\d{4}-\d{2}-15$/);
   });
 });

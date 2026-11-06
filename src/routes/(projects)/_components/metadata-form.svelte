@@ -110,7 +110,10 @@
     lastAutoRights = filled;
   }
 
-  /** 从传入元数据同步本地编辑态：挂载、后端保存返回、重置时共用。 */
+  /**
+   * 从传入元数据同步本地编辑态：挂载、后端保存返回、重置时共用。 只读 `metadata`（后端权威），禁止读本地编辑态——`$effect`
+   * 会订阅一切读到的状态，读本地会导致用户一改就被回滚（日期选不中即此因）。
+   */
   function syncFromMetadata(): void {
     title = metadata.title;
     alternative = metadata.alternative;
@@ -125,7 +128,7 @@
     series = metadata.series;
     volume = metadata.volume;
     source = metadata.source;
-    pickerValue = toDateValue(datePublished);
+    pickerValue = toDateValue(metadata.date_published ?? "");
     lastAutoRights = autoRightsFor(metadata.creator);
   }
 
@@ -307,9 +310,9 @@
           <label for="metadata-date" class="text-sm font-medium"
             >{m.metadata_date_published_label()}</label
           >
-          <div class="flex gap-1.5">
+          <div class="relative min-w-0 flex-1">
             <Popover.Root bind:open={pickerOpen}>
-              <Popover.Trigger id="metadata-date" class="min-w-0 flex-1">
+              <Popover.Trigger id="metadata-date" class="w-full">
                 {#snippet child({ props })}
                   <Button
                     {...props}
@@ -317,6 +320,7 @@
                     class={cn(
                       "w-full justify-start text-left font-normal",
                       datePublished === "" && "text-muted-foreground",
+                      datePublished !== "" && "pr-8",
                     )}
                   >
                     <CalendarIcon class="me-2 size-4" />
@@ -341,7 +345,8 @@
               <Button
                 type="button"
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
+                class="absolute top-1/2 right-1 -translate-y-1/2"
                 aria-label={m.metadata_date_clear()}
                 onclick={() => {
                   datePublished = "";
