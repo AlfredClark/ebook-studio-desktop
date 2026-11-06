@@ -8,6 +8,7 @@
 
 pub mod comic_build;
 pub mod comic_files;
+pub mod comic_package;
 pub mod config;
 pub mod metadata;
 pub mod novel_build;
@@ -42,6 +43,9 @@ macro_rules! collect_commands {
             $crate::commands::comic_build::update_comic_build_file,
             $crate::commands::comic_build::format_comic_build_text,
             $crate::commands::comic_build::format_all_comic_build_files,
+            $crate::commands::comic_package::package_comic_content,
+            $crate::commands::comic_package::get_comic_package_status,
+            $crate::commands::comic_package::validate_comic_package,
             $crate::commands::projects::list_projects,
             $crate::commands::projects::create_project,
             $crate::commands::projects::rename_project,

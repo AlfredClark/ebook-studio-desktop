@@ -378,18 +378,25 @@ pub fn validate_in(project_dir: &Path) -> anyhow::Result<ValidationOutcome> {
     Ok(from_report(&report))
 }
 
-/// 打包小说（`AppHandle` 入口）：落盘后自动校验一次；CPU 密集段进阻塞池并推送进度。
-pub async fn package_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<PackageOutcome> {
+/// 打包通用核心：落盘后自动校验一次；CPU 密集段进阻塞池并按事件名推送进度。
+/// 小说与漫画共用，事件名由调用方传入（前端按类型订阅）。
+pub async fn package_with_progress(
+    app: &tauri::AppHandle,
+    id: &str,
+    progress_event: &str,
+) -> anyhow::Result<PackageOutcome> {
     use tauri::Emitter;
 
     let dir = super::projects::resolve_project_dir(app, id)?;
     let write_dir = dir.clone();
     let handle = app.clone();
     let report_id = id.to_string();
+    let event_name = progress_event.to_string();
+    let emit_name = progress_event.to_string();
     let package = tauri::async_runtime::spawn_blocking(move || {
         let on_progress = move |done: u32, total: u32| {
             let _ = handle.emit(
-                PACKAGE_PROGRESS_EVENT,
+                event_name.as_str(),
                 PackageProgress {
                     id: report_id.clone(),
                     stage: PackageStage::Zip,
@@ -403,7 +410,7 @@ pub async fn package_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<P
     .await
     .context("package task panicked")??;
     if let Err(error) = app.emit(
-        PACKAGE_PROGRESS_EVENT,
+        emit_name.as_str(),
         PackageProgress {
             id: id.to_string(),
             stage: PackageStage::Validate,
@@ -421,6 +428,11 @@ pub async fn package_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<P
         package,
         validation,
     })
+}
+
+/// 打包小说（`AppHandle` 入口）：落盘后自动校验一次；CPU 密集段进阻塞池并推送进度。
+pub async fn package_novel(app: &tauri::AppHandle, id: &str) -> anyhow::Result<PackageOutcome> {
+    package_with_progress(app, id, PACKAGE_PROGRESS_EVENT).await
 }
 
 /// 打包状态（`AppHandle` 入口）：无产物回 `None`。

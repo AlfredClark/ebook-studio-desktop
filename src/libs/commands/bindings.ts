@@ -64,6 +64,22 @@ export const commands = {
 	formatComicBuildText: (id: string, path: string, content: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_comic_build_text", { id, path, content })),
 	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
 	formatAllComicBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_comic_build_files", { id })),
+	/**
+	 *  打包漫画：落盘 `dist/书名.epub` 后自动校验一次，进度经 `comic-package-progress` 推送。
+	 *  事件名唯一来源是 `features::comic_package::PACKAGE_PROGRESS_EVENT`，改名时前端订阅同步改。
+	 */
+	packageComicContent: (id: string) => typedError<PackageOutcome, CommandError>(__TAURI_INVOKE("package_comic_content", { id })),
+	/**  查询打包状态：无产物回 `None`，前端展示待打包空态。 */
+	getComicPackageStatus: (id: string) => typedError<{
+	/**  文件名（如 `雾镇.epub`）。 */
+	file_name: string,
+	/**  产物字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+	/**  打包时间（UTC `RFC3339`）。 */
+	updated_at: string,
+} | null, CommandError>(__TAURI_INVOKE("get_comic_package_status", { id })),
+	/**  校验已有产物：无包直接报错，前端引导先打包。 */
+	validateComicPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_comic_package", { id })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
 	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */

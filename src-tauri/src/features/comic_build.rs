@@ -304,7 +304,10 @@ pub fn build_in(
         if grouped {
             toc_entries.push(format!(
                 "        <li><a href=\"{}\">{}</a>\n          <ol>",
-                volume_href.as_deref().unwrap_or(""),
+                volume_href
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim_start_matches("EPUB/"),
                 title_escaped
             ));
             toc_entries.extend(page_toc);
