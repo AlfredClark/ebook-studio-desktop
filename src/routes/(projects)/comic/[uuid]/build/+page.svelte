@@ -1,7 +1,11 @@
 <script lang="ts">
-  // 漫画构建步骤页占位，业务后续接入。
+  // 漫画构建步骤页：待接入前先按解析产物引导（无产物回文件步骤，有产物提示待接入）。
+  import { page } from "$app/state";
   import { m } from "#libs/i18n/paraglide/messages";
+  import ComicStepGuide from "../../_components/comic-step-guide.svelte";
+
+  const uuid = $derived(page.params.uuid ?? "");
 </script>
 
-<!-- 漫画构建步骤页占位，业务后续接入 -->
 <h1 class="sr-only">{m.project_step_build()}</h1>
+<ComicStepGuide {uuid} />

@@ -13,6 +13,29 @@ export const commands = {
 	 *  界面语言亦经此切换——运行时 `rust_i18n` 由 `config::apply_runtime_effects` 统一同步。
 	 */
 	updateConfig: (patch: ConfigPatch) => typedError<Config_Serialize, CommandError>(__TAURI_INVOKE("update_config", { patch })),
+	/**  查询漫画原稿状态；缺目录回落空态，不建文件。 */
+	getComicImagesStatus: (id: string) => typedError<ComicImagesStatus, CommandError>(__TAURI_INVOKE("get_comic_images_status", { id })),
+	/**  导入漫画目录：整体复制为 `sources/images`，返回最新状态。 */
+	importComicImages: (id: string, sourcePath: string) => typedError<ComicImagesStatus, CommandError>(__TAURI_INVOKE("import_comic_images", { id, sourcePath })),
+	/**  解析漫画顺序：扫描 `sources/images` 后落盘 `content.json`，返回识别大纲（图片二进制不出 IPC）。 */
+	parseComicImages: (id: string) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("parse_comic_images", { id })),
+	/**  读取已落盘的识别大纲：缺失、损坏或版本不符回落空，不建文件。 */
+	getComicContentOutline: (id: string) => typedError<{
+	/**  组织形态。 */
+	mode: ComicMode,
+	/**  卷数。 */
+	volume_count: number,
+	/**  图片总页数。 */
+	page_count: number,
+	/**  图片总字节数。 */
+	total_bytes: number,
+	/**  复制与解析时跳过的无效文件数：导入元信息记账 + 落盘扫描合并，展示用。 */
+	ignored_count: number,
+	/**  卷页树（已排序）。 */
+	volumes: ComicVolumeOutline[],
+} | null, CommandError>(__TAURI_INVOKE("get_comic_content_outline", { id })),
+	/**  查询漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。 */
+	getComicImagePath: (id: string, path: string) => typedError<ComicImageInfo, CommandError>(__TAURI_INVOKE("get_comic_image_path", { id, path })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
 	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */
@@ -258,6 +281,63 @@ export type CleanupPreset =
 
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
+
+/**  漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示。 */
+export type ComicImageInfo = {
+	/**  图片绝对路径。 */
+	path: string,
+	/**  图片字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+};
+
+/**  漫画原稿状态：左栏文件卡片的只读展示；缺目录时 `exists` 为假。 */
+export type ComicImagesStatus = {
+	/**  `sources/images` 是否存在且含有效图片。 */
+	exists: boolean,
+	/**  卷数：平铺为 1（含收纳卷在内按实际卷计数）。 */
+	volume_count: number,
+	/**  图片总页数。 */
+	page_count: number,
+	/**  图片总字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+	/**  原稿更新时间（UTC `RFC3339`，取目录 mtime）；不存在时为 `None`。 */
+	updated_at: string | null,
+};
+
+/**  漫画组织形态：平铺单卷，或按子目录分卷。 */
+export type ComicMode = "flat" | "volumes";
+
+/**  解析大纲：右栏识别结果的只读展示，图片二进制不出 IPC，只出清单。 */
+export type ComicOutline = {
+	/**  组织形态。 */
+	mode: ComicMode,
+	/**  卷数。 */
+	volume_count: number,
+	/**  图片总页数。 */
+	page_count: number,
+	/**  图片总字节数。 */
+	total_bytes: number,
+	/**  复制与解析时跳过的无效文件数：导入元信息记账 + 落盘扫描合并，展示用。 */
+	ignored_count: number,
+	/**  卷页树（已排序）。 */
+	volumes: ComicVolumeOutline[],
+};
+
+/**  单页大纲：右栏识别结果的只读条目。 */
+export type ComicPageOutline = {
+	/**  相对 `images/` 的路径（POSIX 分隔，前端取图用）。 */
+	path: string,
+	/**  本页字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	size_bytes: number,
+};
+
+/**  卷大纲：右栏识别结果的只读条目。 */
+export type ComicVolumeOutline = {
+	/**  卷标题；平铺无标题卷为 `None`，前端回落“未分卷”。 */
+	title: string | null,
+	/**  卷内页面（含路径与字节数）。 */
+	pages: ComicPageOutline[],
+};
 
 /**
  *  命令统一返回的错误类型。
