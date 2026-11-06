@@ -1,5 +1,6 @@
 <script lang="ts">
-  // 字体选择器：系统字体下拉（搜索 + 懒加载 + 逐项字体预览），状态走外观 hook，对外零 props。
+  // 字体选择器：系统字体下拉（搜索 + 懒加载 + 逐项字体预览），经 props 绑定任意字体状态。
+  // 默认回落全局界面字体（旧调用点零改动）；`layout="plain"` 时仅渲染选择器本体，供弹窗内复用。
   // 插件仅提供候选列表，偏好本身存前端 localStorage；插件不可用时禁用并提示，不阻断页面。
   import { tick } from "svelte";
   import { getSystemFonts } from "tauri-plugin-system-fonts-api";
@@ -27,6 +28,32 @@
   import CardRow from "#components/common/card-row.svelte";
   import { m } from "#libs/i18n/paraglide/messages";
 
+  let {
+    family = null,
+    onSelectFamily = null,
+    label = null,
+    description = null,
+    layout = "card",
+    triggerClass = "w-(--control-column-width) justify-between",
+  }: {
+    /** 绑定的字体族：`null` 时回落全局界面字体（默认行为，保持旧调用点零改动） */
+    family?: string | null;
+    /** 选中回调：`null` 时回落 `setFontFamily` */
+    onSelectFamily?: ((family: string) => void) | null;
+    /** 行标签与常态说明：`null` 时回落界面字体文案 */
+    label?: string | null;
+    description?: string | null;
+    /** `card` 带 `CardRow` 外壳（设置页），`plain` 仅选择器本体（弹窗内） */
+    layout?: "card" | "plain";
+    /** 触发器宽度：设置页固定控件列，弹窗内占满 */
+    triggerClass?: string;
+  } = $props();
+
+  /** 当前绑定值：显式传入优先，否则沿用全局界面字体 */
+  const currentFamily = $derived(family ?? fontState.family);
+  /** 解析后标签：调用方覆盖优先 */
+  const resolvedLabel = $derived(label ?? m.settings_font_family_label());
+
   /** 系统字体族候选：插件变体数组按族名去重排序，失败时为空并禁用下拉。 */
   let systemFontFamilies = $state<string[]>([]);
   let loadingFonts = $state(false);
@@ -44,9 +71,9 @@
 
   /** 下拉渲染顺序：已存取值即便被卸载仍保留一行，避免触发器闪空。 */
   const orderedFontFamilies = $derived(
-    [fontState.family, ...systemFontFamilies]
-      .filter((family) => family && family !== DEFAULT_FONT_FAMILY)
-      .filter((family, index, all) => all.indexOf(family) === index)
+    [currentFamily, ...systemFontFamilies]
+      .filter((item) => item && item !== DEFAULT_FONT_FAMILY)
+      .filter((item, index, all) => all.indexOf(item) === index)
       .sort((a, b) => a.localeCompare(b)),
   );
 
@@ -63,23 +90,21 @@
 
   /** 触发器展示文案：跟随已存取值，关闭态同样可解析。 */
   const selectedFontLabel = $derived(
-    fontState.family === DEFAULT_FONT_FAMILY
-      ? m.settings_font_family_option_system()
-      : fontState.family,
+    currentFamily === DEFAULT_FONT_FAMILY ? m.settings_font_family_option_system() : currentFamily,
   );
 
   // 插件不可用（浏览器预览等无 Tauri 环境）时回落空列表，不阻断页面；
-  // 未拉取前按正常描述展示，拉取后为空才提示不可用
+  // 未拉取前按调用方说明展示，拉取后为空才提示不可用
   const fontFamilyDescription = $derived(
     fontsLoaded && !loadingFonts && systemFontFamilies.length === 0
       ? m.settings_font_family_unavailable()
-      : m.settings_font_family_description(),
+      : (description ?? m.settings_font_family_description()),
   );
 
   /** 字体即时生效，仅前端 `localStorage` 持久化，不经过后端。 */
   // 选中后关闭弹窗并回焦触发器，方便继续键盘导航
-  function handleFontFamilySelect(family: string): void {
-    setFontFamily(family);
+  function handleFontFamilySelect(next: string): void {
+    (onSelectFamily ?? setFontFamily)(next);
     fontPopoverOpen = false;
     tick().then(() => {
       fontTriggerRef?.focus();
@@ -154,56 +179,64 @@
   });
 </script>
 
-<CardRow label={m.settings_font_family_label()} description={fontFamilyDescription}>
-  {#snippet control()}
-    <PopoverRoot bind:open={fontPopoverOpen} onOpenChange={handleFontPopoverOpenChange}>
-      <PopoverTrigger bind:ref={fontTriggerRef}>
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            variant="outline"
-            role="combobox"
-            aria-expanded={fontPopoverOpen}
-            aria-label={m.settings_font_family_label()}
-            disabled={loadingFonts || (fontsLoaded && systemFontFamilies.length === 0)}
-            class="w-(--control-column-width) justify-between"
+{#snippet picker()}
+  <PopoverRoot bind:open={fontPopoverOpen} onOpenChange={handleFontPopoverOpenChange}>
+    <PopoverTrigger bind:ref={fontTriggerRef}>
+      {#snippet child({ props })}
+        <Button
+          {...props}
+          variant="outline"
+          role="combobox"
+          aria-expanded={fontPopoverOpen}
+          aria-label={resolvedLabel}
+          disabled={loadingFonts || (fontsLoaded && systemFontFamilies.length === 0)}
+          class={triggerClass}
+        >
+          <span class="truncate">
+            {loadingFonts ? m.settings_font_family_loading() : selectedFontLabel}
+          </span>
+          <ChevronsUpDownIcon class="opacity-50" />
+        </Button>
+      {/snippet}
+    </PopoverTrigger>
+    <PopoverContent class="max-w-xl min-w-48 p-0" align="end">
+      <CommandRoot shouldFilter={false}>
+        <CommandInput
+          bind:value={fontQuery}
+          placeholder={m.settings_font_family_search()}
+          aria-label={m.settings_font_family_search()}
+        />
+        <CommandList bind:ref={fontListRef}>
+          <CommandItem
+            value={DEFAULT_FONT_FAMILY}
+            onSelect={() => handleFontFamilySelect(DEFAULT_FONT_FAMILY)}
           >
-            <span class="truncate">
-              {loadingFonts ? m.settings_font_family_loading() : selectedFontLabel}
-            </span>
-            <ChevronsUpDownIcon class="opacity-50" />
-          </Button>
-        {/snippet}
-      </PopoverTrigger>
-      <PopoverContent class="max-w-xl min-w-48 p-0" align="end">
-        <CommandRoot shouldFilter={false}>
-          <CommandInput
-            bind:value={fontQuery}
-            placeholder={m.settings_font_family_search()}
-            aria-label={m.settings_font_family_search()}
-          />
-          <CommandList bind:ref={fontListRef}>
-            <CommandItem
-              value={DEFAULT_FONT_FAMILY}
-              onSelect={() => handleFontFamilySelect(DEFAULT_FONT_FAMILY)}
-            >
-              {m.settings_font_family_option_system()}
+            {m.settings_font_family_option_system()}
+          </CommandItem>
+          {#each visibleFontFamilies as item (item)}
+            <CommandItem value={item} onSelect={() => handleFontFamilySelect(item)}>
+              <span style="font-family: {buildFontStack(item)};">{item}</span>
             </CommandItem>
-            {#each visibleFontFamilies as family (family)}
-              <CommandItem value={family} onSelect={() => handleFontFamilySelect(family)}>
-                <span style="font-family: {buildFontStack(family)};">{family}</span>
-              </CommandItem>
-            {/each}
-            {#if filteredFontFamilies.length === 0}
-              <div class="px-2 py-6 text-center text-sm text-muted-foreground">
-                {m.settings_font_family_empty()}
-              </div>
-            {:else if visibleFontFamilies.length < filteredFontFamilies.length}
-              <div bind:this={fontSentinel} aria-hidden="true"></div>
-            {/if}
-          </CommandList>
-        </CommandRoot>
-      </PopoverContent>
-    </PopoverRoot>
-  {/snippet}
-</CardRow>
+          {/each}
+          {#if filteredFontFamilies.length === 0}
+            <div class="px-2 py-6 text-center text-sm text-muted-foreground">
+              {m.settings_font_family_empty()}
+            </div>
+          {:else if visibleFontFamilies.length < filteredFontFamilies.length}
+            <div bind:this={fontSentinel} aria-hidden="true"></div>
+          {/if}
+        </CommandList>
+      </CommandRoot>
+    </PopoverContent>
+  </PopoverRoot>
+{/snippet}
+
+{#if layout === "card"}
+  <CardRow label={resolvedLabel} description={fontFamilyDescription}>
+    {#snippet control()}
+      {@render picker()}
+    {/snippet}
+  </CardRow>
+{:else}
+  {@render picker()}
+{/if}

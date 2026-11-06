@@ -27,7 +27,7 @@
     SelectValue,
   } from "#components/shadcn-svelte/select";
   import { m } from "#libs/i18n/paraglide/messages";
-  import FontFamilyPicker from "./font-family-picker.svelte";
+  import FontFamilyPicker from "#components/common/font-family-picker.svelte";
 
   /** 主题下拉的候选项：`items` 让触发器在下拉关闭时也能解析出展示文案。 */
   const themeItems: { value: "light" | "dark" | "system"; label: string }[] = [

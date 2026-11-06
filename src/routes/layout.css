@@ -46,6 +46,11 @@
   --app-font-family: "Geist Variable", sans-serif;
   --app-font-weight: 400;
   --app-font-size: 100%;
+  /* 编辑器排版变量：由编辑器排版偏好在运行时覆盖，无值时回退此处默认值 */
+  --app-editor-font-family: "Geist Variable", sans-serif;
+  --app-editor-font-weight: 400;
+  --app-editor-font-size: 18px;
+  --app-editor-indent: 2;
   /* 字重工具类（`font-thin`…`font-black`）以用户设置为**基准**做相对偏移，而不是全部替换成它：
      用户调的是"整体粗细"，`font-medium` 与 `font-normal` 之间的相对阶梯在任何档位都保留；
      无类名文本走 `html` 的 `--app-font-weight` 继承（见文件末尾 base 层）。

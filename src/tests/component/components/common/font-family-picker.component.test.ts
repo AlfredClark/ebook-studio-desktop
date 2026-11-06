@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import Component from "../../../../../../routes/(main)/settings/_components/font-family-picker.svelte";
+import Component from "../../../../components/common/font-family-picker.svelte";
 
 // jsdom 缺少指针捕获与滚动 API，bits-ui 弹窗用得到，仅在本文件内就地补齐。
 if (!Element.prototype.hasPointerCapture) {

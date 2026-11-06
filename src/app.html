@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <script>
       // 首帧外观恢复：JS 包就绪前的同步兜底，避免暗色/配色/字体用户闪白闪字。
-      // 键名与两处唯一来源同源：明暗读 mode-watcher 默认键（本项目未自定义 modeStorageKey），
-      // 配色读外观 hook 的 COLOR_THEME_STORAGE_KEY，字体三键读 FONT_*_STORAGE_KEY；
-      // 回落分支与 loadFontFamily/loadFontWeight/loadFontSize 对齐，改任一处须同步。
+      // 键名与三处唯一来源同源：明暗读 mode-watcher 默认键（本项目未自定义 modeStorageKey），
+      // 配色读外观 hook 的 COLOR_THEME_STORAGE_KEY，界面字体三键读 FONT_*_STORAGE_KEY，
+      // 编辑器排版四键读 EDITOR_*_STORAGE_KEY；
+      // 回落分支与 loadFontFamily/loadFontWeight/loadFontSize 及
+      // loadEditorFontFamily/loadEditorFontWeight/loadEditorFontSize/loadEditorIndent 对齐，改任一处须同步。
       try {
         const mode = localStorage.getItem("mode-watcher-mode") || "system";
         const dark =
@@ -41,6 +43,42 @@
         root.style.setProperty(
           "--app-font-size",
           `${Number.isInteger(size) && size >= 75 && size <= 125 && size % 5 === 0 ? size : 100}%`,
+        );
+        const editorFamily = (localStorage.getItem("app.editor-font-family") || "")
+          .replace(/["';\\]/g, "")
+          .trim();
+        root.style.setProperty(
+          "--app-editor-font-family",
+          editorFamily && editorFamily !== "system"
+            ? `"${editorFamily}", "Geist Variable", sans-serif`
+            : `"Geist Variable", sans-serif`,
+        );
+        const editorWeight = Number(localStorage.getItem("app.editor-font-weight"));
+        root.style.setProperty(
+          "--app-editor-font-weight",
+          String(
+            Number.isInteger(editorWeight) &&
+              editorWeight >= 100 &&
+              editorWeight <= 900 &&
+              editorWeight % 100 === 0
+              ? editorWeight
+              : 400,
+          ),
+        );
+        const editorSize = Number(localStorage.getItem("app.editor-font-size"));
+        const editorSizeOptions = [12, 13, 14, 15, 16, 18, 20, 22, 24];
+        root.style.setProperty(
+          "--app-editor-font-size",
+          `${editorSizeOptions.includes(editorSize) ? editorSize : 18}px`,
+        );
+        const editorIndent = Number(localStorage.getItem("app.editor-indent"));
+        root.style.setProperty(
+          "--app-editor-indent",
+          String(
+            Number.isInteger(editorIndent) && editorIndent >= 0 && editorIndent <= 4
+              ? editorIndent
+              : 2,
+          ),
         );
       } catch {
         // 存储或媒体查询不可用时按样式表默认渲染，不阻断首帧

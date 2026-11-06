@@ -33,10 +33,20 @@ const setColorThemeMock = vi.hoisted(() => vi.fn());
 const setFontFamilyMock = vi.hoisted(() => vi.fn());
 const setFontWeightMock = vi.hoisted(() => vi.fn());
 const setFontSizeMock = vi.hoisted(() => vi.fn());
+const setEditorFontFamilyMock = vi.hoisted(() => vi.fn());
+const setEditorFontWeightMock = vi.hoisted(() => vi.fn());
+const setEditorFontSizeMock = vi.hoisted(() => vi.fn());
+const setEditorIndentMock = vi.hoisted(() => vi.fn());
 const getSystemFontsMock = vi.hoisted(() => vi.fn());
 const layoutStateMock = vi.hoisted(() => ({ name: "tabs" }));
 const colorThemeStateMock = vi.hoisted(() => ({ name: "neutral" }));
 const fontStateMock = vi.hoisted(() => ({ family: "system", weight: 400, size: 100 }));
+const editorTypographyStateMock = vi.hoisted(() => ({
+  family: "system",
+  weight: 400,
+  size: 14,
+  indent: 2,
+}));
 const toastMocks = vi.hoisted(() => ({
   loading: vi.fn(() => 1),
   dismiss: vi.fn(),
@@ -87,13 +97,22 @@ vi.mock("#libs/hooks/appearance.svelte", () => ({
   MAX_FONT_WEIGHT: 900,
   FONT_WEIGHT_STEP: 100,
   FONT_SIZE_OPTIONS: [75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125],
+  EDITOR_FONT_SIZE_OPTIONS: [12, 13, 14, 15, 16, 18, 20, 22, 24],
+  EDITOR_INDENT_STEP: 1,
+  MAX_EDITOR_INDENT: 4,
+  MIN_EDITOR_INDENT: 0,
   fontState: fontStateMock,
+  editorTypographyState: editorTypographyStateMock,
   buildFontStack: (family: string) =>
     family === "system" ? "default-stack" : `"${family}", default-stack`,
   sanitizeFontFamily: (value: string) => value.trim(),
   setFontFamily: setFontFamilyMock,
   setFontWeight: setFontWeightMock,
   setFontSize: setFontSizeMock,
+  setEditorFontFamily: setEditorFontFamilyMock,
+  setEditorFontWeight: setEditorFontWeightMock,
+  setEditorFontSize: setEditorFontSizeMock,
+  setEditorIndent: setEditorIndentMock,
   resetAppearance: resetAppearanceMock,
 }));
 
@@ -111,6 +130,10 @@ beforeEach(() => {
   fontStateMock.family = "system";
   fontStateMock.weight = 400;
   fontStateMock.size = 100;
+  editorTypographyStateMock.family = "system";
+  editorTypographyStateMock.weight = 400;
+  editorTypographyStateMock.size = 14;
+  editorTypographyStateMock.indent = 2;
   getSystemFontsMock.mockResolvedValue([]);
   updateConfigMock.mockResolvedValue(true);
   resetConfigMock.mockResolvedValue({ ...defaults });
@@ -128,6 +151,7 @@ describe("设置页", () => {
     expect(screen.getByText("Settings")).not.toBeNull();
     expect(screen.getByText("General")).not.toBeNull();
     expect(screen.getByText("Appearance")).not.toBeNull();
+    expect(screen.getByText("Editor typography")).not.toBeNull();
     expect(screen.getByText("Shortcuts")).not.toBeNull();
     expect(screen.getByText("Language")).not.toBeNull();
     expect(screen.getByText("Show app")).not.toBeNull();

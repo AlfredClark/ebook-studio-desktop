@@ -41,15 +41,22 @@
     provide: (field) => EditorView.decorations.from(field),
   });
 
-  // 编辑器配色引用语义令牌：明暗模式翻转时变量跟随，无需重建视图。
+  // 编辑器配色与排版引用语义令牌与编辑器变量：明暗翻转或偏好变更时变量跟随，无需重建视图。
   const appTheme = EditorView.theme({
     "&": {
       height: "100%",
       backgroundColor: "var(--background)",
       color: "var(--foreground)",
-      fontSize: "14px",
+      fontSize: "var(--app-editor-font-size, 18px)",
     },
-    ".cm-content": { fontFamily: "inherit", lineHeight: "1.7" },
+    ".cm-content": {
+      fontFamily: "var(--app-editor-font-family, inherit)",
+      fontWeight: "var(--app-editor-font-weight, 400)",
+      lineHeight: "1.7",
+    },
+    // 首行缩进只做显示：每逻辑行首行缩进 N 字符（1 字符 ≈ 1em），折行不二次缩进；
+    // 落盘文本保持干净，`splitChapterLines` 的 trim 本就容不下前导空白。
+    ".cm-line": { textIndent: "calc(var(--app-editor-indent, 2) * 1em)" },
     ".cm-gutters": {
       backgroundColor: "var(--background)",
       color: "var(--muted-foreground)",
@@ -63,10 +70,13 @@
     // 命中行不用整行底色（同激活行，会吃掉选中底），改用行首主色条指示；
     // 命中词仍加粗下划线，选中底在透明纸底上处处一致。
     ".cm-match-line": { boxShadow: "inset 3px 0 0 var(--primary)" },
+    // 命中词用相对字重 + 粗下划线双通道：基准拧到顶（900）时加粗被夹到 1000、
+    // 零增量，仍有 2px 下划线可辨；下划线随文本绘制，不与选中底冲突。
     ".cm-match-text": {
-      fontWeight: "700",
+      fontWeight: "calc(var(--app-editor-font-weight, 400) + 300)",
       textDecoration: "underline",
-      textUnderlineOffset: "2px",
+      textDecorationThickness: "2px",
+      textUnderlineOffset: "3px",
     },
     // 选中底必须压过行底（含激活行）：默认规则特异度高（聚焦态 6 个类），
     // 此处把目标类名双写以超出之；`theme()` 不支持 `&light/&dark`，故不用。

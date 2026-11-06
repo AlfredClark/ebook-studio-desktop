@@ -44,7 +44,7 @@ ebook-studio-desktop/
 │   │   │   ├── +layout.svelte      # 分组布局：LayoutContainer 包裹，特殊页另起分组即可绕开布局
 │   │   │   ├── +page.svelte        # 占位首页：布局骨架验证起点，业务在此开发
 │   │   │   ├── about/              # 关于页（应用 / 项目 / 平台分组 + 更新面板；页面组件在 `_components/`）
-│   │   │   ├── settings/           # 完整设置页（通用 + 外观 + 快捷键 + 重置；页面组件在 `_components/`，超过 ~8 个分组时按分组建子目录）
+│   │   │   ├── settings/           # 完整设置页（通用 + 外观 + 编辑器排版 + 快捷键 + 重置；页面组件在 `_components/`，超过 ~8 个分组时按分组建子目录）
 │   │   │   └── projects/           # 项目页（左右分栏：操作栏 + 列表 / 详情；新建弹窗 + 确认框 + 行内改名，页面组件在 `_components/`）
 │   │   ├── (projects)/             # 项目工作区分组（括号不进 URL）：自带步骤导航 chrome，不走 LayoutContainer
 │   │   │   ├── +layout.svelte      # 分组布局：仅内容槽 + 底边版权，窗口控制下沉到步骤导航栏
@@ -64,7 +64,7 @@ ebook-studio-desktop/
 │       ├── navigation/             # 导航等应用级注册表（nav-tabs.ts：路径 / 图标 / 顺序，顶部标签栏与侧边栏导航同源；project-steps.ts：项目六步骤 slug / 顺序 / 当前步解析）
 │       ├── shortcut/                 # 快捷键领域模块（展示切分 / 录制归一化，与后端 `Shortcut::from_str` 可解析子集对齐）
 │       ├── utils/                  # 前端通用工具（shadcn-svelte.ts 的 cn()、window-controls.ts、toast.ts、opener.ts）
-│       └── hooks/                  # 前端共享状态（统一经 #libs/hooks 引用），如 appearance.svelte.ts（布局注册表 + 字体偏好）、config.svelte.ts（后端配置内存态）、updater.svelte.ts（更新状态）、is-mobile.svelte.ts（响应式断点）、deep-link.svelte.ts（三路深链入口）、dashboard.svelte.ts（仪表盘侧栏折叠偏好）
+│       └── hooks/                  # 前端共享状态（统一经 #libs/hooks 引用），如 appearance.svelte.ts（布局注册表 + 界面字体与编辑器排版偏好）、config.svelte.ts（后端配置内存态）、updater.svelte.ts（更新状态）、is-mobile.svelte.ts（响应式断点）、deep-link.svelte.ts（三路深链入口）、dashboard.svelte.ts（仪表盘侧栏折叠偏好）
 ├── src-tauri/                      # 后端：Rust（edition 2024）
 │   ├── src/
 │   │   ├── main.rs                 # 二进制入口，仅转发到 lib::run()

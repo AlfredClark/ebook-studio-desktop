@@ -2,10 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COLOR_THEME_STORAGE_KEY,
   DEFAULT_COLOR_THEME,
+  DEFAULT_EDITOR_FONT_FAMILY,
+  DEFAULT_EDITOR_FONT_SIZE,
+  DEFAULT_EDITOR_FONT_WEIGHT,
+  DEFAULT_EDITOR_INDENT,
   DEFAULT_FONT_FAMILY,
   DEFAULT_FONT_SIZE,
   DEFAULT_FONT_WEIGHT,
   DEFAULT_LAYOUT,
+  EDITOR_FONT_FAMILY_STORAGE_KEY,
+  EDITOR_FONT_SIZE_OPTIONS,
+  EDITOR_FONT_SIZE_STORAGE_KEY,
+  EDITOR_FONT_WEIGHT_STORAGE_KEY,
+  EDITOR_INDENT_STORAGE_KEY,
   FONT_FAMILY_STORAGE_KEY,
   FONT_SIZE_OPTIONS,
   FONT_SIZE_STORAGE_KEY,
@@ -14,17 +23,25 @@ import {
   LAYOUT_STORAGE_KEY,
   applyAppearance,
   applyColorTheme,
+  applyEditorTypography,
   buildFontStack,
   colorThemeState,
+  editorTypographyState,
   fontState,
   initAppearance,
   initLayout,
   isColorTheme,
+  isEditorFontSize,
+  isEditorIndent,
   isFontSize,
   isFontWeight,
   isLayoutName,
   layoutState,
   loadColorTheme,
+  loadEditorFontFamily,
+  loadEditorFontSize,
+  loadEditorFontWeight,
+  loadEditorIndent,
   loadFontFamily,
   loadFontSize,
   loadFontWeight,
@@ -32,6 +49,10 @@ import {
   resetAppearance,
   sanitizeFontFamily,
   setColorTheme,
+  setEditorFontFamily,
+  setEditorFontSize,
+  setEditorFontWeight,
+  setEditorIndent,
   setFontFamily,
   setFontSize,
   setFontWeight,
@@ -70,6 +91,10 @@ beforeEach(() => {
   fontState.family = DEFAULT_FONT_FAMILY;
   fontState.weight = DEFAULT_FONT_WEIGHT;
   fontState.size = DEFAULT_FONT_SIZE;
+  editorTypographyState.family = DEFAULT_EDITOR_FONT_FAMILY;
+  editorTypographyState.weight = DEFAULT_EDITOR_FONT_WEIGHT;
+  editorTypographyState.size = DEFAULT_EDITOR_FONT_SIZE;
+  editorTypographyState.indent = DEFAULT_EDITOR_INDENT;
   vi.restoreAllMocks();
 });
 
@@ -345,11 +370,19 @@ describe("initAppearance", () => {
     localStorage.setItem(FONT_FAMILY_STORAGE_KEY, "Serif");
     localStorage.setItem(FONT_WEIGHT_STORAGE_KEY, "700");
     localStorage.setItem(FONT_SIZE_STORAGE_KEY, "110");
+    localStorage.setItem(EDITOR_FONT_FAMILY_STORAGE_KEY, "Mono");
+    localStorage.setItem(EDITOR_FONT_WEIGHT_STORAGE_KEY, "500");
+    localStorage.setItem(EDITOR_FONT_SIZE_STORAGE_KEY, "18");
+    localStorage.setItem(EDITOR_INDENT_STORAGE_KEY, "0");
     localStorage.setItem(COLOR_THEME_STORAGE_KEY, "ocean");
     initAppearance();
     expect(fontState.family).toBe("Serif");
     expect(fontState.weight).toBe(700);
     expect(fontState.size).toBe(110);
+    expect(editorTypographyState.family).toBe("Mono");
+    expect(editorTypographyState.weight).toBe(500);
+    expect(editorTypographyState.size).toBe(18);
+    expect(editorTypographyState.indent).toBe(0);
     expect(colorThemeState.name).toBe("ocean");
   });
 });
@@ -498,13 +531,17 @@ describe("setColorTheme", () => {
 });
 
 describe("resetAppearance", () => {
-  it("六项偏好全部回到默认值并落盘", () => {
+  it("十项偏好全部回到默认值并落盘", () => {
     layoutState.name = "sidebar";
     dashboardState.collapsed = true;
     colorThemeState.name = "rose";
     fontState.family = "Serif";
     fontState.weight = 700;
     fontState.size = 120;
+    editorTypographyState.family = "Mono";
+    editorTypographyState.weight = 500;
+    editorTypographyState.size = 20;
+    editorTypographyState.indent = 0;
 
     resetAppearance();
 
@@ -514,6 +551,10 @@ describe("resetAppearance", () => {
     expect(fontState.family).toBe(DEFAULT_FONT_FAMILY);
     expect(fontState.weight).toBe(DEFAULT_FONT_WEIGHT);
     expect(fontState.size).toBe(DEFAULT_FONT_SIZE);
+    expect(editorTypographyState.family).toBe(DEFAULT_EDITOR_FONT_FAMILY);
+    expect(editorTypographyState.weight).toBe(DEFAULT_EDITOR_FONT_WEIGHT);
+    expect(editorTypographyState.size).toBe(DEFAULT_EDITOR_FONT_SIZE);
+    expect(editorTypographyState.indent).toBe(DEFAULT_EDITOR_INDENT);
     expect(localStorage.getItem(LAYOUT_STORAGE_KEY)).toBe(DEFAULT_LAYOUT);
     expect(localStorage.getItem(DASHBOARD_COLLAPSED_STORAGE_KEY)).toBe(
       String(DEFAULT_DASHBOARD_COLLAPSED),
@@ -522,5 +563,206 @@ describe("resetAppearance", () => {
     expect(localStorage.getItem(FONT_FAMILY_STORAGE_KEY)).toBe(DEFAULT_FONT_FAMILY);
     expect(localStorage.getItem(FONT_WEIGHT_STORAGE_KEY)).toBe(String(DEFAULT_FONT_WEIGHT));
     expect(localStorage.getItem(FONT_SIZE_STORAGE_KEY)).toBe(String(DEFAULT_FONT_SIZE));
+    expect(localStorage.getItem(EDITOR_FONT_FAMILY_STORAGE_KEY)).toBe(DEFAULT_EDITOR_FONT_FAMILY);
+    expect(localStorage.getItem(EDITOR_FONT_WEIGHT_STORAGE_KEY)).toBe(
+      String(DEFAULT_EDITOR_FONT_WEIGHT),
+    );
+    expect(localStorage.getItem(EDITOR_FONT_SIZE_STORAGE_KEY)).toBe(
+      String(DEFAULT_EDITOR_FONT_SIZE),
+    );
+    expect(localStorage.getItem(EDITOR_INDENT_STORAGE_KEY)).toBe(String(DEFAULT_EDITOR_INDENT));
+  });
+});
+
+describe("isEditorFontSize", () => {
+  it("只接受离散档内的字号", () => {
+    for (const size of EDITOR_FONT_SIZE_OPTIONS) {
+      expect(isEditorFontSize(size)).toBe(true);
+    }
+  });
+
+  it("拒绝非法取值", () => {
+    expect(isEditorFontSize(17)).toBe(false);
+    expect(isEditorFontSize(100)).toBe(false);
+    expect(isEditorFontSize("16")).toBe(false);
+    expect(isEditorFontSize(null)).toBe(false);
+  });
+});
+
+describe("isEditorIndent", () => {
+  it("接受区间内的整数字符数", () => {
+    for (const indent of [0, 2, 4]) {
+      expect(isEditorIndent(indent)).toBe(true);
+    }
+  });
+
+  it("拒绝非法取值", () => {
+    expect(isEditorIndent(2.5)).toBe(false);
+    expect(isEditorIndent(-1)).toBe(false);
+    expect(isEditorIndent(5)).toBe(false);
+    expect(isEditorIndent("2")).toBe(false);
+    expect(isEditorIndent(null)).toBe(false);
+  });
+});
+
+describe("loadEditorFontFamily", () => {
+  it("缺失时回落系统默认", () => {
+    expect(loadEditorFontFamily()).toBe(DEFAULT_EDITOR_FONT_FAMILY);
+  });
+
+  it("读取已持久化的合法族名", () => {
+    localStorage.setItem(EDITOR_FONT_FAMILY_STORAGE_KEY, "Mono");
+    expect(loadEditorFontFamily()).toBe("Mono");
+  });
+
+  it("脏数据回落系统默认", () => {
+    localStorage.setItem(EDITOR_FONT_FAMILY_STORAGE_KEY, '";;');
+    expect(loadEditorFontFamily()).toBe(DEFAULT_EDITOR_FONT_FAMILY);
+  });
+});
+
+describe("loadEditorFontWeight", () => {
+  it("缺失时回落默认值", () => {
+    expect(loadEditorFontWeight()).toBe(DEFAULT_EDITOR_FONT_WEIGHT);
+  });
+
+  it("读取已持久化的合法字重", () => {
+    localStorage.setItem(EDITOR_FONT_WEIGHT_STORAGE_KEY, "500");
+    expect(loadEditorFontWeight()).toBe(500);
+  });
+
+  it("脏数据回落默认值", () => {
+    localStorage.setItem(EDITOR_FONT_WEIGHT_STORAGE_KEY, "450");
+    expect(loadEditorFontWeight()).toBe(DEFAULT_EDITOR_FONT_WEIGHT);
+  });
+});
+
+describe("loadEditorFontSize", () => {
+  it("缺失时回落默认值", () => {
+    expect(loadEditorFontSize()).toBe(DEFAULT_EDITOR_FONT_SIZE);
+  });
+
+  it("读取已持久化的合法字号", () => {
+    localStorage.setItem(EDITOR_FONT_SIZE_STORAGE_KEY, "18");
+    expect(loadEditorFontSize()).toBe(18);
+  });
+
+  it("非离散档脏数据回落默认值", () => {
+    localStorage.setItem(EDITOR_FONT_SIZE_STORAGE_KEY, "17");
+    expect(loadEditorFontSize()).toBe(DEFAULT_EDITOR_FONT_SIZE);
+  });
+});
+
+describe("loadEditorIndent", () => {
+  it("缺失时回落默认值", () => {
+    expect(loadEditorIndent()).toBe(DEFAULT_EDITOR_INDENT);
+  });
+
+  it("读取已持久化的合法缩进", () => {
+    localStorage.setItem(EDITOR_INDENT_STORAGE_KEY, "0");
+    expect(loadEditorIndent()).toBe(0);
+  });
+
+  it("脏数据回落默认值", () => {
+    localStorage.setItem(EDITOR_INDENT_STORAGE_KEY, "9");
+    expect(loadEditorIndent()).toBe(DEFAULT_EDITOR_INDENT);
+  });
+});
+
+describe("setEditorFontFamily", () => {
+  it("先落盘再切换内存状态", () => {
+    setEditorFontFamily("Mono");
+    expect(localStorage.getItem(EDITOR_FONT_FAMILY_STORAGE_KEY)).toBe("Mono");
+    expect(editorTypographyState.family).toBe("Mono");
+  });
+
+  it("拒绝空取值且不改状态", () => {
+    setEditorFontFamily("   ");
+    expect(editorTypographyState.family).toBe(DEFAULT_EDITOR_FONT_FAMILY);
+    expect(localStorage.getItem(EDITOR_FONT_FAMILY_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("setEditorFontWeight", () => {
+  it("先落盘再切换内存状态", () => {
+    setEditorFontWeight(500);
+    expect(localStorage.getItem(EDITOR_FONT_WEIGHT_STORAGE_KEY)).toBe("500");
+    expect(editorTypographyState.weight).toBe(500);
+  });
+
+  it("预览模式只改内存不落盘", () => {
+    setEditorFontWeight(500, false);
+    expect(localStorage.getItem(EDITOR_FONT_WEIGHT_STORAGE_KEY)).toBeNull();
+    expect(editorTypographyState.weight).toBe(500);
+  });
+
+  it("拒绝非法取值且不改状态", () => {
+    setEditorFontWeight(450);
+    expect(editorTypographyState.weight).toBe(DEFAULT_EDITOR_FONT_WEIGHT);
+    expect(localStorage.getItem(EDITOR_FONT_WEIGHT_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("setEditorFontSize", () => {
+  it("先落盘再切换内存状态", () => {
+    setEditorFontSize(18);
+    expect(localStorage.getItem(EDITOR_FONT_SIZE_STORAGE_KEY)).toBe("18");
+    expect(editorTypographyState.size).toBe(18);
+  });
+
+  it("拒绝非离散档取值且不改状态", () => {
+    setEditorFontSize(17);
+    expect(editorTypographyState.size).toBe(DEFAULT_EDITOR_FONT_SIZE);
+    expect(localStorage.getItem(EDITOR_FONT_SIZE_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("setEditorIndent", () => {
+  it("先落盘再切换内存状态", () => {
+    setEditorIndent(0);
+    expect(localStorage.getItem(EDITOR_INDENT_STORAGE_KEY)).toBe("0");
+    expect(editorTypographyState.indent).toBe(0);
+  });
+
+  it("预览模式只改内存不落盘", () => {
+    setEditorIndent(4, false);
+    expect(localStorage.getItem(EDITOR_INDENT_STORAGE_KEY)).toBeNull();
+    expect(editorTypographyState.indent).toBe(4);
+  });
+
+  it("拒绝非法取值且不改状态", () => {
+    setEditorIndent(9);
+    expect(editorTypographyState.indent).toBe(DEFAULT_EDITOR_INDENT);
+    expect(localStorage.getItem(EDITOR_INDENT_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("applyEditorTypography", () => {
+  it("无文档环境直接返回", () => {
+    expect(() => applyEditorTypography()).not.toThrow();
+  });
+
+  it("把内存态写入根元素变量", () => {
+    const store = new Map<string, string>();
+    const style = {
+      setProperty: (key: string, value: string): void => {
+        store.set(key, String(value));
+      },
+      getPropertyValue: (key: string): string => store.get(key) ?? "",
+    };
+    vi.stubGlobal("document", { documentElement: { style } });
+    try {
+      editorTypographyState.family = "Mono";
+      editorTypographyState.weight = 500;
+      editorTypographyState.size = 18;
+      editorTypographyState.indent = 0;
+      applyEditorTypography();
+      expect(style.getPropertyValue("--app-editor-font-family")).toContain('"Mono"');
+      expect(style.getPropertyValue("--app-editor-font-weight")).toBe("500");
+      expect(style.getPropertyValue("--app-editor-font-size")).toBe("18px");
+      expect(style.getPropertyValue("--app-editor-indent")).toBe("0");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

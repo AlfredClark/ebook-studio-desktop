@@ -324,17 +324,209 @@ export function setFontSize(next: number): void {
   applyAppearance();
 }
 
+// ---- 编辑器排版偏好：与界面字体相互独立，仅影响正文章节编辑器显示 ----
+// 字重沿用界面字体的整百校验；字号按像素离散档（默认沿用旧版硬编码 14px，老用户无感知迁移）；
+// 首行缩进以字符数存储（1 字符 ≈ 1em），只做编辑器渲染，不写入落盘文本
+// （`splitChapterLines` 会清掉前导空白，缩进本就落不了盘）。
+// 存储键统一 `app.` 前缀，落盘/校验/应用模式与上节保持一致。
+
+/** 编辑器排版持久化键名，改名即视为放弃老用户存量 */
+export const EDITOR_FONT_FAMILY_STORAGE_KEY = "app.editor-font-family";
+export const EDITOR_FONT_WEIGHT_STORAGE_KEY = "app.editor-font-weight";
+export const EDITOR_FONT_SIZE_STORAGE_KEY = "app.editor-font-size";
+export const EDITOR_INDENT_STORAGE_KEY = "app.editor-indent";
+
+/** 编辑器默认字体族：沿用系统默认哨兵，语义与界面字体一致 */
+export const DEFAULT_EDITOR_FONT_FAMILY = DEFAULT_FONT_FAMILY;
+/** 编辑器默认字重：沿用界面字重默认值 */
+export const DEFAULT_EDITOR_FONT_WEIGHT = DEFAULT_FONT_WEIGHT;
+/** 编辑器默认字号：正文长阅读取 18px 更舒适 */
+export const DEFAULT_EDITOR_FONT_SIZE = 18;
+
+/** 编辑器字号离散档，`isEditorFontSize` 即以此为真值来源 */
+export const EDITOR_FONT_SIZE_OPTIONS: readonly number[] = [12, 13, 14, 15, 16, 18, 20, 22, 24];
+
+/** 默认首行缩进字符数，中文惯例首行两字符 */
+export const DEFAULT_EDITOR_INDENT = 2;
+export const MIN_EDITOR_INDENT = 0;
+export const MAX_EDITOR_INDENT = 4;
+export const EDITOR_INDENT_STEP = 1;
+
+// 跨页面共享的编辑器排版状态：设置页完整版与编辑器头部快捷入口读写同一份，页面私有状态仍用局部 $state
+export const editorTypographyState = $state<{
+  family: string;
+  weight: number;
+  size: number;
+  indent: number;
+}>({
+  family: DEFAULT_EDITOR_FONT_FAMILY,
+  weight: DEFAULT_EDITOR_FONT_WEIGHT,
+  size: DEFAULT_EDITOR_FONT_SIZE,
+  indent: DEFAULT_EDITOR_INDENT,
+});
+
+/** 校验编辑器字号取值，仅接受离散档内的数值 */
+export function isEditorFontSize(value: unknown): value is number {
+  return typeof value === "number" && EDITOR_FONT_SIZE_OPTIONS.includes(value);
+}
+
+/** 校验首行缩进取值，仅接受区间内的整数字符数 */
+export function isEditorIndent(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= MIN_EDITOR_INDENT &&
+    value <= MAX_EDITOR_INDENT
+  );
+}
+
+/** 读取持久化编辑器字体族名，缺失或非法一律回落系统默认 */
+export function loadEditorFontFamily(): string {
+  try {
+    if (typeof localStorage === "undefined") {
+      return DEFAULT_EDITOR_FONT_FAMILY;
+    }
+    const cleaned = sanitizeFontFamily(localStorage.getItem(EDITOR_FONT_FAMILY_STORAGE_KEY) ?? "");
+    return cleaned ? cleaned : DEFAULT_EDITOR_FONT_FAMILY;
+  } catch {
+    // 隐私模式等存储不可用时按默认值渲染，不阻塞首帧
+    return DEFAULT_EDITOR_FONT_FAMILY;
+  }
+}
+
+/** 读取持久化编辑器字重，缺失或非法一律回落默认值 */
+export function loadEditorFontWeight(): number {
+  try {
+    if (typeof localStorage === "undefined") {
+      return DEFAULT_EDITOR_FONT_WEIGHT;
+    }
+    const parsed = Number(localStorage.getItem(EDITOR_FONT_WEIGHT_STORAGE_KEY));
+    return isFontWeight(parsed) ? parsed : DEFAULT_EDITOR_FONT_WEIGHT;
+  } catch {
+    return DEFAULT_EDITOR_FONT_WEIGHT;
+  }
+}
+
+/** 读取持久化编辑器字号，缺失或非法一律回落默认值 */
+export function loadEditorFontSize(): number {
+  try {
+    if (typeof localStorage === "undefined") {
+      return DEFAULT_EDITOR_FONT_SIZE;
+    }
+    const parsed = Number(localStorage.getItem(EDITOR_FONT_SIZE_STORAGE_KEY));
+    return isEditorFontSize(parsed) ? parsed : DEFAULT_EDITOR_FONT_SIZE;
+  } catch {
+    return DEFAULT_EDITOR_FONT_SIZE;
+  }
+}
+
+/** 读取持久化首行缩进，缺失或非法一律回落默认值 */
+export function loadEditorIndent(): number {
+  try {
+    if (typeof localStorage === "undefined") {
+      return DEFAULT_EDITOR_INDENT;
+    }
+    // `Number(null)` 得 0，而 0 是合法缩进，须先排除缺失与空串
+    const raw = localStorage.getItem(EDITOR_INDENT_STORAGE_KEY);
+    if (raw === null || raw.trim() === "") {
+      return DEFAULT_EDITOR_INDENT;
+    }
+    const parsed = Number(raw);
+    return isEditorIndent(parsed) ? parsed : DEFAULT_EDITOR_INDENT;
+  } catch {
+    return DEFAULT_EDITOR_INDENT;
+  }
+}
+
+/** 把编辑器排版内存态写入根元素变量，无文档环境直接返回 */
+export function applyEditorTypography(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  root.style.setProperty("--app-editor-font-family", buildFontStack(editorTypographyState.family));
+  root.style.setProperty("--app-editor-font-weight", String(editorTypographyState.weight));
+  root.style.setProperty("--app-editor-font-size", `${editorTypographyState.size}px`);
+  root.style.setProperty("--app-editor-indent", String(editorTypographyState.indent));
+}
+
+/** 切换编辑器字体族，先落盘再改内存并即时应用，刷新不丢失 */
+export function setEditorFontFamily(next: string): void {
+  const cleaned = sanitizeFontFamily(next);
+  if (!cleaned) {
+    return;
+  }
+  try {
+    localStorage.setItem(EDITOR_FONT_FAMILY_STORAGE_KEY, cleaned);
+  } catch {
+    // 落盘失败仍切换内存状态，保证本次会话可用
+  }
+  editorTypographyState.family = cleaned;
+  applyEditorTypography();
+}
+
+/** 切换编辑器字重，先落盘再改内存并即时应用，非法取值直接拒绝 */
+export function setEditorFontWeight(next: number, persist = true): void {
+  if (!isFontWeight(next)) {
+    return;
+  }
+  if (persist) {
+    try {
+      localStorage.setItem(EDITOR_FONT_WEIGHT_STORAGE_KEY, String(next));
+    } catch {
+      // 落盘失败仍切换内存状态，保证本次会话可用
+    }
+  }
+  editorTypographyState.weight = next;
+  applyEditorTypography();
+}
+
+/** 切换编辑器字号，先落盘再改内存并即时应用，非法取值直接拒绝 */
+export function setEditorFontSize(next: number): void {
+  if (!isEditorFontSize(next)) {
+    return;
+  }
+  try {
+    localStorage.setItem(EDITOR_FONT_SIZE_STORAGE_KEY, String(next));
+  } catch {
+    // 落盘失败仍切换内存状态，保证本次会话可用
+  }
+  editorTypographyState.size = next;
+  applyEditorTypography();
+}
+
+/** 切换首行缩进，先落盘再改内存并即时应用，非法取值直接拒绝 */
+export function setEditorIndent(next: number, persist = true): void {
+  if (!isEditorIndent(next)) {
+    return;
+  }
+  if (persist) {
+    try {
+      localStorage.setItem(EDITOR_INDENT_STORAGE_KEY, String(next));
+    } catch {
+      // 落盘失败仍切换内存状态，保证本次会话可用
+    }
+  }
+  editorTypographyState.indent = next;
+  applyEditorTypography();
+}
+
 /** 根布局首帧前调用，重复调用无副作用 */
 export function initAppearance(): void {
   fontState.family = loadFontFamily();
   fontState.weight = loadFontWeight();
   fontState.size = loadFontSize();
   applyAppearance();
+  editorTypographyState.family = loadEditorFontFamily();
+  editorTypographyState.weight = loadEditorFontWeight();
+  editorTypographyState.size = loadEditorFontSize();
+  editorTypographyState.indent = loadEditorIndent();
+  applyEditorTypography();
   colorThemeState.name = loadColorTheme();
   applyColorTheme();
 }
 
-/** 恢复全部外观偏好为默认值：复用各 `set*` 的落盘+应用路径，不另写旁路 */
+/** 恢复全部外观与编辑器排版偏好为默认值：复用各 `set*` 的落盘+应用路径，不另写旁路 */
 export function resetAppearance(): void {
   setLayoutName(DEFAULT_LAYOUT);
   setDashboardCollapsed(DEFAULT_DASHBOARD_COLLAPSED);
@@ -342,4 +534,8 @@ export function resetAppearance(): void {
   setFontFamily(DEFAULT_FONT_FAMILY);
   setFontWeight(DEFAULT_FONT_WEIGHT);
   setFontSize(DEFAULT_FONT_SIZE);
+  setEditorFontFamily(DEFAULT_EDITOR_FONT_FAMILY);
+  setEditorFontWeight(DEFAULT_EDITOR_FONT_WEIGHT);
+  setEditorFontSize(DEFAULT_EDITOR_FONT_SIZE);
+  setEditorIndent(DEFAULT_EDITOR_INDENT);
 }

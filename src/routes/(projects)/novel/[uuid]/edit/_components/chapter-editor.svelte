@@ -1,5 +1,6 @@
 <script lang="ts">
-  // 中栏编辑器（哑组件）：顶部左标题右保存 + 正文区 + 命中列表；
+  // 中栏编辑器（哑组件）：顶部左标题、右排版快捷与保存 + 正文区 + 命中列表；
+  // 保存仅脏态可用；排版快捷读写全局编辑器排版状态，与设置页同源；
   // 保存仅脏态可用；正文区按章节键重建，切换章节不串历史、不残留草稿；
   // 命中列表仅有命中时出现，点击跳到编辑器对应行。
   import { Button } from "#components/shadcn-svelte/button";
@@ -7,6 +8,7 @@
   import { m } from "#libs/i18n/paraglide/messages";
   import ChapterMatches from "./chapter-matches.svelte";
   import ChapterTextView from "./chapter-text-view.svelte";
+  import EditorTypographyPopover from "./editor-typography-popover.svelte";
 
   let {
     docKey,
@@ -38,6 +40,7 @@
 <section aria-label={m.edit_editor_label()} class="flex h-full min-h-0 flex-col">
   <div class="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
     <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{title}</h2>
+    <EditorTypographyPopover />
     <Button size="sm" disabled={!dirty || saving} onclick={onSave}>
       {saving ? m.edit_saving() : m.edit_save()}
     </Button>
