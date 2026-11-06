@@ -230,6 +230,27 @@ export type ChapterOutline = {
 	chars: number,
 };
 
+/**  垃圾清理预设：只读扫描用的内置模式；手机号这类高误伤项刻意不收录，只做标出。 */
+export type CleanupPreset = 
+/**  完整网址：`http(s)://` 锚定，`v2.0` 这类不算。 */
+"UrlFull" | 
+/**  站点域名：`www.` 或常见后缀裸域名。 */
+"UrlDomain" | 
+/**  首发更新：转载站的首发、追更话术。 */
+"PromoRelease" | 
+/**  站点名称：转载站站名与阅读引导。 */
+"PromoSite" | 
+/**  求票订阅：互动求票与订阅话术。 */
+"PromoVote" | 
+/**  社群引流：书友群、加群话术。 */
+"PromoGroup" | 
+/**  QQ 号码：`QQ` + 5–12 位数字。 */
+"ContactQq" | 
+/**  微信号码：`微信(号)` + 字母开头 ID。 */
+"ContactWechat" | 
+/**  群组号码：`群(号)` + 数字。 */
+"ContactGroup";
+
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
 
@@ -490,7 +511,7 @@ export type MetadataField =
 /**  简介（多行，`简介：` 独占首行）。 */
 "description";
 
-/**  筛选种类：右栏筛选器的前端契约；关键词含匹配与正则二选一。 */
+/**  筛选种类：右栏筛选器的前端契约；关键词、正则、垃圾清理、标点符号、标点闭合五选一。 */
 export type NovelFilter = 
 /**  关键词含匹配：空关键词前后端都拦截。 */
 { type: "Keyword"; 
@@ -501,7 +522,21 @@ case_sensitive: boolean } |
 /**  正则表达式：Rust 正则语法，非法 pattern 直接报错。 */
 { type: "Regex"; 
 /**  用户填写的正则原文。 */
-pattern: string };
+pattern: string } | 
+/**  垃圾清理：内置预设多选，空预设前后端都拦截。 */
+{ type: "Cleanup"; 
+/**  启用的预设清单（顺序不敏感，后端按固定优先级编译）。 */
+presets: CleanupPreset[] } | 
+/**  标点符号：排版问题预设多选，空预设前后端都拦截。 */
+{ type: "Punct"; 
+/**  启用的预设清单（顺序不敏感，后端按固定优先级编译）。 */
+presets: PunctPreset[] } | 
+/**  标点闭合：成对标点多选 + 检测范围，空预设前后端都拦截。 */
+{ type: "Pairs"; 
+/**  启用的成对种类清单（顺序不敏感，栈机统一处理）。 */
+pairs: PairKind[]; 
+/**  检测范围：按行独立，或跨行延续。 */
+scope: PairScope };
 
 /**  小说原文状态：左栏文件卡片的只读展示；缺文件时 `exists` 为假。 */
 export type NovelTextStatus = {
@@ -530,6 +565,44 @@ export type PackageOutcome = {
 	/**  自动校验结果。 */
 	validation: ValidationOutcome,
 };
+
+/**  成对标点种类：只读扫描用的闭合检测模式；ASCII 与全角收进同一叶子，按"对"开关。 */
+export type PairKind = 
+/**  圆括号对：（）()。 */
+"Round" | 
+/**  方括号对：［］[]。 */
+"Square" | 
+/**  花括号对：｛｝{}。 */
+"Brace" | 
+/**  方头括号：【】。 */
+"TortBlack" | 
+/**  象形括号：〔〕。 */
+"TortWhite" | 
+/**  双书名号：《》。 */
+"BookDouble" | 
+/**  单书名号：〈〉。 */
+"BookSingle" | 
+/**  双弯引号：“”。 */
+"DQuote" | 
+/**  单弯引号：‘’。 */
+"SQuote" | 
+/**  直角单引：「」。 */
+"CQuoteS" | 
+/**  直角双引：『』。 */
+"CQuoteD" | 
+/**  英文单引：''（同字符开闭，toggle 语义）。 */
+"AsciiS" | 
+/**  英文双引：""（同字符开闭，toggle 语义）。 */
+"AsciiD" | 
+/**  反向双引：〝〞。 */
+"RevQuote";
+
+/**  配对检测范围：按行独立，或跨行延续（含多段对话引号识别）。 */
+export type PairScope = 
+/**  按行筛选：每行独立跑栈机，无豁免。 */
+"Line" | 
+/**  跨行筛选：状态机跨行，引号行首延续静默吸收。 */
+"Chapter";
 
 /**  解析大纲：右栏识别结果的只读展示，正文行不出 IPC。 */
 export type ParseOutline = {
@@ -618,6 +691,21 @@ export type ProjectOverview = {
 
 /**  项目类型：落盘与契约为小写字符串，前后端共用 `"novel" | "comic"`。 */
 export type ProjectType = "novel" | "comic";
+
+/**  标点符号预设：只读扫描用的排版问题模式；`……`/`——`恰两连是正确写法，刻意放过。 */
+export type PunctPreset = 
+/**  半角标点：半角句读括号（含 `.`，`v2.0` 这类会中，find-only 可接受）。 */
+"HalfPunct" | 
+/**  全角符号：错用的全角（中文正用的，。！？等已排除）。 */
+"FullSymbol" | 
+/**  零宽字符：零宽空格/连接符与 BOM。 */
+"ZeroWidth" | 
+/**  特殊空格：不换行空格、全角空格、制表符。 */
+"WeirdSpace" | 
+/**  特殊符号：Emoji 与装饰符号。 */
+"SpecialSym" | 
+/**  连续标点：同类标点连发（省略号/破折号 3 连起标，其余 2 连起标）。 */
+"RepeatPunct";
 
 /**  运行平台信息：经 `tauri-plugin-os` 采集，全字段必填，前端逐行展示 */
 export type SystemInfo = {

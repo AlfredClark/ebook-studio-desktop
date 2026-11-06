@@ -11,7 +11,14 @@
   import * as Resizable from "#components/shadcn-svelte/resizable";
   import ConfirmDialog from "#components/common/confirm-dialog.svelte";
   import commands from "#libs/commands";
-  import type { FilterOutcome, NovelFilter, ParseOutline } from "#libs/commands/types";
+  import type {
+    CleanupPreset,
+    FilterOutcome,
+    NovelFilter,
+    PairKind,
+    ParseOutline,
+    PunctPreset,
+  } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
   import { toast } from "#libs/utils/toast";
   import ChapterEditor from "./_components/chapter-editor.svelte";
@@ -44,10 +51,50 @@
   let pendingSelect = $state<{ volume: number; chapter: number } | null>(null);
 
   /** 筛选面板参数：右栏哑组件双向绑定，本页只读组装。 */
-  let filterKind = $state<"keyword" | "regex">("keyword");
+  let filterKind = $state<"keyword" | "regex" | "cleanup" | "punct" | "pairs">("keyword");
   let filterKeyword = $state("");
   let filterCase = $state(false);
   let filterPattern = $state("");
+  /** 垃圾清理叶子：默认全开，顺序即全局固定顺序。 */
+  let cleanupPresets = $state<CleanupPreset[]>([
+    "UrlFull",
+    "UrlDomain",
+    "PromoRelease",
+    "PromoSite",
+    "PromoVote",
+    "PromoGroup",
+    "ContactQq",
+    "ContactWechat",
+    "ContactGroup",
+  ]);
+  /** 标点叶子：默认全开，顺序即全局固定顺序。 */
+  let punctPresets = $state<PunctPreset[]>([
+    "HalfPunct",
+    "FullSymbol",
+    "ZeroWidth",
+    "WeirdSpace",
+    "SpecialSym",
+    "RepeatPunct",
+  ]);
+  /** 检测范围：默认按行，严格可预测；跨行需用户手动切换。 */
+  let pairScope = $state<"Line" | "Chapter">("Line");
+  /** 成对叶子：默认全开，顺序即全局固定顺序。 */
+  let pairPresets = $state<PairKind[]>([
+    "Round",
+    "Square",
+    "Brace",
+    "TortBlack",
+    "TortWhite",
+    "BookDouble",
+    "BookSingle",
+    "DQuote",
+    "SQuote",
+    "CQuoteS",
+    "CQuoteD",
+    "AsciiS",
+    "AsciiD",
+    "RevQuote",
+  ]);
   /** 筛选中、最近成功规格与结果：结果绑定规格快照，面板改动即过期。 */
   let filtering = $state(false);
   let appliedSpec = $state<NovelFilter | null>(null);
@@ -55,7 +102,7 @@
   /** 跳转目标：nonce 保证连点同一行每次都生效。 */
   let jumpTo = $state<{ line: number; nonce: number } | null>(null);
 
-  /** 当前面板组装的筛选规格：输入为空回落空，不调后端。 */
+  /** 当前面板组装的筛选规格：输入为空或预设全空时回落空，不调后端。 */
   function currentSpec(): NovelFilter | null {
     if (filterKind === "keyword") {
       if (filterKeyword.trim() === "") {
@@ -63,10 +110,62 @@
       }
       return { type: "Keyword", keyword: filterKeyword, case_sensitive: filterCase };
     }
-    if (filterPattern.trim() === "") {
+    if (filterKind === "regex") {
+      if (filterPattern.trim() === "") {
+        return null;
+      }
+      return { type: "Regex", pattern: filterPattern };
+    }
+    if (filterKind === "cleanup") {
+      const ordered = (
+        [
+          "UrlFull",
+          "UrlDomain",
+          "PromoRelease",
+          "PromoSite",
+          "PromoVote",
+          "PromoGroup",
+          "ContactQq",
+          "ContactWechat",
+          "ContactGroup",
+        ] as const
+      ).filter((preset) => cleanupPresets.includes(preset));
+      if (ordered.length === 0) {
+        return null;
+      }
+      return { type: "Cleanup", presets: [...ordered] };
+    }
+    if (filterKind === "punct") {
+      const ordered = (
+        ["HalfPunct", "FullSymbol", "ZeroWidth", "WeirdSpace", "SpecialSym", "RepeatPunct"] as const
+      ).filter((preset) => punctPresets.includes(preset));
+      if (ordered.length === 0) {
+        return null;
+      }
+      return { type: "Punct", presets: [...ordered] };
+    }
+    const ordered = (
+      [
+        "Round",
+        "Square",
+        "Brace",
+        "TortBlack",
+        "TortWhite",
+        "BookDouble",
+        "BookSingle",
+        "DQuote",
+        "SQuote",
+        "CQuoteS",
+        "CQuoteD",
+        "AsciiS",
+        "AsciiD",
+        "RevQuote",
+      ] as const
+    ).filter((preset) => pairPresets.includes(preset));
+    if (ordered.length === 0) {
       return null;
     }
-    return { type: "Regex", pattern: filterPattern };
+    return { type: "Pairs", pairs: [...ordered], scope: pairScope };
   }
 
   /** 筛选是否可用：脏态禁用，结果永远与落盘一致。 */
@@ -333,6 +432,10 @@
             bind:keyword={filterKeyword}
             bind:caseSensitive={filterCase}
             bind:pattern={filterPattern}
+            bind:cleanupPresets
+            bind:punctPresets
+            bind:pairScope
+            bind:pairPresets
             {filtering}
             {canFilter}
             hasOutcome={outcome != null}

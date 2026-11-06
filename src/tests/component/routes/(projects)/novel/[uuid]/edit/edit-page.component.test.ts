@@ -1,8 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import type { ChapterContent, ParseOutline } from "../../../../../../../libs/commands/types";
 import EditPage from "../../../../../../../routes/(projects)/novel/[uuid]/edit/+page.svelte";
+
+// jsdom 缺少浮层定位所需的浏览器 API，bits-ui 下拉用得到，仅在本文件内就地补齐。
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+if (typeof ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver;
+}
 
 const outlineMock = vi.hoisted(() => vi.fn());
 const chapterMock = vi.hoisted(() => vi.fn());
@@ -301,6 +318,177 @@ describe("编辑页", () => {
 
     expect(updateMock).toHaveBeenCalledOnce();
     expect(filterMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("垃圾清理默认全选可运行，全取消后筛选禁用", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(EditPage);
+    await screen.findByRole("heading", { name: "第一章 引子" });
+
+    // 类型下拉切到垃圾清理：jsdom 无布局，选项按 `data-value` 定位
+    await user.click(screen.getByRole("combobox", { name: "Filter type" }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-value="cleanup"]')).not.toBeNull();
+    });
+    await user.click(document.querySelector('[data-value="cleanup"]') as HTMLElement);
+
+    // 浮层关闭动画在 jsdom 不跑、body 滚动锁残留，后续点击改用 fireEvent 直达；
+    // 测的是规格组装与门禁，点击 mechanics 由组件库用例覆盖
+    expect(await screen.findByRole("checkbox", { name: "URLs" })).not.toBeNull();
+    filterMock.mockReturnValue(
+      fakeCommand({ status: "ok", data: { chapters: [], truncated: false } }),
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(filterMock).toHaveBeenCalledWith("abc-uuid", {
+      type: "Cleanup",
+      presets: [
+        "UrlFull",
+        "UrlDomain",
+        "PromoRelease",
+        "PromoSite",
+        "PromoVote",
+        "PromoGroup",
+        "ContactQq",
+        "ContactWechat",
+        "ContactGroup",
+      ],
+    });
+
+    // 叶子乱序重勾不影响规格顺序：取消再重勾中间叶子，仍按固定顺序拼装
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Domain names" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Domain names" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(filterMock).toHaveBeenLastCalledWith("abc-uuid", {
+      type: "Cleanup",
+      presets: [
+        "UrlFull",
+        "UrlDomain",
+        "PromoRelease",
+        "PromoSite",
+        "PromoVote",
+        "PromoGroup",
+        "ContactQq",
+        "ContactWechat",
+        "ContactGroup",
+      ],
+    });
+
+    // 三个组头全关 → 规格为空，筛选禁用
+    await fireEvent.click(screen.getByRole("checkbox", { name: "URLs" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Site promos" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Contact info" }));
+    expect((screen.getByRole("button", { name: "Filter" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("标点符号默认全选可运行，全取消后筛选禁用", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(EditPage);
+    await screen.findByRole("heading", { name: "第一章 引子" });
+
+    // 类型下拉切到标点符号：jsdom 无布局，选项按 `data-value` 定位
+    await user.click(screen.getByRole("combobox", { name: "Filter type" }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-value="punct"]')).not.toBeNull();
+    });
+    await user.click(document.querySelector('[data-value="punct"]') as HTMLElement);
+
+    // 浮层关闭动画在 jsdom 不跑、body 滚动锁残留，后续点击改用 fireEvent 直达
+    expect(await screen.findByRole("checkbox", { name: "Half-width punct" })).not.toBeNull();
+    filterMock.mockReturnValue(
+      fakeCommand({ status: "ok", data: { chapters: [], truncated: false } }),
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(filterMock).toHaveBeenCalledWith("abc-uuid", {
+      type: "Punct",
+      presets: ["HalfPunct", "FullSymbol", "ZeroWidth", "WeirdSpace", "SpecialSym", "RepeatPunct"],
+    });
+
+    // 三个组头全关 → 规格为空，筛选禁用
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Width norms" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Hidden chars" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Odd marks" }));
+    expect((screen.getByRole("button", { name: "Filter" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("标点闭合默认按行全选可运行，切跨行后规格跟随，全取消后筛选禁用", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(EditPage);
+    await screen.findByRole("heading", { name: "第一章 引子" });
+
+    // 类型下拉切到标点闭合：jsdom 无布局，选项按 `data-value` 定位
+    await user.click(screen.getByRole("combobox", { name: "Filter type" }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-value="pairs"]')).not.toBeNull();
+    });
+    await user.click(document.querySelector('[data-value="pairs"]') as HTMLElement);
+
+    // 浮层关闭动画在 jsdom 不跑、body 滚动锁残留，后续点击改用 fireEvent 直达
+    expect(await screen.findByRole("checkbox", { name: "Round pairs" })).not.toBeNull();
+    filterMock.mockReturnValue(
+      fakeCommand({ status: "ok", data: { chapters: [], truncated: false } }),
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(filterMock).toHaveBeenCalledWith("abc-uuid", {
+      type: "Pairs",
+      pairs: [
+        "Round",
+        "Square",
+        "Brace",
+        "TortBlack",
+        "TortWhite",
+        "BookDouble",
+        "BookSingle",
+        "DQuote",
+        "SQuote",
+        "CQuoteS",
+        "CQuoteD",
+        "AsciiS",
+        "AsciiD",
+        "RevQuote",
+      ],
+      scope: "Line",
+    });
+
+    // 切到跨行 → 规格 scope 跟随
+    await fireEvent.click(screen.getByRole("radio", { name: "Cross line" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(filterMock).toHaveBeenLastCalledWith("abc-uuid", {
+      type: "Pairs",
+      pairs: [
+        "Round",
+        "Square",
+        "Brace",
+        "TortBlack",
+        "TortWhite",
+        "BookDouble",
+        "BookSingle",
+        "DQuote",
+        "SQuote",
+        "CQuoteS",
+        "CQuoteD",
+        "AsciiS",
+        "AsciiD",
+        "RevQuote",
+      ],
+      scope: "Chapter",
+    });
+
+    // 五个组头全关 → 规格为空，筛选禁用
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Round brackets" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Special brackets" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Title marks" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Curved quotes" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "ASCII quotes" }));
+    expect((screen.getByRole("button", { name: "Filter" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it("Ctrl+S 触发保存，干净态下无操作", async () => {

@@ -168,7 +168,89 @@ pub struct ChapterContent {
     pub lines: Vec<String>,
 }
 
-/// 筛选种类：右栏筛选器的前端契约；关键词含匹配与正则二选一。
+/// 垃圾清理预设：只读扫描用的内置模式；手机号这类高误伤项刻意不收录，只做标出。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum CleanupPreset {
+    /// 完整网址：`http(s)://` 锚定，`v2.0` 这类不算。
+    UrlFull,
+    /// 站点域名：`www.` 或常见后缀裸域名。
+    UrlDomain,
+    /// 首发更新：转载站的首发、追更话术。
+    PromoRelease,
+    /// 站点名称：转载站站名与阅读引导。
+    PromoSite,
+    /// 求票订阅：互动求票与订阅话术。
+    PromoVote,
+    /// 社群引流：书友群、加群话术。
+    PromoGroup,
+    /// QQ 号码：`QQ` + 5–12 位数字。
+    ContactQq,
+    /// 微信号码：`微信(号)` + 字母开头 ID。
+    ContactWechat,
+    /// 群组号码：`群(号)` + 数字。
+    ContactGroup,
+}
+
+/// 标点符号预设：只读扫描用的排版问题模式；`……`/`——`恰两连是正确写法，刻意放过。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum PunctPreset {
+    /// 半角标点：半角句读括号（含 `.`，`v2.0` 这类会中，find-only 可接受）。
+    HalfPunct,
+    /// 全角符号：错用的全角（中文正用的，。！？等已排除）。
+    FullSymbol,
+    /// 零宽字符：零宽空格/连接符与 BOM。
+    ZeroWidth,
+    /// 特殊空格：不换行空格、全角空格、制表符。
+    WeirdSpace,
+    /// 特殊符号：Emoji 与装饰符号。
+    SpecialSym,
+    /// 连续标点：同类标点连发（省略号/破折号 3 连起标，其余 2 连起标）。
+    RepeatPunct,
+}
+
+/// 成对标点种类：只读扫描用的闭合检测模式；ASCII 与全角收进同一叶子，按"对"开关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum PairKind {
+    /// 圆括号对：（）()。
+    Round,
+    /// 方括号对：［］[]。
+    Square,
+    /// 花括号对：｛｝{}。
+    Brace,
+    /// 方头括号：【】。
+    TortBlack,
+    /// 象形括号：〔〕。
+    TortWhite,
+    /// 双书名号：《》。
+    BookDouble,
+    /// 单书名号：〈〉。
+    BookSingle,
+    /// 双弯引号：“”。
+    DQuote,
+    /// 单弯引号：‘’。
+    SQuote,
+    /// 直角单引：「」。
+    CQuoteS,
+    /// 直角双引：『』。
+    CQuoteD,
+    /// 英文单引：''（同字符开闭，toggle 语义）。
+    AsciiS,
+    /// 英文双引：""（同字符开闭，toggle 语义）。
+    AsciiD,
+    /// 反向双引：〝〞。
+    RevQuote,
+}
+
+/// 配对检测范围：按行独立，或跨行延续（含多段对话引号识别）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum PairScope {
+    /// 按行筛选：每行独立跑栈机，无豁免。
+    Line,
+    /// 跨行筛选：状态机跨行，引号行首延续静默吸收。
+    Chapter,
+}
+
+/// 筛选种类：右栏筛选器的前端契约；关键词、正则、垃圾清理、标点符号、标点闭合五选一。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "type")]
 pub enum NovelFilter {
@@ -183,6 +265,23 @@ pub enum NovelFilter {
     Regex {
         /// 用户填写的正则原文。
         pattern: String,
+    },
+    /// 垃圾清理：内置预设多选，空预设前后端都拦截。
+    Cleanup {
+        /// 启用的预设清单（顺序不敏感，后端按固定优先级编译）。
+        presets: Vec<CleanupPreset>,
+    },
+    /// 标点符号：排版问题预设多选，空预设前后端都拦截。
+    Punct {
+        /// 启用的预设清单（顺序不敏感，后端按固定优先级编译）。
+        presets: Vec<PunctPreset>,
+    },
+    /// 标点闭合：成对标点多选 + 检测范围，空预设前后端都拦截。
+    Pairs {
+        /// 启用的成对种类清单（顺序不敏感，栈机统一处理）。
+        pairs: Vec<PairKind>,
+        /// 检测范围：按行独立，或跨行延续。
+        scope: PairScope,
     },
 }
 
@@ -816,6 +915,7 @@ pub fn update_chapter(
 
 /// 筛选种类编译为正则：关键词转义后统一走正则引擎，命中字节区间落在原文上，
 /// 大小写不敏感经 `(?i)` 由引擎处理，不挪动原文索引。
+/// 垃圾清理按固定优先级（网址 → 联系方式 → 宣传）拼 alternation，同一起点更具体的优先。
 fn build_filter_regex(filter: &NovelFilter) -> anyhow::Result<Regex> {
     match filter {
         NovelFilter::Keyword {
@@ -838,6 +938,85 @@ fn build_filter_regex(filter: &NovelFilter) -> anyhow::Result<Regex> {
             }
             Regex::new(pattern).context("invalid regex pattern")
         }
+        NovelFilter::Cleanup { presets } => {
+            if presets.is_empty() {
+                anyhow::bail!("cleanup presets must not be empty");
+            }
+            // 固定优先级：网址 → 联系方式 → 宣传，同一起点更具体的优先。
+            let mut parts = Vec::new();
+            if presets.contains(&CleanupPreset::UrlFull) {
+                // 完整网址：协议锚定，空白与汉字截断（`v2.0` 这类不算）。
+                parts.push(r"https?://[^\s\p{Han}]+");
+            }
+            if presets.contains(&CleanupPreset::UrlDomain) {
+                // 站点域名：`www.` 或常见后缀裸域名；后缀表拍脑袋列了常用项，扫真书时补。
+                parts.push(
+                    r"www\.[^\s\p{Han}]+|[\w-]+(?:\.[\w-]+)*\.(?:com|net|cn|org|top|xyz|vip|cc|me|info|biz|club|site|online)(?:\.cn)?[^\s\p{Han}]*",
+                );
+            }
+            if presets.contains(&CleanupPreset::ContactQq) {
+                parts.push(r"[Qq]{1,2}[:：\s]*\d{5,12}");
+            }
+            if presets.contains(&CleanupPreset::ContactWechat) {
+                // 微信号字母开头；"微信：张三"这类中文名不算。
+                parts.push(r"微信(?:号)?[:：\s]*[A-Za-z][\w-]{5,19}");
+            }
+            if presets.contains(&CleanupPreset::ContactGroup) {
+                // 纯数字串不碰，必须有"群(号)"前缀。
+                parts.push(r"群(?:号)?[:：\s]*\d{5,12}");
+            }
+            if presets.contains(&CleanupPreset::PromoRelease) {
+                parts.push(r"本书首发|首发|最新章节|第一时间|正版|完整版|未删减");
+            }
+            if presets.contains(&CleanupPreset::PromoSite) {
+                parts.push(r"小说网|笔趣阁|看书网|手机用户|请到");
+            }
+            if presets.contains(&CleanupPreset::PromoVote) {
+                parts.push(r"推荐票|月票|打赏|订阅|追更");
+            }
+            if presets.contains(&CleanupPreset::PromoGroup) {
+                parts.push(r"书友群|QQ群|微信公众号|公众号");
+            }
+            let pattern = format!("(?i)(?:{})", parts.join("|"));
+            Regex::new(&pattern).context("invalid cleanup pattern")
+        }
+        NovelFilter::Punct { presets } => {
+            if presets.is_empty() {
+                anyhow::bail!("punct presets must not be empty");
+            }
+            // 固定优先级：宽度 → 隐形 → 异形，同一起点更具体的优先。
+            let mut parts = Vec::new();
+            if presets.contains(&PunctPreset::HalfPunct) {
+                // 半角句读括号（含 `.`，`v2.0` 这类会中，find-only 可接受）。
+                parts.push(r#"[,\.;:!?\(\)\[\]"']"#);
+            }
+            if presets.contains(&PunctPreset::FullSymbol) {
+                // 错用的全角：全角 ASCII 与半角假名；中文正用的，。；：！？（）""'' 刻意排除。
+                parts.push(
+                    r"[\uFF00-\uFFEF&&[^\uFF01\uFF02\uFF07-\uFF09\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F]]",
+                );
+            }
+            if presets.contains(&PunctPreset::ZeroWidth) {
+                parts.push(r"[\u200B-\u200D\uFEFF]");
+            }
+            if presets.contains(&PunctPreset::WeirdSpace) {
+                parts.push(r"[\u00A0\u3000\t]");
+            }
+            if presets.contains(&PunctPreset::SpecialSym) {
+                // Emoji 与装饰符号；货币符号（Sc）不在 So/Sk/Sm 内，自然排除。
+                parts.push(r"[\p{So}\p{Sk}]");
+            }
+            if presets.contains(&PunctPreset::RepeatPunct) {
+                // 同类连发：省略号/破折号 3 连起标（恰两连是正确写法），其余 2 连起标。
+                parts.push(
+                    r"，{2,}|。{2,}|；{2,}|：{2,}|、{2,}|[！？!?]{2,}|…{3,}|—{3,}|\.{2,}|,{2,}|;{2,}|:{2,}",
+                );
+            }
+            let pattern = format!("(?i)(?:{})", parts.join("|"));
+            Regex::new(&pattern).context("invalid punct pattern")
+        }
+        // 成对标点走栈机扫描，不编译正则；空清单由调用方 `filter_content_in` 拦截。
+        NovelFilter::Pairs { .. } => anyhow::bail!("pair filters use the stack scanner, not regex"),
     }
 }
 
@@ -858,12 +1037,146 @@ fn collect_line_spans(re: &Regex, line: &str) -> Vec<TextSpan> {
         .collect()
 }
 
+/// 栈机待配 opener：行列定位命中 span。
+struct PairMark {
+    /// 激活叶子在传入清单中的下标。
+    leaf: usize,
+    /// 章内行下标（0-based）。
+    line: usize,
+    /// 行内 char 索引。
+    start: u32,
+}
+
+/// 叶子规则：开闭字符对、是否引号类（参与跨行延续识别）、是否同字符 toggle。
+const fn pair_leaf_rules(kind: PairKind) -> (&'static [(char, char)], bool, bool) {
+    match kind {
+        PairKind::Round => (&[('（', '）'), ('(', ')')], false, false),
+        PairKind::Square => (&[('［', '］'), ('[', ']')], false, false),
+        PairKind::Brace => (&[('｛', '｝'), ('{', '}')], false, false),
+        PairKind::TortBlack => (&[('【', '】')], false, false),
+        PairKind::TortWhite => (&[('〔', '〕')], false, false),
+        PairKind::BookDouble => (&[('《', '》')], false, false),
+        PairKind::BookSingle => (&[('〈', '〉')], false, false),
+        PairKind::DQuote => (&[('“', '”')], true, false),
+        PairKind::SQuote => (&[('‘', '’')], true, false),
+        PairKind::CQuoteS => (&[('「', '」')], true, false),
+        PairKind::CQuoteD => (&[('『', '』')], true, false),
+        PairKind::AsciiS => (&[('\'', '\'')], true, true),
+        PairKind::AsciiD => (&[('"', '"')], true, true),
+        PairKind::RevQuote => (&[('〝', '〞')], true, false),
+    }
+}
+
+/// 整章成对扫描：按行独立，或跨行延续；返回每行命中（行内列升序）。
+/// 规则：opener 入栈；closer 遇栈顶同种配对出栈，否则标 closer 不动栈；
+/// ASCII 同字符遇栈顶同种视为闭合；跨行模式下行首引号 opener 遇栈顶同种
+/// pending 视为延续段静默吸收（多段对话惯例；真忘闭合又恰行首重开时漏标，保守可接受）。
+fn collect_pair_chapter_spans(
+    lines: &[String],
+    pairs: &[PairKind],
+    scope: PairScope,
+) -> Vec<Vec<TextSpan>> {
+    let cross_line = scope == PairScope::Chapter;
+    // 激活表：开闭分开查；同字符对只进 opener 表走 toggle。
+    let mut opens: Vec<(char, usize, bool, bool)> = Vec::new();
+    let mut closes: Vec<(char, usize)> = Vec::new();
+    for (index, kind) in pairs.iter().enumerate() {
+        let (shapes, is_quote, toggle) = pair_leaf_rules(*kind);
+        for (open, close) in shapes {
+            opens.push((*open, index, is_quote, toggle));
+            if open != close {
+                closes.push((*close, index));
+            }
+        }
+    }
+    let mut per_line: Vec<Vec<TextSpan>> = vec![Vec::new(); lines.len()];
+    let mut stack: Vec<PairMark> = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        let mut seen_content = false;
+        for (char_index, ch) in line.chars().enumerate() {
+            // 行首判定：首个非空字符。
+            let is_first_content = !seen_content && !ch.is_whitespace();
+            if !ch.is_whitespace() {
+                seen_content = true;
+            }
+            if let Some(&(_, leaf, is_quote, toggle)) =
+                opens.iter().find(|(open, _, _, _)| *open == ch)
+            {
+                if cross_line
+                    && is_first_content
+                    && is_quote
+                    && stack.last().is_some_and(|top| top.leaf == leaf)
+                {
+                    stack.pop();
+                    stack.push(PairMark {
+                        leaf,
+                        line: line_index,
+                        start: saturating_u32(char_index),
+                    });
+                    continue;
+                }
+                if toggle && stack.last().is_some_and(|top| top.leaf == leaf) {
+                    stack.pop();
+                    continue;
+                }
+                stack.push(PairMark {
+                    leaf,
+                    line: line_index,
+                    start: saturating_u32(char_index),
+                });
+                continue;
+            }
+            if let Some(&(_, leaf)) = closes.iter().find(|(close, _)| *close == ch) {
+                if stack.last().is_some_and(|top| top.leaf == leaf) {
+                    stack.pop();
+                } else {
+                    per_line[line_index].push(TextSpan {
+                        start: saturating_u32(char_index),
+                        len: 1,
+                    });
+                }
+            }
+        }
+        if !cross_line {
+            // 按行模式：行尾悬空 opener 全部标出。
+            for mark in std::mem::take(&mut stack) {
+                per_line[mark.line].push(TextSpan {
+                    start: mark.start,
+                    len: 1,
+                });
+            }
+        }
+    }
+    if cross_line {
+        // 跨行模式：章末悬空 opener 全部标出。
+        for mark in std::mem::take(&mut stack) {
+            per_line[mark.line].push(TextSpan {
+                start: mark.start,
+                len: 1,
+            });
+        }
+    }
+    for spans in &mut per_line {
+        spans.sort_by_key(|span| span.start);
+    }
+    per_line
+}
+
 /// 全书筛选：按文档顺序逐章逐行扫描，命中章节进清单；超限截断并置位。
 pub fn filter_content_in(
     project_dir: &Path,
     filter: &NovelFilter,
 ) -> anyhow::Result<FilterOutcome> {
-    let re = build_filter_regex(filter)?;
+    // 成对标点走栈机，不编译正则；其余走正则引擎。
+    let re = match filter {
+        NovelFilter::Pairs { pairs, .. } => {
+            if pairs.is_empty() {
+                anyhow::bail!("pair kinds must not be empty");
+            }
+            None
+        }
+        _ => Some(build_filter_regex(filter)?),
+    };
     let content = read_content(project_dir)?;
     let mut outcome = FilterOutcome {
         chapters: Vec::new(),
@@ -872,9 +1185,21 @@ pub fn filter_content_in(
     let mut span_total = 0usize;
     'volumes: for (volume_index, volume) in content.volumes.iter().enumerate() {
         for (chapter_index, chapter) in volume.chapters.iter().enumerate() {
+            let chapter_line_spans: Vec<Vec<TextSpan>> =
+                if let NovelFilter::Pairs { pairs, scope } = filter {
+                    collect_pair_chapter_spans(&chapter.lines, pairs, *scope)
+                } else {
+                    let Some(re) = re.as_ref() else {
+                        anyhow::bail!("missing pattern for regex filter")
+                    };
+                    chapter
+                        .lines
+                        .iter()
+                        .map(|line| collect_line_spans(re, line))
+                        .collect()
+                };
             let mut matches = Vec::new();
-            for (line_index, line) in chapter.lines.iter().enumerate() {
-                let spans = collect_line_spans(&re, line);
+            for (line_index, spans) in chapter_line_spans.into_iter().enumerate() {
                 if spans.is_empty() {
                     continue;
                 }
@@ -1211,6 +1536,328 @@ mod tests {
             )
             .is_err()
         );
+        cleanup(&root);
+    }
+
+    /// 垃圾清理夹具：9 个叶子各有落点，外加版本号与中文名反例。
+    fn write_cleanup_text(dir: &Path) {
+        write_content(
+            dir,
+            "第一章 引子\n正文内容甲\n访问https://example.com看更新\n当前版本v2.0稳定\n去www.example.net看书\n记example.org备用\n本书首发小说网，追更请收藏\n请到笔趣阁看手机用户版\n求推荐票月票，打赏订阅吧\n加QQ群123456领福利\n微信号：abc_123\n微信：张三不算号\n备用HTTP://EXAMPLE.COM/x镜像\n群号：998877\n联系qq：654321详谈\n",
+        );
+        parse_txt_in(dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+    }
+
+    /// 取命中行号：断言落点时忽略行内跨度细节。
+    fn matched_lines(outcome: &FilterOutcome) -> Vec<u32> {
+        outcome.chapters[0].matches.iter().map(|m| m.line).collect()
+    }
+
+    /// 按叶子组装清理规格：调用点只列叶子，顺序由后端固定。
+    fn cleanup_filter(presets: &[CleanupPreset]) -> NovelFilter {
+        NovelFilter::Cleanup {
+            presets: presets.to_vec(),
+        }
+    }
+
+    #[test]
+    fn filters_cleanup_url_leaves() {
+        let (root, dir) = test_project("filter-cleanup-url");
+        write_cleanup_text(&dir);
+        let full =
+            filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::UrlFull])).expect("filter");
+        assert!(!full.truncated);
+        assert_eq!(matched_lines(&full), vec![2, 12]);
+        assert_eq!(
+            full.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 2, len: 19 }],
+        );
+        let domain =
+            filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::UrlDomain])).expect("filter");
+        // 行 2/12 的完整网址内嵌裸域名，一并命中。
+        assert_eq!(matched_lines(&domain), vec![2, 4, 5, 12]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_cleanup_promo_leaves() {
+        let (root, dir) = test_project("filter-cleanup-promo");
+        write_cleanup_text(&dir);
+        let release = filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::PromoRelease]))
+            .expect("filter");
+        assert_eq!(matched_lines(&release), vec![6]);
+        let site =
+            filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::PromoSite])).expect("filter");
+        assert_eq!(matched_lines(&site), vec![6, 7]);
+        let vote =
+            filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::PromoVote])).expect("filter");
+        assert_eq!(matched_lines(&vote), vec![6, 8]);
+        assert_eq!(
+            vote.chapters[0].matches[1].spans,
+            vec![
+                TextSpan { start: 1, len: 3 },
+                TextSpan { start: 4, len: 2 },
+                TextSpan { start: 7, len: 2 },
+                TextSpan { start: 9, len: 2 },
+            ],
+        );
+        let group =
+            filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::PromoGroup])).expect("filter");
+        assert_eq!(matched_lines(&group), vec![9]);
+        assert_eq!(
+            group.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 1, len: 3 }],
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_cleanup_contact_leaves() {
+        let (root, dir) = test_project("filter-cleanup-contact");
+        write_cleanup_text(&dir);
+        let qq =
+            filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::ContactQq])).expect("filter");
+        assert_eq!(matched_lines(&qq), vec![14]);
+        assert_eq!(
+            qq.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 2, len: 9 }],
+        );
+        let wechat = filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::ContactWechat]))
+            .expect("filter");
+        // "微信：张三"中文名不算微信号。
+        assert_eq!(matched_lines(&wechat), vec![10]);
+        assert_eq!(
+            wechat.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 0, len: 11 }],
+        );
+        let group = filter_content_in(&dir, &cleanup_filter(&[CleanupPreset::ContactGroup]))
+            .expect("filter");
+        assert_eq!(matched_lines(&group), vec![9, 13]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_cleanup_all_leaves_and_rejects_empty() {
+        let (root, dir) = test_project("filter-cleanup-all");
+        write_cleanup_text(&dir);
+        let outcome = filter_content_in(
+            &dir,
+            &cleanup_filter(&[
+                CleanupPreset::UrlFull,
+                CleanupPreset::UrlDomain,
+                CleanupPreset::PromoRelease,
+                CleanupPreset::PromoSite,
+                CleanupPreset::PromoVote,
+                CleanupPreset::PromoGroup,
+                CleanupPreset::ContactQq,
+                CleanupPreset::ContactWechat,
+                CleanupPreset::ContactGroup,
+            ]),
+        )
+        .expect("filter");
+        assert_eq!(
+            matched_lines(&outcome),
+            vec![2, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14]
+        );
+        assert!(filter_content_in(&dir, &cleanup_filter(&[])).is_err());
+        cleanup(&root);
+    }
+
+    /// 标点符号夹具：6 叶子各有落点，正确写法（`……`/`——`两连）与全角逗号为反例。
+    /// 不可见字符用转义写明，肉眼不可见但确有其符。
+    fn write_punct_text(dir: &Path) {
+        write_content(
+            dir,
+            "第一章 引子\n正文内容，甲\n半角,逗号.句号\n全角\u{FF21}\u{FF22}\u{FF23}测试\n零宽a\u{200B}b符\n特殊\u{A0}空格\u{3000}测试\n星★标☆记\n语气词！！真的？？\n省略号……正确\n破折号——正确\n失控………了\n连发。。。不好\n英文...省略\n",
+        );
+        parse_txt_in(dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+    }
+
+    /// 按叶子组装标点规格：调用点只列叶子，顺序由后端固定。
+    fn punct_filter(presets: &[PunctPreset]) -> NovelFilter {
+        NovelFilter::Punct {
+            presets: presets.to_vec(),
+        }
+    }
+
+    #[test]
+    fn filters_punct_width_leaves() {
+        let (root, dir) = test_project("filter-punct-width");
+        write_punct_text(&dir);
+        let half =
+            filter_content_in(&dir, &punct_filter(&[PunctPreset::HalfPunct])).expect("filter");
+        assert_eq!(matched_lines(&half), vec![2, 12]);
+        assert_eq!(
+            half.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 2, len: 1 }, TextSpan { start: 5, len: 1 },],
+        );
+        let full =
+            filter_content_in(&dir, &punct_filter(&[PunctPreset::FullSymbol])).expect("filter");
+        assert_eq!(matched_lines(&full), vec![3]);
+        assert_eq!(
+            full.chapters[0].matches[0].spans,
+            vec![
+                TextSpan { start: 2, len: 1 },
+                TextSpan { start: 3, len: 1 },
+                TextSpan { start: 4, len: 1 },
+            ],
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_punct_hidden_leaves() {
+        let (root, dir) = test_project("filter-punct-hidden");
+        write_punct_text(&dir);
+        let zero =
+            filter_content_in(&dir, &punct_filter(&[PunctPreset::ZeroWidth])).expect("filter");
+        assert_eq!(matched_lines(&zero), vec![4]);
+        assert_eq!(
+            zero.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 3, len: 1 }],
+        );
+        let space =
+            filter_content_in(&dir, &punct_filter(&[PunctPreset::WeirdSpace])).expect("filter");
+        assert_eq!(matched_lines(&space), vec![5]);
+        assert_eq!(
+            space.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 2, len: 1 }, TextSpan { start: 5, len: 1 },],
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_punct_special_leaves() {
+        let (root, dir) = test_project("filter-punct-special");
+        write_punct_text(&dir);
+        let symbol =
+            filter_content_in(&dir, &punct_filter(&[PunctPreset::SpecialSym])).expect("filter");
+        assert_eq!(matched_lines(&symbol), vec![6]);
+        let repeat =
+            filter_content_in(&dir, &punct_filter(&[PunctPreset::RepeatPunct])).expect("filter");
+        // `……`/`——`恰两连是正确写法，不命中；三连与两连杂标点命中。
+        assert_eq!(matched_lines(&repeat), vec![7, 10, 11, 12]);
+        assert_eq!(
+            repeat.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 3, len: 2 }, TextSpan { start: 7, len: 2 },],
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_punct_all_leaves_and_rejects_empty() {
+        let (root, dir) = test_project("filter-punct-all");
+        write_punct_text(&dir);
+        let outcome = filter_content_in(
+            &dir,
+            &punct_filter(&[
+                PunctPreset::HalfPunct,
+                PunctPreset::FullSymbol,
+                PunctPreset::ZeroWidth,
+                PunctPreset::WeirdSpace,
+                PunctPreset::SpecialSym,
+                PunctPreset::RepeatPunct,
+            ]),
+        )
+        .expect("filter");
+        assert_eq!(matched_lines(&outcome), vec![2, 3, 4, 5, 6, 7, 10, 11, 12]);
+        assert!(filter_content_in(&dir, &punct_filter(&[])).is_err());
+        cleanup(&root);
+    }
+
+    /// 成对标点夹具：配平、悬空、孤立、嵌套、错位、多段对话、章尾悬空各有落点。
+    fn write_pair_text(dir: &Path) {
+        write_content(
+            dir,
+            "第一章 引子\n他说：“你好。”\n（备注：重要）\n缺少闭合（在这里\n孤立）在这里\n《书名没闭合\n嵌套（【没错】）\n错位（【错）】\n\"第一段\n\"第二段。\"\n尾部悬空“没关\n",
+        );
+        parse_txt_in(dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+    }
+
+    /// 全量成对种类：与前端默认全开一致，固定顺序。
+    fn all_pair_kinds() -> Vec<PairKind> {
+        vec![
+            PairKind::Round,
+            PairKind::Square,
+            PairKind::Brace,
+            PairKind::TortBlack,
+            PairKind::TortWhite,
+            PairKind::BookDouble,
+            PairKind::BookSingle,
+            PairKind::DQuote,
+            PairKind::SQuote,
+            PairKind::CQuoteS,
+            PairKind::CQuoteD,
+            PairKind::AsciiS,
+            PairKind::AsciiD,
+            PairKind::RevQuote,
+        ]
+    }
+
+    /// 按种类与范围组装成对规格。
+    fn pair_filter(pairs: &[PairKind], scope: PairScope) -> NovelFilter {
+        NovelFilter::Pairs {
+            pairs: pairs.to_vec(),
+            scope,
+        }
+    }
+
+    #[test]
+    fn filters_pairs_per_line_strict() {
+        let (root, dir) = test_project("filter-pairs-line");
+        write_pair_text(&dir);
+        let outcome = filter_content_in(&dir, &pair_filter(&all_pair_kinds(), PairScope::Line))
+            .expect("filter");
+        assert!(!outcome.truncated);
+        // 延续段行首 opener 也标出：按行模式无豁免。
+        assert_eq!(matched_lines(&outcome), vec![3, 4, 5, 7, 8, 10]);
+        assert_eq!(
+            outcome.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 4, len: 1 }],
+        );
+        // 错位行：孤立 closer 与悬空 opener 都标。
+        assert_eq!(
+            outcome.chapters[0].matches[3].spans,
+            vec![TextSpan { start: 2, len: 1 }, TextSpan { start: 5, len: 1 },],
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_pairs_cross_line_dialogue() {
+        let (root, dir) = test_project("filter-pairs-chapter");
+        write_pair_text(&dir);
+        let outcome = filter_content_in(&dir, &pair_filter(&all_pair_kinds(), PairScope::Chapter))
+            .expect("filter");
+        assert!(!outcome.truncated);
+        // 延续段行首引号静默吸收，不标；L3 的悬空括号被 L4 的孤立括号配走；
+        // 章末悬空（L5/L7/L10 的 opener）落在各自 opener 行。
+        assert_eq!(matched_lines(&outcome), vec![5, 7, 10]);
+        assert_eq!(
+            outcome.chapters[0].matches[0].spans,
+            vec![TextSpan { start: 0, len: 1 }],
+        );
+        // 错位行：孤立 closer 行内标出，悬空 opener 章末标出（同行同 span）。
+        assert_eq!(
+            outcome.chapters[0].matches[1].spans,
+            vec![TextSpan { start: 2, len: 1 }, TextSpan { start: 5, len: 1 },],
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn filters_pairs_ascii_toggle_and_rejects_empty() {
+        let (root, dir) = test_project("filter-pairs-ascii");
+        write_content(&dir, "第一章 对话\nsay \"hi\" ok\nsay \"hi ok\n");
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        let line = filter_content_in(&dir, &pair_filter(&[PairKind::AsciiD], PairScope::Line))
+            .expect("filter");
+        assert_eq!(matched_lines(&line), vec![2]);
+        let chapter =
+            filter_content_in(&dir, &pair_filter(&[PairKind::AsciiD], PairScope::Chapter))
+                .expect("filter");
+        assert_eq!(matched_lines(&chapter), vec![2]);
+        assert!(filter_content_in(&dir, &pair_filter(&[], PairScope::Line)).is_err());
         cleanup(&root);
     }
 

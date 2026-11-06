@@ -1,4 +1,5 @@
 import type {
+  CleanupPreset,
   CloseBehavior,
   CommandError,
   Config,
@@ -32,6 +33,9 @@ import type {
   ProjectMetadata,
   ProjectOverview,
   ProjectType,
+  PairKind,
+  PairScope,
+  PunctPreset,
   SystemInfo,
   TextSpan,
   TxtOptions,
@@ -65,6 +69,7 @@ export type CommandsMap = typeof rawCommands;
 export type EnhancedCommands = { [K in keyof CommandsMap]: WrappedFn<CommandsMap[K]> };
 
 export type {
+  CleanupPreset,
   CloseBehavior,
   CommandError,
   Config,
@@ -98,6 +103,9 @@ export type {
   ProjectMetadata,
   ProjectOverview,
   ProjectType,
+  PairKind,
+  PairScope,
+  PunctPreset,
   SystemInfo,
   TextSpan,
   TxtOptions,
