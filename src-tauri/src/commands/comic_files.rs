@@ -1,7 +1,9 @@
 //! 漫画文件命令：`sources/images/` 目录导入、状态查询与顺序解析的薄封装，具体文件操作在 `features::comic_files`。
 
 use crate::cores::types::CommandResult;
-use crate::features::comic_files::{self, ComicImageInfo, ComicImagesStatus, ComicOutline};
+use crate::features::comic_files::{
+    self, ComicImageInfo, ComicImagesStatus, ComicOutline, ComicVolumeInput,
+};
 
 /// 查询漫画原稿状态；缺目录回落空态，不建文件。
 #[tauri::command]
@@ -55,4 +57,16 @@ pub fn get_comic_image_path(
     path: String,
 ) -> CommandResult<ComicImageInfo> {
     Ok(comic_files::image_path(&app, &id, &path)?)
+}
+
+/// 全量更新漫画分卷结构：标题可改、卷可增删排序，页须全量覆盖，落盘后返回新大纲。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_comic_volumes(
+    app: tauri::AppHandle,
+    id: String,
+    volumes: Vec<ComicVolumeInput>,
+) -> CommandResult<ComicOutline> {
+    Ok(comic_files::update_volumes(&app, &id, volumes)?)
 }

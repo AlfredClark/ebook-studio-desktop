@@ -1,11 +1,625 @@
 <script lang="ts">
-  // 漫画编辑步骤页：待接入前先按解析产物引导（无产物回文件步骤，有产物提示待接入）。
+  // 漫画编辑页：左栏页序树（拖拽 + Alt+方向键跨卷重排，脏态+保存）+ 中栏大图预览 +
+  // 右栏页信息占位；无解析产物时沿用步骤引导。
+  import { onMount } from "svelte";
   import { page } from "$app/state";
+  import { convertFileSrc } from "@tauri-apps/api/core";
+  import ImageIcon from "@lucide/svelte/icons/image";
+  import TrashIcon from "@lucide/svelte/icons/trash-2";
+  import { Button } from "#components/shadcn-svelte/button";
+  import * as Resizable from "#components/shadcn-svelte/resizable";
+  import CardRow from "#components/common/card-row.svelte";
+  import CardSection from "#components/common/card-section.svelte";
+  import ConfirmDialog from "#components/common/confirm-dialog.svelte";
+  import commands from "#libs/commands";
+  import type { ComicOutline } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
+  import { toast } from "#libs/utils/toast";
   import ComicStepGuide from "../../_components/comic-step-guide.svelte";
+  import ComicPageTree from "./_components/comic-page-tree.svelte";
+  import {
+    findPage,
+    flattenPages,
+    movePage,
+    moveVolume,
+    sameOrder,
+    toWorking,
+    validateVolumeTitle,
+    type DropTarget,
+    type PageRef,
+    type VolumeMoveTarget,
+    type VolumeTitleError,
+    type WorkingVolume,
+  } from "./_components/comic-order";
+  import { formatBytes, pageFileName } from "../files/_components/comic-files";
 
   const uuid = $derived(page.params.uuid ?? "");
+
+  let outline = $state<ComicOutline | null>(null);
+  let loading = $state(true);
+  let loadFailed = $state(false);
+
+  /** 工作卷（拖拽只改本地）与已落盘快照：JSON 比对判定脏态。 */
+  let working = $state<WorkingVolume[]>([]);
+  let saved = $state<WorkingVolume[]>([]);
+  const dirty = $derived(!sameOrder(working, saved));
+  let saving = $state(false);
+  /** 放弃更改确认框：纯 UI 态，执行走回滚回调。 */
+  let confirmOpen = $state(false);
+
+  /** 预览选中：相对 images/ 的 POSIX 路径，拖拽后按 path 跟随。 */
+  let selectedPath = $state<string | null>(null);
+  /** 预览图：asset URL 与字节大小，迟到结果按 token 丢弃。 */
+  let previewUrl = $state<string | null>(null);
+  let previewSize = $state<number | null>(null);
+  let previewDims = $state<{ width: number; height: number } | null>(null);
+  let previewLoading = $state(false);
+  let previewFailed = $state(false);
+  let previewToken = 0;
+
+  /** 页大小表：path → 字节数，按 path 查表，拖拽改序不影响。 */
+  const pageSizes = $derived(
+    new Map(
+      (outline?.volumes ?? []).flatMap((volume) =>
+        volume.pages.map((page) => [page.path, page.size_bytes] as const),
+      ),
+    ),
+  );
+
+  /** 选中位置：卷下标 + 卷内序号 + 全局序号，供工具条与右栏展示。 */
+  const location = $derived.by(() => {
+    if (selectedPath == null) {
+      return null;
+    }
+    const ref = findPage(working, selectedPath);
+    if (ref == null) {
+      return null;
+    }
+    const flat = flattenPages(working);
+    return {
+      ref,
+      title: working[ref.volume]?.title ?? null,
+      index: flat.indexOf(selectedPath) + 1,
+      total: flat.length,
+    };
+  });
+
+  /** 进页拉取大纲：缺失回落引导，失败走错误态可重试，正常默认选中首个有效页。 */
+  async function loadOutline(): Promise<void> {
+    loading = true;
+    loadFailed = false;
+    outline = null;
+    working = [];
+    saved = [];
+    selectedPath = null;
+    const result = await commands.getComicContentOutline(uuid).result();
+    loading = false;
+    if (result.status === "error") {
+      loadFailed = true;
+      toast.error(m.comic_edit_load_failed());
+      return;
+    }
+    outline = result.data;
+    if (outline == null) {
+      return;
+    }
+    working = toWorking(outline.volumes);
+    saved = toWorking(outline.volumes);
+    selectFirstPage();
+  }
+
+  /** 默认选中首卷首个有效页。 */
+  function selectFirstPage(): void {
+    const first = working.flatMap((volume) => volume.pages)[0] ?? null;
+    selectedPath = first;
+    if (first != null) {
+      void loadPreview(first);
+    }
+  }
+
+  /** 点选页面：切换选中并加载预览。 */
+  function handleSelect(path: string): void {
+    if (selectedPath === path) {
+      return;
+    }
+    selectedPath = path;
+    void loadPreview(path);
+  }
+
+  /** 拖拽/键盘提交移动：只改本地工作卷，选中按 path 跟随。 */
+  function handleMove(from: PageRef, to: DropTarget): void {
+    working = movePage(working, from, to);
+  }
+
+  /** 拖拽/键盘提交卷移动：只改本地工作卷顺序。 */
+  function handleMoveVolume(from: number, to: VolumeMoveTarget): void {
+    working = moveVolume(working, from, to);
+  }
+
+  /** 改名提交：标题已由树组件校验，直接落本地工作卷。 */
+  function handleRename(volume: number, title: string): void {
+    if (working[volume] == null) {
+      return;
+    }
+    working[volume] = { ...working[volume], title };
+  }
+
+  /** 删除空卷：请求时弹确认框，确认后移除。 */
+  let deleteConfirmOpen = $state(false);
+  let pendingDelete = $state<number | null>(null);
+  const deleteTargetTitle = $derived(
+    pendingDelete == null ? null : (working[pendingDelete]?.title ?? null),
+  );
+
+  function handleDeleteRequest(volume: number): void {
+    pendingDelete = volume;
+    deleteConfirmOpen = true;
+  }
+
+  function handleDeleteConfirm(): void {
+    const target = pendingDelete == null ? null : working[pendingDelete];
+    pendingDelete = null;
+    if (target == null || target.pages.length > 0) {
+      return;
+    }
+    working = working.filter((entry) => entry !== target);
+    if (selectedPath == null || findPage(working, selectedPath) == null) {
+      selectFirstPage();
+    }
+  }
+
+  /** 新建分卷：内联输入态，提交时做非空 / 长度 / 重名校验。 */
+  let creatingVolume = $state(false);
+  let newTitle = $state("");
+  /** 新建输入框：挂载后聚焦（不用 autofocus 属性，a11y 规则不推荐）。 */
+  let newVolumeInput: HTMLInputElement | null = $state(null);
+  $effect(() => {
+    newVolumeInput?.focus();
+  });
+
+  function titleErrorOf(title: string): VolumeTitleError | null {
+    return validateVolumeTitle(
+      title,
+      working.map((entry) => entry.title ?? ""),
+    );
+  }
+
+  function handleCreateVolume(): void {
+    const error = titleErrorOf(newTitle);
+    if (error === "empty") {
+      toast.error(m.comic_edit_volume_title_empty());
+      return;
+    }
+    if (error === "duplicate") {
+      toast.error(m.comic_edit_volume_title_duplicate());
+      return;
+    }
+    if (error === "too_long") {
+      toast.error(m.comic_edit_volume_title_too_long());
+      return;
+    }
+    working = [...working, { title: newTitle.trim(), pages: [] }];
+    newTitle = "";
+    creatingVolume = false;
+  }
+
+  /** 保存：全量分卷结构覆写落盘，成功后快照同步、失败保留本地可再保存。 */
+  async function handleSave(): Promise<void> {
+    if (!dirty || saving) {
+      return;
+    }
+    saving = true;
+    const result = await commands
+      .updateComicVolumes(
+        uuid,
+        working.map((volume) => ({ title: volume.title, pages: [...volume.pages] })),
+      )
+      .result();
+    saving = false;
+    if (result.status === "error") {
+      toast.error(m.comic_edit_save_failed());
+      return;
+    }
+    outline = result.data;
+    working = toWorking(result.data.volumes);
+    saved = toWorking(result.data.volumes);
+    toast.success(m.comic_edit_save_success());
+  }
+
+  /** 删除页记录：只从工作卷移除顺序记录，sources/images 中的图片文件保留； 未保存前可在左栏放弃更改找回。 */
+  function handleDeletePage(): void {
+    if (selectedPath == null) {
+      return;
+    }
+    const ref = findPage(working, selectedPath);
+    if (ref == null) {
+      return;
+    }
+    const flat = flattenPages(working);
+    const index = flat.indexOf(selectedPath);
+    working = working.map((volume, i) =>
+      i === ref.volume
+        ? { ...volume, pages: volume.pages.filter((_, j) => j !== ref.index) }
+        : volume,
+    );
+    const rest = flattenPages(working);
+    const next = rest[Math.min(index, rest.length - 1)] ?? null;
+    selectedPath = next;
+    if (next == null) {
+      previewUrl = null;
+      previewSize = null;
+      previewDims = null;
+      previewLoading = false;
+      previewFailed = false;
+      return;
+    }
+    void loadPreview(next);
+  }
+
+  /** 放弃更改：回到已落盘快照，选中页丢失时回首个有效页。 */
+  function handleDiscard(): void {
+    working = saved.map((volume) => ({ title: volume.title, pages: [...volume.pages] }));
+    if (selectedPath == null || findPage(working, selectedPath) == null) {
+      selectFirstPage();
+    }
+  }
+
+  /** 上一页 / 下一页：按全局顺序导航。 */
+  function stepPage(delta: 1 | -1): void {
+    if (selectedPath == null) {
+      return;
+    }
+    const flat = flattenPages(working);
+    const index = flat.indexOf(selectedPath);
+    const next = flat[index + delta];
+    if (next != null) {
+      handleSelect(next);
+    }
+  }
+
+  /** 键盘重排：在卷内换位，到边界自动跨入相邻卷首 / 末。 */
+  function keyboardMove(delta: 1 | -1): void {
+    if (selectedPath == null) {
+      return;
+    }
+    const ref = findPage(working, selectedPath);
+    if (ref == null) {
+      return;
+    }
+    const current = working[ref.volume];
+    const neighbor = ref.index + delta;
+    if (neighbor >= 0 && neighbor < current.pages.length) {
+      handleMove(ref, {
+        volume: ref.volume,
+        index: neighbor,
+        edge: delta > 0 ? "after" : "before",
+      });
+      return;
+    }
+    const sibling = ref.volume + delta;
+    if (sibling < 0 || sibling >= working.length) {
+      return;
+    }
+    handleMove(
+      ref,
+      delta > 0
+        ? { volume: sibling, index: 0, edge: "before" }
+        : { volume: sibling, edge: "append" },
+    );
+  }
+
+  /** 全局快捷键：保存 / 切页 / 键盘重排，门禁由各自回调把守。 输入框聚焦时只响应保存，其余方向键留给输入框自身。 */
+  function handleGlobalKeydown(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void handleSave();
+      return;
+    }
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+    if (event.altKey && event.key === "ArrowUp") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        keyboardMoveVolume(-1);
+      } else {
+        keyboardMove(-1);
+      }
+      return;
+    }
+    if (event.altKey && event.key === "ArrowDown") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        keyboardMoveVolume(1);
+      } else {
+        keyboardMove(1);
+      }
+      return;
+    }
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
+      stepPage(-1);
+      return;
+    }
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowRight") {
+      stepPage(1);
+    }
+  }
+
+  /** 键盘卷重排：选中页所在卷整体上移 / 下移一位。 */
+  function keyboardMoveVolume(delta: 1 | -1): void {
+    if (selectedPath == null) {
+      return;
+    }
+    const ref = findPage(working, selectedPath);
+    if (ref == null) {
+      return;
+    }
+    const target = ref.volume + delta;
+    if (target < 0 || target >= working.length) {
+      return;
+    }
+    working = moveVolume(working, ref.volume, {
+      index: target,
+      edge: delta > 0 ? "after" : "before",
+    });
+  }
+
+  /** 图片预览：绝对路径转 asset: URL，切走后回来的迟到结果直接丢弃。 */
+  async function loadPreview(path: string): Promise<void> {
+    const token = (previewToken += 1);
+    previewLoading = true;
+    previewFailed = false;
+    previewDims = null;
+    const image = await commands.getComicImagePath(uuid, path).result();
+    if (token !== previewToken) {
+      return;
+    }
+    previewLoading = false;
+    if (image.status === "error" || selectedPath !== path) {
+      if (selectedPath === path) {
+        previewFailed = true;
+        toast.error(m.comic_files_preview_failed());
+      }
+      return;
+    }
+    previewUrl = convertFileSrc(image.data.path);
+    previewSize = image.data.size_bytes;
+  }
+
+  /** 预览失败重试：选中仍在时重取当前页。 */
+  function retryPreview(): void {
+    if (selectedPath != null) {
+      void loadPreview(selectedPath);
+    }
+  }
+
+  onMount(() => {
+    void loadOutline();
+  });
 </script>
 
+<svelte:window onkeydown={handleGlobalKeydown} />
 <h1 class="sr-only">{m.project_step_edit()}</h1>
-<ComicStepGuide {uuid} />
+{#if loading}
+  <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col p-6">
+    <div class="flex flex-1 items-center justify-center">
+      <p class="text-sm text-muted-foreground" aria-busy="true">{m.comic_edit_loading()}</p>
+    </div>
+  </div>
+{:else if loadFailed}
+  <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col p-6">
+    <div class="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+      <p class="text-sm text-muted-foreground">{m.comic_edit_load_failed()}</p>
+      <Button variant="outline" class="w-full max-w-md" onclick={() => void loadOutline()}>
+        {m.files_retry()}
+      </Button>
+    </div>
+  </div>
+{:else if outline === null}
+  <ComicStepGuide {uuid} />
+{:else}
+  <div class="flex h-full min-h-0 w-full min-w-0">
+    <Resizable.PaneGroup direction="horizontal">
+      <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
+        <div class="flex h-full min-h-0 flex-col">
+          <p class="shrink-0 px-3 pt-3 text-xs text-muted-foreground">
+            {dirty ? m.comic_edit_dirty_hint() : m.comic_edit_drag_hint()}
+          </p>
+          <div class="min-h-0 flex-1 overflow-y-auto">
+            <ComicPageTree
+              volumes={working}
+              {selectedPath}
+              sizes={pageSizes}
+              onSelect={handleSelect}
+              onMove={handleMove}
+              onMoveVolume={handleMoveVolume}
+              onRename={handleRename}
+              onDeleteRequest={handleDeleteRequest}
+            />
+          </div>
+          <div class="flex shrink-0 flex-col gap-2 border-t border-border p-3">
+            {#if creatingVolume}
+              <input
+                bind:this={newVolumeInput}
+                bind:value={newTitle}
+                aria-label={m.comic_edit_volume_new()}
+                placeholder={m.comic_edit_volume_name_placeholder()}
+                onkeydown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handleCreateVolume();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    creatingVolume = false;
+                    newTitle = "";
+                  }
+                }}
+                class="w-full rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:border-ring"
+              />
+              <div class="flex gap-2">
+                <Button class="flex-1" size="sm" disabled={saving} onclick={handleCreateVolume}>
+                  {m.comic_edit_volume_create()}
+                </Button>
+                <Button
+                  variant="outline"
+                  class="flex-1"
+                  size="sm"
+                  onclick={() => {
+                    creatingVolume = false;
+                    newTitle = "";
+                  }}
+                >
+                  {m.projects_create_cancel()}
+                </Button>
+              </div>
+            {:else}
+              <Button
+                variant="outline"
+                class="w-full"
+                disabled={saving}
+                onclick={() => {
+                  creatingVolume = true;
+                  newTitle = "";
+                }}
+              >
+                {m.comic_edit_volume_new()}
+              </Button>
+            {/if}
+          </div>
+          {#if dirty}
+            <div class="flex shrink-0 flex-col gap-2 border-t border-border p-3">
+              <Button class="w-full" disabled={saving} onclick={() => void handleSave()}>
+                {saving ? m.comic_edit_saving() : m.comic_edit_save()}
+              </Button>
+              <Button
+                variant="outline"
+                class="w-full"
+                disabled={saving}
+                onclick={() => (confirmOpen = true)}
+              >
+                {m.comic_edit_discard()}
+              </Button>
+            </div>
+          {/if}
+        </div>
+      </Resizable.Pane>
+      <Resizable.Handle withHandle aria-label={m.edit_resize_left_label()} />
+      <Resizable.Pane defaultSize={56} minSize={30} class="min-w-0">
+        <div class="flex h-full min-h-0 flex-col">
+          <div class="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={location == null || location.index <= 1}
+              onclick={() => stepPage(-1)}
+            >
+              {m.comic_edit_prev()}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={location == null || location.index >= location.total}
+              onclick={() => stepPage(1)}
+            >
+              {m.comic_edit_next()}
+            </Button>
+            {#if location != null && selectedPath != null}
+              <span class="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                {location.index} / {location.total} · {pageFileName(selectedPath)}
+                {#if previewSize != null}
+                  · {formatBytes(previewSize)}
+                {/if}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={m.comic_edit_delete_page()}
+                title={m.comic_edit_delete_page_hint()}
+                disabled={saving}
+                onclick={handleDeletePage}
+              >
+                <TrashIcon class="size-4" />
+              </Button>
+            {/if}
+          </div>
+          <div class="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
+            {#if selectedPath == null}
+              <div class="flex flex-col items-center gap-2 text-center">
+                <ImageIcon class="size-10 text-muted-foreground" />
+                <p class="text-sm text-muted-foreground">{m.comic_edit_no_selection()}</p>
+              </div>
+            {:else if previewLoading}
+              <p class="text-sm text-muted-foreground" aria-busy="true">
+                {m.comic_files_preview_loading()}
+              </p>
+            {:else if previewFailed || previewUrl == null}
+              <div class="flex flex-col items-center gap-2 text-center">
+                <p class="text-sm text-muted-foreground">{m.comic_files_preview_failed()}</p>
+                <Button variant="outline" size="sm" onclick={retryPreview}>
+                  {m.files_retry()}
+                </Button>
+              </div>
+            {:else}
+              <img
+                src={previewUrl}
+                alt={pageFileName(selectedPath)}
+                onload={(event) => {
+                  const img = event.currentTarget as HTMLImageElement | null;
+                  if (img != null) {
+                    previewDims = { width: img.naturalWidth, height: img.naturalHeight };
+                  }
+                }}
+                class="max-h-full max-w-full object-contain"
+              />
+            {/if}
+          </div>
+        </div>
+      </Resizable.Pane>
+      <Resizable.Handle withHandle aria-label={m.edit_resize_right_label()} />
+      <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
+        <div class="flex h-full min-h-0 flex-col gap-4 overflow-auto p-6">
+          <CardSection title={m.comic_edit_info_section()}>
+            {#if location != null && selectedPath != null}
+              <CardRow
+                label={m.comic_edit_info_volume()}
+                description={location.title ?? m.files_untitled_volume()}
+              />
+              <CardRow label={m.comic_edit_info_file()} description={pageFileName(selectedPath)} />
+              <CardRow label={m.comic_edit_info_path()} description={selectedPath} />
+              {#if previewSize != null}
+                <CardRow label={m.comic_edit_info_size()} description={formatBytes(previewSize)} />
+              {/if}
+              <CardRow
+                label={m.comic_edit_info_dimensions()}
+                description={previewDims == null
+                  ? m.comic_files_preview_loading()
+                  : `${previewDims.width} × ${previewDims.height}`}
+              />
+            {:else}
+              <CardRow label={m.comic_edit_no_selection()} description="" />
+            {/if}
+          </CardSection>
+          <p class="text-xs text-muted-foreground">{m.comic_edit_side_pending()}</p>
+        </div>
+      </Resizable.Pane>
+    </Resizable.PaneGroup>
+  </div>
+{/if}
+<ConfirmDialog
+  bind:open={confirmOpen}
+  title={m.comic_edit_discard_title()}
+  description={m.comic_edit_discard_description()}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.edit_unsaved_discard()}
+  onConfirm={handleDiscard}
+/>
+<ConfirmDialog
+  bind:open={deleteConfirmOpen}
+  title={m.comic_edit_volume_delete_title()}
+  description={m.comic_edit_volume_delete_description({
+    title: deleteTargetTitle ?? m.files_untitled_volume(),
+  })}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_edit_volume_delete_ok()}
+  onConfirm={handleDeleteConfirm}
+/>

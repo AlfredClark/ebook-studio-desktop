@@ -36,6 +36,8 @@ export const commands = {
 } | null, CommandError>(__TAURI_INVOKE("get_comic_content_outline", { id })),
 	/**  查询漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。 */
 	getComicImagePath: (id: string, path: string) => typedError<ComicImageInfo, CommandError>(__TAURI_INVOKE("get_comic_image_path", { id, path })),
+	/**  全量更新漫画分卷结构：标题可改、卷可增删排序，页须全量覆盖，落盘后返回新大纲。 */
+	updateComicVolumes: (id: string, volumes: ComicVolumeInput[]) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("update_comic_volumes", { id, volumes })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
 	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */
@@ -329,6 +331,14 @@ export type ComicPageOutline = {
 	path: string,
 	/**  本页字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
 	size_bytes: number,
+};
+
+/**  卷输入：编辑页全量提交的单卷（标题可改、卷可增删排序，页须全量覆盖）。 */
+export type ComicVolumeInput = {
+	/**  卷标题；`None` 仅允许单卷（平铺保持无标题）。 */
+	title: string | null,
+	/**  卷内有序路径（相对 `images/` 的 POSIX 路径）。 */
+	pages: string[],
 };
 
 /**  卷大纲：右栏识别结果的只读条目。 */

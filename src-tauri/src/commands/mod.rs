@@ -31,6 +31,7 @@ macro_rules! collect_commands {
             $crate::commands::comic_files::parse_comic_images,
             $crate::commands::comic_files::get_comic_content_outline,
             $crate::commands::comic_files::get_comic_image_path,
+            $crate::commands::comic_files::update_comic_volumes,
             $crate::commands::projects::list_projects,
             $crate::commands::projects::create_project,
             $crate::commands::projects::rename_project,

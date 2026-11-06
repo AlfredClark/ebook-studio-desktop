@@ -38,6 +38,8 @@ const MAX_PAGES: usize = 5000;
 const MAX_VOLUMES: usize = 500;
 /// 图片总字节上限：2GB，超限拒绝导入。
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// 卷标题长度上限：字符数，超限拒绝更新。
+const MAX_VOLUME_TITLE_CHARS: usize = 50;
 
 /// 漫画原稿状态：左栏文件卡片的只读展示；缺目录时 `exists` 为假。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -76,6 +78,15 @@ pub struct ComicVolume {
     pub title: Option<String>,
     /// 卷内页面（已按自然排序）。
     pub pages: Vec<ComicPage>,
+}
+
+/// 卷输入：编辑页全量提交的单卷（标题可改、卷可增删排序，页须全量覆盖）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ComicVolumeInput {
+    /// 卷标题；`None` 仅允许单卷（平铺保持无标题）。
+    pub title: Option<String>,
+    /// 卷内有序路径（相对 `images/` 的 POSIX 路径）。
+    pub pages: Vec<String>,
 }
 
 /// 解析产物：`content.json` 的落盘格式即前端契约（`snake_case`）。
@@ -196,6 +207,11 @@ fn read_import_skipped(images: &Path) -> u32 {
             0
         }
     }
+}
+/// 是否收纳卷路径：`extra/` 前缀即收纳卷页，标题改名不影响判定。
+fn is_extra_path(rel: &str) -> bool {
+    rel.strip_prefix(EXTRA_DIR_NAME)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 /// 是否隐藏文件：文件名以 `.` 开头；隐藏文件与目录一律忽略。
 fn is_hidden(name: &str) -> bool {
@@ -736,25 +752,27 @@ pub fn parse_images_in(project_dir: &Path) -> anyhow::Result<ComicOutline> {
                     .collect(),
             });
         }
-        // 顶层散图并入收纳卷（排首），与已有的 extra/ 合并后重排。
+        // 顶层散图并入收纳卷（排首）：按 `extra/` 路径前缀定位，标题改名不影响合并。
         if !top_images.is_empty() {
             top_images.sort_by(|a, b| natural_cmp(a, b));
             let extra_pages: Vec<ComicPage> = top_images
                 .iter()
                 .map(|name| ComicPage { path: name.clone() })
                 .collect();
-            if let Some(first) = volumes.first_mut()
-                && first.title.as_deref() == Some(EXTRA_TITLE)
-            {
-                let merged = std::mem::take(&mut first.pages);
-                // 已有 extra/ 的页路径带前缀，顶层散图不带前缀：统一转 POSIX 后自然排序。
+            // 收纳卷定位：卷内含 `extra/` 前缀页即命中，与标题无关。
+            let extra_pos = volumes
+                .iter()
+                .position(|volume| volume.pages.iter().any(|page| is_extra_path(&page.path)));
+            if let Some(pos) = extra_pos {
+                let merged = std::mem::take(&mut volumes[pos].pages);
+                // 已有 extra/ 的页路径带前缀，顶层散图不带前缀：统一自然排序。
                 let mut all: Vec<String> = merged
                     .iter()
                     .map(|page| page.path.clone())
                     .chain(extra_pages.iter().map(|page| page.path.clone()))
                     .collect();
                 all.sort_by(|a, b| natural_cmp(a, b));
-                first.pages = all.into_iter().map(|path| ComicPage { path }).collect();
+                volumes[pos].pages = all.into_iter().map(|path| ComicPage { path }).collect();
             } else {
                 volumes.insert(
                     0,
@@ -871,7 +889,6 @@ pub fn content_outline(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Optio
 
 /// 读 `content.json` 全量并断言结构版本：版本不符直接报错，不静默回落。
 /// 后续构建 / 编辑步骤共用同一份解析产物。
-#[allow(dead_code)]
 pub fn read_content(project_dir: &Path) -> anyhow::Result<ComicContent> {
     let path = project_dir.join(CONTENT_NAME);
     let text = std::fs::read_to_string(&path)
@@ -916,6 +933,107 @@ pub fn image_path_in(project_dir: &Path, rel: &str) -> anyhow::Result<ComicImage
 pub fn image_path(app: &tauri::AppHandle, id: &str, path: &str) -> anyhow::Result<ComicImageInfo> {
     let dir = super::projects::resolve_project_dir(app, id)?;
     image_path_in(&dir, path)
+}
+
+/// 全量更新分卷结构：标题可改、卷可增删排序、可删除页记录，页须全量覆盖后落盘，返回新大纲。
+///
+/// 卷标题修边后判空（显式空串拒绝，`None` 视为无标题卷展示回落）、不超长、
+/// 卷间唯一；传入路径须为现有页面的子集（允许删除记录，被删图片文件保留在
+/// `sources/images` 不动），未知 / 重复路径拒绝，逐个防穿越并校验存在。
+/// 文件不随卷搬家，只改分组归属记录。
+#[allow(clippy::too_many_lines)]
+pub fn update_volumes_in(
+    project_dir: &Path,
+    volumes: &[ComicVolumeInput],
+) -> anyhow::Result<ComicOutline> {
+    if volumes.is_empty() {
+        anyhow::bail!("at least one volume is required");
+    }
+    let mut titles: Vec<&str> = Vec::with_capacity(volumes.len());
+    for volume in volumes {
+        match volume.title.as_deref().map(str::trim) {
+            // 无标题卷：平铺遗留，多卷时展示回落“未分卷”，不强制命名。
+            None => {}
+            Some("") => anyhow::bail!("volume title must not be empty"),
+            Some(text) => {
+                if text.chars().count() > MAX_VOLUME_TITLE_CHARS {
+                    anyhow::bail!("volume title is too long (max {MAX_VOLUME_TITLE_CHARS} chars)");
+                }
+                titles.push(text);
+            }
+        }
+    }
+    {
+        let mut sorted = titles.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() != titles.len() {
+            anyhow::bail!("volume titles must be unique");
+        }
+    }
+    let mut content = read_content(project_dir)?;
+    let existing: std::collections::HashSet<&str> = content
+        .volumes
+        .iter()
+        .flat_map(|volume| volume.pages.iter().map(|page| page.path.as_str()))
+        .collect();
+    // 子集校验：未知路径与重复路径拒绝，缺页视为删除记录（文件保留不动）。
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for volume in volumes {
+        for rel in &volume.pages {
+            if !existing.contains(rel.as_str()) {
+                anyhow::bail!("unknown page in update: {rel}");
+            }
+            if !seen.insert(rel.as_str()) {
+                anyhow::bail!("duplicate page in update: {rel}");
+            }
+        }
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    for rel in &seen {
+        let path = join_images_path(&images, rel)?;
+        if !path.is_file() {
+            anyhow::bail!("comic image not found: {rel}");
+        }
+    }
+    content.volumes = volumes
+        .iter()
+        .map(|volume| ComicVolume {
+            title: volume
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string),
+            pages: volume
+                .pages
+                .iter()
+                .map(|path| ComicPage { path: path.clone() })
+                .collect(),
+        })
+        .collect();
+    content.mode = if content.volumes.len() == 1 && content.volumes[0].title.is_none() {
+        ComicMode::Flat
+    } else {
+        ComicMode::Volumes
+    };
+    content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
+    std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
+    let live_ignored = scan_images_dir(&images).map_or(0, |(_, _, _, ignored)| ignored);
+    let skipped = read_import_skipped(&images).saturating_add(live_ignored);
+    outline_of(project_dir, &content, skipped)
+}
+
+/// 全量更新分卷结构（`AppHandle` 入口）。
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_volumes(
+    app: &tauri::AppHandle,
+    id: &str,
+    volumes: Vec<ComicVolumeInput>,
+) -> anyhow::Result<ComicOutline> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    update_volumes_in(&dir, &volumes)
 }
 
 #[cfg(test)]
@@ -1099,6 +1217,212 @@ mod tests {
         assert!(image_path_in(&dir, "../content.json").is_err());
         assert!(image_path_in(&dir, "01.jpg").is_ok());
         assert!(image_path_in(&dir, "missing.jpg").is_err());
+        cleanup(&root);
+    }
+
+    fn input(title: Option<&str>, pages: &[&str]) -> ComicVolumeInput {
+        ComicVolumeInput {
+            title: title.map(str::to_string),
+            pages: pages.iter().map(|page| (*page).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn updates_pages_titles_and_order() {
+        let (root, dir) = test_project("volumes-update");
+        let source = source_dir(
+            &root,
+            "vu-src",
+            &["第1卷/01.jpg", "第1卷/02.jpg", "第2卷/01.jpg"],
+        );
+        import_dir_in(&dir, &source).expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 改名 + 卷排序 + 卷内换位 + 跨卷移动：第2卷改名排首并收下 2 页。
+        let outline = update_volumes_in(
+            &dir,
+            &[
+                input(Some("新卷"), &["第2卷/01.jpg", "第1卷/01.jpg"]),
+                input(Some("第1卷"), &["第1卷/02.jpg"]),
+            ],
+        )
+        .expect("update");
+        assert_eq!(outline.page_count, 3);
+        assert_eq!(outline.volumes.len(), 2);
+        assert_eq!(outline.volumes[0].title.as_deref(), Some("新卷"));
+        assert_eq!(outline.volumes[1].title.as_deref(), Some("第1卷"));
+        let first: Vec<&str> = outline.volumes[0]
+            .pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect();
+        assert_eq!(first, vec!["第2卷/01.jpg", "第1卷/01.jpg"]);
+        // 落盘可读，大纲回显一致。
+        let reread = outline_in(&dir).expect("reread").expect("outline");
+        assert_eq!(reread, outline);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn creates_and_deletes_volumes() {
+        let (root, dir) = test_project("volumes-crud");
+        let source = source_dir(&root, "vc-src", &["第1卷/01.jpg", "第1卷/02.jpg"]);
+        import_dir_in(&dir, &source).expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 新建空卷。
+        let outline = update_volumes_in(
+            &dir,
+            &[
+                input(Some("第1卷"), &["第1卷/01.jpg", "第1卷/02.jpg"]),
+                input(Some("番外"), &[]),
+            ],
+        )
+        .expect("create");
+        assert_eq!(outline.volumes.len(), 2);
+        assert_eq!(outline.volumes[1].pages.len(), 0);
+        // 页拖入新卷后再删空旧卷。
+        let outline = update_volumes_in(
+            &dir,
+            &[input(Some("番外"), &["第1卷/01.jpg", "第1卷/02.jpg"])],
+        )
+        .expect("move and delete");
+        assert_eq!(outline.volumes.len(), 1);
+        assert_eq!(outline.volumes[0].title.as_deref(), Some("番外"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn merges_loose_pages_by_extra_dir_prefix_after_rename() {
+        let (root, dir) = test_project("extra-merge");
+        let source = source_dir(&root, "em-src", &["第1卷/01.jpg", "cover.jpg"]);
+        import_dir_in(&dir, &source).expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 收纳卷改名后标题不再是“额外”，重解析仍按 extra/ 前缀合并散图。
+        update_volumes_in(
+            &dir,
+            &[
+                input(Some("散图"), &["extra/cover.jpg"]),
+                input(Some("第1卷"), &["第1卷/01.jpg"]),
+            ],
+        )
+        .expect("rename extra");
+        std::fs::write(
+            dir.join(SOURCES_DIR).join(IMAGES_DIR).join("loose.jpg"),
+            b"pic",
+        )
+        .expect("write loose");
+        let outline = parse_images_in(&dir).expect("reparse");
+        let extra = outline
+            .volumes
+            .iter()
+            .find(|volume| {
+                volume
+                    .pages
+                    .iter()
+                    .any(|page| page.path.starts_with("extra/"))
+            })
+            .expect("extra volume");
+        let mut paths: Vec<&str> = extra.pages.iter().map(|page| page.path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(paths, vec!["extra/cover.jpg", "loose.jpg"]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn deletes_page_records_but_keeps_files() {
+        let (root, dir) = test_project("delete-page");
+        let source = source_dir(&root, "dp-src", &["第1卷/01.jpg", "第1卷/02.jpg"]);
+        import_dir_in(&dir, &source).expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 删一条记录：子集接受，大纲只剩 1 页，磁盘文件保留。
+        let outline =
+            update_volumes_in(&dir, &[input(Some("第1卷"), &["第1卷/02.jpg"])]).expect("delete");
+        assert_eq!(outline.page_count, 1);
+        assert!(
+            dir.join(SOURCES_DIR)
+                .join(IMAGES_DIR)
+                .join("第1卷/01.jpg")
+                .is_file()
+        );
+        let reread = outline_in(&dir).expect("reread").expect("outline");
+        assert_eq!(reread, outline);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn rejects_invalid_volume_updates() {
+        let (root, dir) = test_project("volumes-bad");
+        let source = source_dir(&root, "vb-src", &["第1卷/01.jpg", "第1卷/02.jpg"]);
+        import_dir_in(&dir, &source).expect("import");
+        parse_images_in(&dir).expect("parse");
+        let good = || vec![input(Some("第1卷"), &["第1卷/01.jpg", "第1卷/02.jpg"])];
+        // 空卷清单。
+        assert!(update_volumes_in(&dir, &[]).is_err());
+        // 缺页即删除记录：子集接受（见 deletes_page_records_but_keeps_files）。
+        // 重复。
+        assert!(
+            update_volumes_in(
+                &dir,
+                &[input(Some("第1卷"), &["第1卷/01.jpg", "第1卷/01.jpg"])]
+            )
+            .is_err()
+        );
+        // 外来路径。
+        assert!(
+            update_volumes_in(
+                &dir,
+                &[input(Some("第1卷"), &["第1卷/01.jpg", "第1卷/99.jpg"])]
+            )
+            .is_err()
+        );
+        // 路径穿越。
+        assert!(
+            update_volumes_in(
+                &dir,
+                &[input(Some("第1卷"), &["../content.json", "第1卷/01.jpg"])]
+            )
+            .is_err()
+        );
+        // 空标题（多卷）。
+        assert!(
+            update_volumes_in(
+                &dir,
+                &[
+                    input(Some("  "), &["第1卷/01.jpg"]),
+                    input(Some("第2卷"), &["第1卷/02.jpg"])
+                ]
+            )
+            .is_err()
+        );
+        // 重复标题。
+        assert!(
+            update_volumes_in(
+                &dir,
+                &[
+                    input(Some("同名"), &["第1卷/01.jpg"]),
+                    input(Some("同名"), &["第1卷/02.jpg"])
+                ]
+            )
+            .is_err()
+        );
+        // 超长标题。
+        assert!(
+            update_volumes_in(
+                &dir,
+                &[input(
+                    Some(&"卷".repeat(51)),
+                    &["第1卷/01.jpg", "第1卷/02.jpg"]
+                )]
+            )
+            .is_err()
+        );
+        // 失败不落盘，原顺序 intact。
+        let outline = update_volumes_in(&dir, &good()).expect("good update");
+        let paths: Vec<&str> = outline.volumes[0]
+            .pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["第1卷/01.jpg", "第1卷/02.jpg"]);
         cleanup(&root);
     }
 }
