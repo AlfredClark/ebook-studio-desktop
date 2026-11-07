@@ -3,7 +3,6 @@ import type { ProjectInfo } from "#libs/commands/types";
 import {
   computeSelectAllState,
   filterAndSortProjects,
-  formatDateTime,
   removeProjects,
   toggleAllChecked,
   toggleCheckedId,
@@ -181,13 +180,5 @@ describe("removeProjects", () => {
 
   it("空集合返回等长新数组", () => {
     expect(removeProjects(FIXTURES, [])).toHaveLength(FIXTURES.length);
-  });
-});
-
-describe("formatDateTime", () => {
-  it("精度到秒且含年月日", () => {
-    const text = formatDateTime("2026-10-28T14:20:05Z", "en-US");
-    expect(text).toContain("2026");
-    expect(text).toMatch(/:05$/);
   });
 });

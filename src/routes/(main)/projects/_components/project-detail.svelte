@@ -11,7 +11,7 @@
   import { m } from "#libs/i18n/paraglide/messages";
   import { getLocale } from "#libs/i18n/paraglide/runtime";
   import { toast } from "#libs/utils/toast";
-  import { formatDateTime } from "./project-data";
+  import { formatDateTime } from "#libs/utils/datetime";
 
   let { project }: { project: ProjectInfo | undefined } = $props();
 

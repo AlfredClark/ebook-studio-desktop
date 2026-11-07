@@ -1,7 +1,7 @@
 //! 项目命令：列表 / 新建 / 批量删除的薄封装，具体文件操作在 `features::projects`。
 
 use crate::cores::types::CommandResult;
-use crate::features::projects::{self, ProjectInfo, ProjectType};
+use crate::features::projects::{self, ProjectInfo, ProjectOverviewItem, ProjectType};
 
 /// 读取全部项目；根目录不存在视为尚无项目，返回空列表
 #[tauri::command]
@@ -9,6 +9,14 @@ use crate::features::projects::{self, ProjectInfo, ProjectType};
 #[allow(clippy::needless_pass_by_value)]
 pub fn list_projects(app: tauri::AppHandle) -> CommandResult<Vec<ProjectInfo>> {
     Ok(projects::list_projects(&app)?)
+}
+
+/// 读取全部项目总览：基本信息 + 四阶段状态 + 内容条数，供首页工作台展示
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_projects_overview(app: tauri::AppHandle) -> CommandResult<Vec<ProjectOverviewItem>> {
+    Ok(projects::overview(&app)?)
 }
 
 /// 新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息

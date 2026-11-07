@@ -21,6 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   document.body.removeAttribute("style");
 });
 
@@ -41,12 +42,19 @@ describe("项目步骤导航", () => {
     expect(within(nav).getByRole("button", { name: "Close" })).not.toBeNull();
   });
 
-  it("返回按钮回到项目列表", async () => {
+  it("返回按钮按入口来源回跳，无记录回项目列表", async () => {
     const user = userEvent.setup();
-    render(ProjectStepsNav, { type: "comic", uuid: "abc-uuid" });
+    window.localStorage.clear();
+    const { unmount } = render(ProjectStepsNav, { type: "comic", uuid: "abc-uuid" });
 
-    await user.click(screen.getByRole("button", { name: "Back to projects" }));
-
+    await user.click(screen.getByRole("button", { name: "Back" }));
     expect(gotoMock).toHaveBeenCalledWith("/projects");
+    unmount();
+    cleanup();
+
+    window.localStorage.setItem("app.projects.entryFrom", "/");
+    render(ProjectStepsNav, { type: "comic", uuid: "abc-uuid" });
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(gotoMock).toHaveBeenCalledWith("/");
   });
 });

@@ -111,6 +111,8 @@ export const commands = {
 	exportComicContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ComicExportItems, titles: BuildTitleOptions, imagesMode: ComicImagesMode) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_comic_content", { id, destDir, naming, customName, items, titles, imagesMode })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
+	/**  读取全部项目总览：基本信息 + 四阶段状态 + 内容条数，供首页工作台展示 */
+	getProjectsOverview: () => typedError<ProjectOverviewItem[], CommandError>(__TAURI_INVOKE("get_projects_overview")),
 	/**  新建项目：在 `Projects/` 下以 `UUID` 建目录并落盘 `project.json`，返回完整信息 */
 	createProject: (name: string, projectType: ProjectType) => typedError<ProjectInfo, CommandError>(__TAURI_INVOKE("create_project", { name, projectType })),
 	/**  重命名项目：校验展示名后回写 `project.json` 并刷新更新时间，返回更新后的信息 */
@@ -987,6 +989,30 @@ export type ProjectOverview = {
 	metadata: ProjectMetadata | null,
 	/**  封面绝对路径（供前端转 `asset:` 预览）；未设置或文件缺失时为 `None`。 */
 	cover_path: string | null,
+};
+
+/**  项目总览条目：基本信息 + 四阶段状态 + 内容条数（小说为章数，漫画为页数，未解析为 0）。 */
+export type ProjectOverviewItem = {
+	info: ProjectInfo,
+	stages: ProjectStageStatus,
+	content_count: number,
+	/**  封面绝对路径（供前端转 `asset:` 预览）；无封面为 `None`。 */
+	cover_path: string | null,
+};
+
+/**
+ *  四阶段状态：素材（已导入）→ 解析（`content.json` 存在）→ 构建（`build/` 存在）→ 打包（`dist/` 有产物）。
+ *  四个独立开关即管线本身，布尔是最直接的形状（枚举反而增加前后端转换成本）。
+ */
+export type ProjectStageStatus = {
+	/**  素材已导入（原文 / 原稿存在）。 */
+	has_source: boolean,
+	/**  已解析（识别大纲存在）。 */
+	has_content: boolean,
+	/**  有构建产物。 */
+	has_build: boolean,
+	/**  有打包产物。 */
+	has_package: boolean,
 };
 
 /**  项目类型：落盘与契约为小写字符串，前后端共用 `"novel" | "comic"`。 */

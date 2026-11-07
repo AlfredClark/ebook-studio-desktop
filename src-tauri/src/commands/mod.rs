@@ -58,6 +58,7 @@ macro_rules! collect_commands {
             $crate::commands::comic_export::get_comic_export_progress,
             $crate::commands::comic_export::export_comic_content,
             $crate::commands::projects::list_projects,
+            $crate::commands::projects::get_projects_overview,
             $crate::commands::projects::create_project,
             $crate::commands::projects::rename_project,
             $crate::commands::projects::delete_projects,

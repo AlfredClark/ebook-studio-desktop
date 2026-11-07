@@ -12,6 +12,7 @@
   import type { ProjectInfo, ProjectType } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
   import { getLocale } from "#libs/i18n/paraglide/runtime";
+  import { storeProjectEntry } from "#libs/navigation/project-entry";
   import { toast } from "#libs/utils/toast";
   import {
     computeSelectAllState,
@@ -23,7 +24,7 @@
     type SortKey,
     type TypeFilter,
   } from "./_components/project-data";
-  import CreateProjectDialog from "./_components/create-project-dialog.svelte";
+  import CreateProjectDialog from "#components/common/create-project-dialog.svelte";
   import ProjectDetail from "./_components/project-detail.svelte";
   import ProjectsList from "./_components/projects-list.svelte";
   import ProjectsToolbar from "./_components/projects-toolbar.svelte";
@@ -252,10 +253,10 @@
             <p class="text-sm text-muted-foreground">{m.projects_empty_description()}</p>
             <div class="flex items-center gap-2">
               <Button size="sm" onclick={() => handleCreateMenu("novel")}>
-                {m.projects_type_novel()}
+                {m.page_home_new_novel()}
               </Button>
               <Button size="sm" variant="outline" onclick={() => handleCreateMenu("comic")}>
-                {m.projects_type_comic()}
+                {m.page_home_new_comic()}
               </Button>
             </div>
           </div>
@@ -275,6 +276,7 @@
             onOpen={(id) => {
               const project = projects.find((item) => item.id === id);
               if (project) {
+                storeProjectEntry("/projects");
                 void goto(resolve(`/${project.type}/${project.id}/metadata`));
               }
             }}

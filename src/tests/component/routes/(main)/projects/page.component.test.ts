@@ -233,7 +233,7 @@ describe("项目页", () => {
     render(Page);
 
     expect(await screen.findByText("No projects yet")).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Novel" }));
+    await user.click(screen.getByRole("button", { name: "New novel" }));
 
     const dialog = await screen.findByRole("dialog", { hidden: true });
     const input = within(dialog).getByPlaceholderText("Enter project name");

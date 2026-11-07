@@ -217,6 +217,106 @@ pub fn touch_updated(project_dir: &Path) {
     }
 }
 
+/// 四阶段状态：素材（已导入）→ 解析（`content.json` 存在）→ 构建（`build/` 存在）→ 打包（`dist/` 有产物）。
+/// 四个独立开关即管线本身，布尔是最直接的形状（枚举反而增加前后端转换成本）。
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ProjectStageStatus {
+    /// 素材已导入（原文 / 原稿存在）。
+    pub has_source: bool,
+    /// 已解析（识别大纲存在）。
+    pub has_content: bool,
+    /// 有构建产物。
+    pub has_build: bool,
+    /// 有打包产物。
+    pub has_package: bool,
+}
+
+/// 项目总览条目：基本信息 + 四阶段状态 + 内容条数（小说为章数，漫画为页数，未解析为 0）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ProjectOverviewItem {
+    pub info: ProjectInfo,
+    pub stages: ProjectStageStatus,
+    pub content_count: u32,
+    /// 封面绝对路径（供前端转 `asset:` 预览）；无封面为 `None`。
+    pub cover_path: Option<String>,
+}
+
+/// 单项目总览：逐项 best-effort，损坏的环节回落假值，不拖死整单。
+fn overview_item(root: &Path, info: ProjectInfo) -> ProjectOverviewItem {
+    let dir = root.join(&info.id);
+    let cover_path = super::project_metadata::cover_absolute_path_in(&dir)
+        .ok()
+        .flatten();
+    let (mut stages, content_count) = match info.project_type {
+        ProjectType::Novel => {
+            let has_source = super::novel_files::status_in(&dir).is_ok_and(|status| status.exists);
+            let (has_content, content_count) = super::novel_files::outline_in(&dir)
+                .map_or((false, 0), |outline| (true, outline.chapter_count));
+            let has_build = super::novel_build::tree_in(&dir).is_some();
+            let has_package = super::novel_package::status_in(&dir)
+                .ok()
+                .flatten()
+                .is_some();
+            (
+                ProjectStageStatus {
+                    has_source,
+                    has_content,
+                    has_build,
+                    has_package,
+                },
+                content_count,
+            )
+        }
+        ProjectType::Comic => {
+            let has_source = super::comic_files::status_in(&dir).is_ok_and(|status| status.exists);
+            let (has_content, content_count) = super::comic_files::outline_in(&dir)
+                .ok()
+                .flatten()
+                .map_or((false, 0), |outline| (true, outline.page_count));
+            let has_build = super::novel_build::tree_in(&dir).is_some();
+            let has_package = super::novel_package::status_in(&dir)
+                .ok()
+                .flatten()
+                .is_some();
+            (
+                ProjectStageStatus {
+                    has_source,
+                    has_content,
+                    has_build,
+                    has_package,
+                },
+                content_count,
+            )
+        }
+    };
+    if content_count == 0 {
+        // 未解析时下游残留视为过期：只门控构建与打包，素材按实际保留。
+        stages.has_build = false;
+        stages.has_package = false;
+    }
+    ProjectOverviewItem {
+        info,
+        stages,
+        content_count,
+        cover_path,
+    }
+}
+
+/// 读取全部项目总览：基本信息 + 四阶段状态；损坏条目在列表阶段已跳过，此处只做状态回落。
+pub fn overview_in(root: &Path) -> anyhow::Result<Vec<ProjectOverviewItem>> {
+    Ok(list_projects_in(root)?
+        .into_iter()
+        .map(|info| overview_item(root, info))
+        .collect())
+}
+
+/// 读取全部项目总览（`AppHandle` 入口）。
+pub fn overview(app: &tauri::AppHandle) -> anyhow::Result<Vec<ProjectOverviewItem>> {
+    let root = resolve_projects_root(app)?;
+    overview_in(&root)
+}
+
 /// 批量删除项目：id 必须为合法 `UUID`（兼作路径穿越守卫，`..` 与分隔符一律拒绝）；
 /// 不存在的目录跳过（删除幂等），返回实际删除数。
 pub fn delete_projects_in(root: &Path, ids: &[String]) -> anyhow::Result<u32> {
@@ -323,6 +423,88 @@ mod tests {
         // 清单损坏时静默跳过，不抛错。
         std::fs::write(&manifest, b"{broken").expect("corrupt");
         touch_updated(&dir);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn overview_reports_stages_per_project() {
+        use super::super::{novel_build, novel_export, novel_files, project_metadata};
+
+        let root = test_root("overview");
+        let novel = create_project_in(&root, "长夜", ProjectType::Novel).expect("create novel");
+        let comic = create_project_in(&root, "雾镇", ProjectType::Comic).expect("create comic");
+        // 空项目：四段全假，计数为零。
+        let items = overview_in(&root).expect("overview");
+        assert_eq!(items.len(), 2);
+        for item in &items {
+            assert!(!item.stages.has_source);
+            assert!(!item.stages.has_content);
+            assert!(!item.stages.has_build);
+            assert!(!item.stages.has_package);
+            assert_eq!(item.content_count, 0);
+        }
+        // 小说导入 + 解析 + 构建：前三段置位，打包仍空。
+        let dir = root.join(&novel.id);
+        let source = root.join("overview-src.txt");
+        std::fs::write(&source, "第一章 引子\n正文甲\n").expect("write source");
+        novel_files::import_txt_in(&dir, &source).expect("import");
+        novel_files::parse_txt_in(
+            &dir,
+            "^第([0-9一二三四五六七八九十百千万零〇两壹贰叁肆伍陆柒捌玖拾佰仟]+)卷[：:\\s]*(.*)$",
+            "^第([0-9一二三四五六七八九十百千万零〇两壹贰叁肆伍陆柒捌玖拾佰仟]+)章[：:\\s]*(.*)$",
+        )
+        .expect("parse");
+        let template_base =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/EPUB33-NOVEL");
+        novel_build::build_in(
+            &dir,
+            &template_base,
+            &novel_export::BuildTitleOptions::default(),
+        )
+        .expect("build");
+        // 漫画保持空态：覆盖 comic 分支的缺失回落。
+        let items = overview_in(&root).expect("overview");
+        let novel_item = items
+            .iter()
+            .find(|item| item.info.id == novel.id)
+            .expect("novel item");
+        assert!(novel_item.stages.has_source);
+        assert!(novel_item.stages.has_content);
+        assert_eq!(novel_item.content_count, 1);
+        assert!(novel_item.stages.has_build);
+        assert!(!novel_item.stages.has_package);
+        assert!(novel_item.cover_path.is_none());
+        // 导一张封面：总览带出绝对路径。
+        let cover_source = root.join("cover-src.gif");
+        std::fs::write(
+            &cover_source,
+            [
+                0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xFF,
+                0xFF, 0xFF, 0x00, 0x00, 0x00, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
+                0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+                0x3B,
+            ],
+        )
+        .expect("write cover source");
+        project_metadata::import_cover_in(&dir, &cover_source).expect("import cover");
+        let items = overview_in(&root).expect("overview");
+        let novel_item = items
+            .iter()
+            .find(|item| item.info.id == novel.id)
+            .expect("novel item");
+        assert!(
+            novel_item
+                .cover_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("cover.gif"))
+        );
+        let comic_item = items
+            .iter()
+            .find(|item| item.info.id == comic.id)
+            .expect("comic item");
+        assert!(!comic_item.stages.has_source);
+        assert!(!comic_item.stages.has_content);
+        assert_eq!(comic_item.content_count, 0);
         let _ = std::fs::remove_dir_all(&root);
     }
 

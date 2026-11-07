@@ -10,6 +10,7 @@
   import { m } from "#libs/i18n/paraglide/messages";
   import type { ProjectType } from "#libs/commands/types";
   import { PROJECT_STEPS, resolveProjectStep } from "#libs/navigation/project-steps";
+  import { readProjectEntry } from "#libs/navigation/project-entry";
   import { cn } from "#libs/utils/shadcn-svelte";
   import WindowControls from "./window-controls.svelte";
 
@@ -27,7 +28,7 @@
     variant="ghost"
     size="icon-sm"
     class="shrink-0"
-    onclick={() => void goto(resolve("/projects"))}
+    onclick={() => void goto(resolve(readProjectEntry()))}
     aria-label={m.projects_back()}
   >
     <ArrowLeftIcon />

@@ -16,7 +16,7 @@
   import { m } from "#libs/i18n/paraglide/messages";
   import { getLocale } from "#libs/i18n/paraglide/runtime";
   import { cn } from "#libs/utils/shadcn-svelte";
-  import { formatDateTime } from "./project-data";
+  import { formatDateTime } from "#libs/utils/datetime";
   import type { ProjectInfo } from "#libs/commands/types";
 
   let {
