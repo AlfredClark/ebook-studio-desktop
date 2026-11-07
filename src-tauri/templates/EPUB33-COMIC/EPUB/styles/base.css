@@ -1,5 +1,6 @@
 @namespace epub "http://www.idpf.org/2007/ops";
 
+/* 基础重置：清默认边距，白底（墨水屏省电、少残影）。 */
 html,
 body {
   margin: 0;
@@ -11,6 +12,7 @@ body {
   background: #fff;
 }
 
+/* 封面：图片顶格居中，老内核按宽度自适应，支持的再按视口 contain。 */
 body.cover {
   margin: 0;
   padding: 0;
@@ -43,15 +45,7 @@ body.cover {
   text-align: center;
 }
 
-.book-title {
-  font-size: 2em;
-}
-
-.book-author {
-  font-size: 1.25em;
-}
-
-/* comic: pre-paginated single image per page, e-ink safe block layout first. */
+/* 漫画页：固定版式单图单页，块级居中优先，老内核也正好一页一图。 */
 body.comic-page {
   margin: 0;
   padding: 0;
