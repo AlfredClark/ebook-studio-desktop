@@ -239,7 +239,7 @@ pub fn cover_assets_in(
             let opf_href = href.trim_start_matches("EPUB/");
             (
                 format!(
-                    "    <item id=\"cover-image\" href=\"{opf_href}\" media-type=\"{media}\"/>"
+                    "    <item id=\"cover-image\" href=\"{opf_href}\" media-type=\"{media}\" properties=\"cover-image\"/>"
                 ),
                 format!("      <img src=\"{opf_href}\" alt=\"{book_title_escaped}\"/>"),
             )
@@ -463,9 +463,11 @@ pub fn build_in(
     let other_metadata = other_metadata_xml(&metadata);
 
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let book_language = xml_escape(&metadata.language);
     let mut opf = template("EPUB/content.opf")?
         .replace("{{BOOK_UUID}}", &metadata.identifier)
         .replace("{{BOOK_TITLE}}", &book_title)
+        .replace("{{BOOK_LANGUAGE}}", &book_language)
         .replace("{{BOOK_MODIFIED}}", &now)
         .replace("{{BOOK_AUTHOR}}", &book_author)
         .replace("{{CONTRIBUTOR}}", &xml_escape(&metadata.contributor))
@@ -1351,6 +1353,7 @@ mod tests {
         assert!(dir.join(BUILD_DIR).join("EPUB/images/cover.jpg").is_file());
         let opf = read_built(&dir, "EPUB/content.opf");
         assert!(opf.contains("cover-image"));
+        assert!(opf.contains("properties=\"cover-image\""));
         assert!(opf.contains("image/jpeg"));
         // 清单 `href` 相对 OPF 所在目录（`EPUB/`），包内写盘前缀须剥掉。
         assert!(opf.contains("href=\"images/cover.jpg\""));

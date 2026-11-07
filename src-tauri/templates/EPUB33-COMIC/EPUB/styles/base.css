@@ -6,27 +6,36 @@ body {
   padding: 0;
 }
 
-html {
-  height: 100%;
-}
-
 body {
-  height: 100%;
   margin: 0 auto;
+  background: #fff;
 }
 
 body.cover {
-  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  text-align: center;
 }
 
 .cover-frame {
-  height: 100%;
+  margin: 0;
+  padding: 0;
+  text-align: center;
 }
 
 .cover-frame img {
+  display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+@supports (object-fit: contain) {
+  .cover-frame img {
+    height: 100vh;
+    object-fit: contain;
+  }
 }
 
 .cover-frame .book-title {
@@ -42,27 +51,34 @@ body.cover {
   font-size: 1.25em;
 }
 
-/* comic */
+/* comic: pre-paginated single image per page, e-ink safe block layout first. */
 body.comic-page {
   margin: 0;
   padding: 0;
-  background: #000;
+  background: #fff;
 }
 
 .page {
-  display: flex;
-  height: 100vh;
-  height: 100dvh;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  margin: 0;
+  padding: 0;
+  text-align: center;
+  page-break-inside: avoid;
 }
 
 .page img {
-  display: block;
+  display: inline-block;
+  width: 100%;
   max-width: 100%;
-  max-height: 100vh;
-  max-height: 100dvh;
-  object-fit: contain;
+  height: auto;
+  margin: 0 auto;
+}
+
+@supports (object-fit: contain) {
+  .page img {
+    max-height: 100vh;
+    object-fit: contain;
+  }
 }
 
 /* background:start */

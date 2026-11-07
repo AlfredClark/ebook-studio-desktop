@@ -248,7 +248,6 @@ pub fn build_in(
             volume_width,
         );
         let title_escaped = xml_escape(&rendered_volume);
-        let mut page_toc = Vec::new();
         let mut volume_href: Option<String> = None;
         for (page_index, page) in volume.pages.iter().enumerate() {
             global_seq += 1;
@@ -278,6 +277,9 @@ pub fn build_in(
                 .map(str::to_ascii_lowercase)
                 .with_context(|| format!("image has no extension: {}", source.display()))?;
             let media = cover_media_type(&ext)?;
+            // 固定版式视口：读图头宽高填 viewport，失败回落 800x1280（墨水屏 6 寸常见比例）。
+            let (page_width_px, page_height_px) =
+                image::image_dimensions(&source).unwrap_or((800, 1280));
             let image_href = format!("EPUB/images/{stem}.{ext}");
             write_bytes(&build_dir, &image_href, &bytes)?;
             let file = format!("{stem}.xhtml");
@@ -285,35 +287,42 @@ pub fn build_in(
             let rendered = page_template
                 .replace("{{PAGE_TITLE}}", &xml_escape(&label))
                 .replace("{{PAGE_IMAGE_HREF}}", &format!("../images/{stem}.{ext}"))
+                .replace("{{PAGE_WIDTH}}", &page_width_px.to_string())
+                .replace("{{PAGE_HEIGHT}}", &page_height_px.to_string())
                 .replace("lang=\"zh-CN\"", &lang_attr);
             write_bytes(&build_dir, &href, rendered.as_bytes())?;
+            // 固定版式声明放 spine itemref；manifest 只声明媒体类型（`rendition:*` 不属 manifest 词表）。
             manifest_items.push(format!(
                 "    <item id=\"{stem}\" href=\"pages/{file}\" media-type=\"application/xhtml+xml\"/>"
             ));
             manifest_items.push(format!(
                 "    <item id=\"{stem}-image\" href=\"images/{stem}.{ext}\" media-type=\"{media}\"/>"
             ));
-            spine_items.push(format!("    <itemref idref=\"{stem}\"/>"));
-            page_toc.push(format!(
-                "          <li><a href=\"pages/{file}\">{}</a></li>",
-                xml_escape(&label)
+            spine_items.push(format!(
+                "    <itemref idref=\"{stem}\" properties=\"rendition:layout-pre-paginated rendition:page-spread-center\"/>"
             ));
             volume_href.get_or_insert_with(|| href.clone());
             first_bodymatter.get_or_insert_with(|| href.clone());
         }
         if grouped {
             toc_entries.push(format!(
-                "        <li><a href=\"{}\">{}</a>\n          <ol>",
+                "        <li><a href=\"{}\">{}</a></li>",
                 volume_href
                     .as_deref()
                     .unwrap_or("")
                     .trim_start_matches("EPUB/"),
                 title_escaped
             ));
-            toc_entries.extend(page_toc);
-            toc_entries.push("          </ol>\n        </li>".to_string());
         } else {
-            toc_entries.extend(page_toc);
+            // 平铺无话：目录仅保留首面入口，避免数百页条目拖慢墨水屏。
+            if toc_entries.is_empty()
+                && let Some(first) = volume_href.as_deref()
+            {
+                toc_entries.push(format!(
+                    "        <li><a href=\"{}\">正文</a></li>",
+                    first.trim_start_matches("EPUB/"),
+                ));
+            }
         }
     }
     if global_seq == 0 {
@@ -323,6 +332,22 @@ pub fn build_in(
     // 封面：有导入才拷贝图片并挂清单，无封面回落书名块。
     let (cover_item, cover_block) =
         cover_assets_in(project_dir, &build_dir, &metadata, &book_title);
+    // 封面视口：固定版式每份内容文档都要有 viewport，读已落盘封面尺寸，失败回落 800x1280。
+    let (cover_width, cover_height) = (|| {
+        let images = build_dir.join("EPUB/images");
+        let Ok(entries) = std::fs::read_dir(&images) else {
+            return None;
+        };
+        entries.flatten().find_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("cover.") {
+                image::image_dimensions(entry.path()).ok()
+            } else {
+                None
+            }
+        })
+    })()
+    .unwrap_or((800, 1280));
 
     // 其它元数据：空值省略，系列三件套成组出现（与小说同口径）。
     let other_metadata = other_metadata_xml(&metadata);
@@ -372,6 +397,8 @@ pub fn build_in(
     let cover = template("EPUB/cover.xhtml")?
         .replace("{{BOOK_TITLE}}", &book_title)
         .replace("{{COVER_BLOCK}}", &cover_block)
+        .replace("{{COVER_WIDTH}}", &cover_width.to_string())
+        .replace("{{COVER_HEIGHT}}", &cover_height.to_string())
         .replace("lang=\"zh-CN\"", &lang_attr);
     write_bytes(&build_dir, "EPUB/cover.xhtml", cover.as_bytes())?;
 
@@ -465,16 +492,22 @@ mod tests {
         assert!(dir.join("build/EPUB/images/page-002.jpg").is_file());
         let opf = read_built(&dir, "EPUB/content.opf");
         assert!(opf.contains(r#"<item id="page-001" href="pages/page-001.xhtml""#));
+        assert!(opf.contains("rendition:layout-pre-paginated"));
         assert!(opf.contains(
             r#"<item id="page-001-image" href="images/page-001.png" media-type="image/png"/>"#
         ));
-        assert!(opf.contains(r#"<itemref idref="page-001"/>"#));
+        assert!(opf.contains(r#"<itemref idref="page-001" properties="rendition:layout-pre-paginated rendition:page-spread-center"/>"#));
         assert!(opf.contains(r#"xml:lang="zh-CN""#));
+        assert!(opf.contains(r#"page-progression-direction="ltr""#));
+        // 平铺目录仅首面入口，避免数百页条目拖慢墨水屏。
         let nav = read_built(&dir, "EPUB/nav.xhtml");
-        assert!(nav.contains("第1页") && nav.contains("第2页"));
+        assert!(nav.contains("正文"));
+        assert!(!nav.contains("第1页"));
         let page = read_built(&dir, "EPUB/pages/page-001.xhtml");
         assert!(page.contains("../images/page-001.png"));
         assert!(page.contains("第1页"));
+        // 假图片读不到尺寸，回落 800x1280 视口。
+        assert!(page.contains("width=800,height=1280"));
         // 无封面回落书名块。
         let cover = read_built(&dir, "EPUB/cover.xhtml");
         assert!(cover.contains("book-title"));
@@ -497,12 +530,13 @@ mod tests {
         assert!(dir.join("build/EPUB/pages/page-02-01.xhtml").is_file());
         assert!(dir.join("build/EPUB/images/page-01-01.jpg").is_file());
         assert!(dir.join("build/EPUB/images/cover.jpg").is_file());
+        // 目录仅话级，页不再进 toc。
         let nav = read_built(&dir, "EPUB/nav.xhtml");
         assert!(nav.contains("第1话") && nav.contains("第2话"));
-        assert!(nav.contains(">第1页<") && nav.contains(">第2页<"));
+        assert!(!nav.contains(">第1页<"));
         let opf = read_built(&dir, "EPUB/content.opf");
         assert!(opf.contains(
-            r#"<item id="cover-image" href="images/cover.jpg" media-type="image/jpeg"/>"#
+            r#"<item id="cover-image" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>"#
         ));
         let cover = read_built(&dir, "EPUB/cover.xhtml");
         assert!(cover.contains("images/cover.jpg"));
@@ -516,6 +550,24 @@ mod tests {
         // 无 content.json 直接报错，不建半成品。
         assert!(build_in(&dir, &template_base(), &BuildTitleOptions::default()).is_err());
         assert!(!dir.join("build").exists());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn viewport_uses_real_image_dimensions() {
+        let (root, dir) = test_project("viewport");
+        // 真图片：10x20，构建视口应原样落盘。
+        let source = root.join("viewport-src");
+        std::fs::create_dir_all(&source).expect("create source");
+        let img = image::RgbImage::from_pixel(10, 20, image::Rgb([10, 20, 30]));
+        image::DynamicImage::ImageRgb8(img)
+            .save(source.join("01.jpg"))
+            .expect("save test image");
+        comic_files::import_dir_in(&dir, &source).expect("import");
+        comic_files::parse_images_in(&dir).expect("parse");
+        build_in(&dir, &template_base(), &BuildTitleOptions::default()).expect("build");
+        let page = read_built(&dir, "EPUB/pages/page-001.xhtml");
+        assert!(page.contains("width=10,height=20"));
         cleanup(&root);
     }
 
@@ -631,11 +683,11 @@ mod tests {
             chapter_numbering: ChapterNumbering::Continuous,
         };
         build_in(&dir, &template_base(), &titles).expect("build");
-        // 文件名与标题选项解耦：仍为计数命名。
+        // 文件名与标题选项解耦：仍为计数命名；目录仅话级，页标题只进页面标题。
         assert!(dir.join("build/EPUB/pages/page-01-01.xhtml").is_file());
         let nav = read_built(&dir, "EPUB/nav.xhtml");
         assert!(nav.contains(">第1话 第1话<"));
-        assert!(nav.contains(">P03<"));
+        assert!(!nav.contains(">P03<"));
         let page = read_built(&dir, "EPUB/pages/page-02-01.xhtml");
         assert!(page.contains("<title>P03</title>"));
         cleanup(&root);

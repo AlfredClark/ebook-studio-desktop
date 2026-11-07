@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf"
          xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xmlns:rendition="http://www.idpf.org/vocab/rendition/#"
+         prefix="rendition: http://www.idpf.org/vocab/rendition/#"
          version="3.0"
          unique-identifier="book-id"
          xml:lang="{{BOOK_LANGUAGE}}">
@@ -17,12 +19,13 @@
 
 {{OTHER_METADATA}}
 
+    <meta property="rendition:layout">pre-paginated</meta>
     <meta property="schema:accessMode">visual</meta>
     <meta property="schema:accessModeSufficient">visual</meta>
     <meta property="schema:accessibilityFeature">structuralNavigation</meta>
     <meta property="schema:accessibilityFeature">tableOfContents</meta>
     <meta property="schema:accessibilityHazard">none</meta>
-    <meta property="schema:accessibilitySummary">本书为漫画，以整页图像形式排版，每页对应一张图像，目录按话/页层级导航。</meta>
+    <meta property="schema:accessibilitySummary">本书为漫画，以整页图像形式排版，每页对应一张图像，目录按话层级导航。</meta>
   </metadata>
   <manifest>
     <item id="base-css" href="styles/base.css" media-type="text/css"/>
@@ -31,8 +34,8 @@
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
 {{MANIFEST_ITEMS}}
   </manifest>
-  <spine>
-    <itemref idref="cover-page"/>
+  <spine page-progression-direction="ltr">
+    <itemref idref="cover-page" properties="rendition:layout-pre-paginated rendition:page-spread-center"/>
 {{NAV_ITEMREF}}
 {{SPINE_ITEMS}}
   </spine>

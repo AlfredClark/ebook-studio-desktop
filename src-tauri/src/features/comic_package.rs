@@ -101,7 +101,7 @@ mod tests {
             "own template output must validate: {:?}",
             validation.messages
         );
-        // 流式页不带 viewport meta：HTM_060b 噪声不得出现。
+        // 固定版式页带 viewport meta：HTM_060b 噪声不得出现。
         assert!(
             validation
                 .messages

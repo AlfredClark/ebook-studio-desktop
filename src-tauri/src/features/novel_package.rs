@@ -444,11 +444,48 @@ pub fn status_in(project_dir: &Path) -> anyhow::Result<Option<PackageInfo>> {
 }
 
 /// 校验已有产物：无包直接报错，前端引导先打包。
+/// WebP 仅告警：`epubveri` 不判无效，但墨水屏/老阅读器常无法渲染，此处追加一条 Warning 提示优先用 JPEG/PNG。
 pub fn validate_in(project_dir: &Path) -> anyhow::Result<ValidationOutcome> {
     let epub_path = latest_package(project_dir).context("no package to validate")?;
     let report = epubveri::validate_path(&epub_path)
         .map_err(|error| anyhow::anyhow!("epub validation failed: {error}"))?;
-    Ok(from_report(&report))
+    let mut outcome = from_report(&report);
+    if has_webp_in_build(project_dir) {
+        outcome.messages.push(ValidationMessage {
+            severity: ValidationSeverity::Warning,
+            id: "WEBP-001".to_string(),
+            message: "WebP images may not render on e-ink or older readers, prefer JPEG/PNG"
+                .to_string(),
+            path: None,
+            line: None,
+            column: None,
+        });
+    }
+    Ok(outcome)
+}
+
+/// 构建目录是否含 WebP 图片：包内嗅探不到时回落构建树，保证警告不漏报。
+fn has_webp_in_build(project_dir: &Path) -> bool {
+    let build_dir = project_dir.join(BUILD_DIR);
+    let mut stack = vec![build_dir];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("webp"))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// 打包通用核心：落盘后自动校验一次；CPU 密集段进阻塞池并按事件名推送进度。
@@ -720,6 +757,30 @@ mod tests {
     fn progress_event_name_is_stable() {
         // 事件名与前端订阅会合，改名时两端同步。
         assert_eq!(PACKAGE_PROGRESS_EVENT, "novel-package-progress");
+    }
+
+    #[test]
+    fn webp_in_build_adds_warning_but_stays_valid() {
+        let (root, dir) = fixture_project("webp", "第一章 引子\n正文甲\n");
+        novel_build::build_in(&dir, &template_base(), &BuildTitleOptions::default())
+            .expect("build");
+        // 手工放一张 WebP 进构建树，模拟漫画构建产物。
+        let webp_path = dir.join(BUILD_DIR).join("EPUB/images/page-001.webp");
+        if let Some(parent) = webp_path.parent() {
+            std::fs::create_dir_all(parent).expect("create images");
+        }
+        std::fs::write(&webp_path, b"RIFF....WEBP").expect("write webp");
+        write_epub_in(&dir, None).expect("package");
+        let outcome = validate_in(&dir).expect("validate");
+        assert!(
+            outcome
+                .messages
+                .iter()
+                .any(|m| m.id == "WEBP-001" && m.severity == ValidationSeverity::Warning),
+            "expected WEBP-001 warning: {:?}",
+            outcome.messages
+        );
+        cleanup(&root);
     }
 
     #[test]

@@ -6,28 +6,36 @@ body {
   padding: 0;
 }
 
-html {
-  height: 100%;
-}
-
 body {
-  height: 100%;
   margin: 0 auto;
   font-size: 1rem;
 }
 
 body.cover {
-  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  text-align: center;
 }
 
 .cover-frame {
-  height: 100%;
+  margin: 0;
+  padding: 0;
+  text-align: center;
 }
 
 .cover-frame img {
+  display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+@supports (object-fit: contain) {
+  .cover-frame img {
+    height: 100vh;
+    object-fit: contain;
+  }
 }
 
 .cover-frame .book-title {
@@ -36,15 +44,12 @@ body.cover {
 }
 
 body.titlepage {
-  display: table;
-  width: 100%;
-  height: 100%;
+  margin: 0 auto;
 }
 
 .titlepage-frame {
-  display: table-cell;
+  margin: 12% auto 0;
   text-align: center;
-  vertical-align: middle;
 }
 
 .titlepage-frame > * + * {
@@ -61,15 +66,12 @@ body.titlepage {
 }
 
 body.volume-page {
-  display: table;
-  width: 100%;
-  height: 100%;
+  margin: 0 auto;
 }
 
 .volume {
-  display: table-cell;
+  margin: 15% auto 0;
   text-align: center;
-  vertical-align: middle;
 }
 
 .chapter {
@@ -78,6 +80,8 @@ body.volume-page {
 
 .chapter p {
   margin: 0.5em 0;
+  orphans: 2;
+  widows: 2;
   text-indent: 2em;
 }
 
@@ -85,10 +89,12 @@ body.volume-page {
   margin: 1em 0 1.5em;
   font-size: 1.25em;
   text-align: center;
+  page-break-after: avoid;
 }
 
 .book-title {
   font-size: 2em;
+  page-break-after: avoid;
 }
 
 .book-author {
@@ -97,6 +103,7 @@ body.volume-page {
 
 .volume-title {
   font-size: 1.5em;
+  page-break-after: avoid;
 }
 
 .volume-intro {

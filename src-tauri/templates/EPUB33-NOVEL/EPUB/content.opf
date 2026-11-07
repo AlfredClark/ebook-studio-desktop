@@ -3,11 +3,11 @@
          xmlns:dc="http://purl.org/dc/elements/1.1/"
          version="3.0"
          unique-identifier="book-id"
-         xml:lang="zh-CN">
+         xml:lang="{{BOOK_LANGUAGE}}">
   <metadata>
     <dc:identifier id="book-id">urn:uuid:{{BOOK_UUID}}</dc:identifier>
     <dc:title>{{BOOK_TITLE}}</dc:title>
-    <dc:language>zh-CN</dc:language>
+    <dc:language>{{BOOK_LANGUAGE}}</dc:language>
     <meta property="dcterms:modified">{{BOOK_MODIFIED}}</meta>
 
     <dc:creator id="creator">{{BOOK_AUTHOR}}</dc:creator>
