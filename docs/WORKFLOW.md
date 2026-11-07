@@ -2,7 +2,7 @@
 
 > 按需文档：跑命令、改文案、加后端命令、发版、验收时读本文件；日常规则结论见 `AGENTS.md`。
 > 所有命令以仓库根目录为基准执行；优先使用以下命令，禁止另起等效命令。
-> 包管理器为 `pnpm@12.15.0`（以 `package.json` 的 `packageManager` 为准），Node `>=24`；Rust 工具链锁定 `1.99.0`（见 `rust-toolchain.toml`）。此处为高频清单，完整脚本以 `package.json` 为准。
+> 包管理器为 `pnpm@12.18.0`（以 `package.json` 的 `packageManager` 为准），Node `>=24`；Rust 工具链锁定 `1.99.1`（见 `rust-toolchain.toml`）。此处为高频清单，完整脚本以 `package.json` 为准。
 
 ---
 

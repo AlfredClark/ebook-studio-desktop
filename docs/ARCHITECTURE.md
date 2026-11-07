@@ -42,7 +42,7 @@ ebook-studio-desktop/
 │   │   ├── +layout.ts              # ssr = false（SPA 模式）；配置水合不在 load()（invoke 接不进 event.fetch），见 +layout.svelte 挂载期后台水合
 │   │   ├── (main)/                 # 分组路由（括号不进 URL）：常规页面分组，独享布局容器
 │   │   │   ├── +layout.svelte      # 分组布局：LayoutContainer 包裹，特殊页另起分组即可绕开布局
-│   │   │   ├── +page.svelte        # 占位首页：布局骨架验证起点，业务在此开发
+│   │   │   ├── +page.svelte        # 工作台首页：最近项目（含管线阶段）+ 快捷新建，直达项目入口
 │   │   │   ├── about/              # 关于页（应用 / 项目 / 平台分组 + 更新面板；页面组件在 `_components/`）
 │   │   │   ├── settings/           # 完整设置页（通用 + 外观 + 编辑器排版 + 快捷键 + 重置；页面组件在 `_components/`，超过 ~8 个分组时按分组建子目录）
 │   │   │   └── projects/           # 项目页（左右分栏：操作栏 + 列表 / 详情；新建弹窗 + 确认框 + 行内改名，页面组件在 `_components/`）
@@ -53,7 +53,7 @@ ebook-studio-desktop/
 │   │   └── layout.css              # Tailwind v4 入口与 shadcn-svelte 主题令牌（含 .dark 暗色变体与 --app-font-* 外观变量）
 │   │   └── themes.css              # 配色主题令牌（鲜艳系 7 色 + 暗色美学 3 色的浅色 + :root.dark 暗色块，neutral 回落 layout.css）
 │   ├── components/
-│   │   ├── common/                 # 跨页共享的手写组件（error-boundary.svelte 全局渲染兜底，card-section/row.svelte 通用卡片分组与行，confirm-dialog.svelte 通用确认弹窗）
+│   │   ├── common/                 # 跨页共享的手写组件（error-boundary.svelte 全局渲染兜底，card-section/row.svelte 通用卡片分组与行，confirm-dialog.svelte 通用确认弹窗，create-project-dialog.svelte 通用新建项目弹窗）
 │   │   ├── layout/                 # 布局子系统：layout-container.svelte 容器 + tabs（标题栏/标签栏/内容/底边）、sidebar（侧边栏 + 标题栏/内容/底边）与 dashboard（可收起左侧导航 + 标题栏/内容/底边）实现，新增布局需在 libs/hooks/appearance.svelte.ts 中映射
 │   │   │   └── parts/              # 布局配套部件（title-bar / nav-tabs-bar / side-nav-bar / dashboard-nav-bar / copyright）
 │   │   └── shadcn-svelte/          # CLI 生成的 UI 组件（nova / neutral / lucide），新增走 CLI 添加，勿手动重组；已引入 resizable / checkbox / dropdown-menu / breadcrumb
@@ -61,10 +61,10 @@ ebook-studio-desktop/
 │   └── libs/
 │       ├── commands/               # tauri-specta 契约链（bindings.ts 生成物 + 链式 API 封装）
 │       ├── i18n/                   # Paraglide：messages/ 文案、project.inlang/ 配置、paraglide/ 生成物、locale.svelte.ts 语言响应式桥
-│       ├── navigation/             # 导航等应用级注册表（nav-tabs.ts：路径 / 图标 / 顺序，顶部标签栏与侧边栏导航同源；project-steps.ts：项目六步骤 slug / 顺序 / 当前步解析）
+│       ├── navigation/             # 导航等应用级注册表（nav-tabs.ts：路径 / 图标 / 顺序，顶部标签栏与侧边栏导航同源；project-steps.ts：项目六步骤 slug / 顺序 / 当前步解析；project-entry.ts：进项目来源，供步骤导航返回回跳）
 │       ├── shortcut/                 # 快捷键领域模块（展示切分 / 录制归一化，与后端 `Shortcut::from_str` 可解析子集对齐）
-│       ├── utils/                  # 前端通用工具（shadcn-svelte.ts 的 cn()、window-controls.ts、toast.ts、opener.ts）
-│       └── hooks/                  # 前端共享状态（统一经 #libs/hooks 引用），如 appearance.svelte.ts（布局注册表 + 界面字体与编辑器排版偏好）、config.svelte.ts（后端配置内存态）、updater.svelte.ts（更新状态）、is-mobile.svelte.ts（响应式断点）、deep-link.svelte.ts（三路深链入口）、dashboard.svelte.ts（仪表盘侧栏折叠偏好）
+│       ├── utils/                  # 前端通用工具（shadcn-svelte.ts 的 cn()、window-controls.ts、toast.ts、opener.ts、datetime.ts 的 formatDateTime()）
+│       └── hooks/                  # 前端共享状态（统一经 #libs/hooks 引用），如 appearance.svelte.ts（布局注册表 + 界面字体与编辑器排版偏好）、config.svelte.ts（后端配置内存态）、updater.svelte.ts（更新状态）、is-mobile.svelte.ts（响应式断点）、deep-link.svelte.ts（三路深链入口）、dashboard.svelte.ts（仪表盘侧栏折叠偏好）、comic-convert.svelte.ts / comic-compress.svelte.ts（漫画转换 / 压缩跨页作业）
 ├── src-tauri/                      # 后端：Rust（edition 2024）
 │   ├── src/
 │   │   ├── main.rs                 # 二进制入口，仅转发到 lib::run()
@@ -81,7 +81,7 @@ ebook-studio-desktop/
 │   ├── build.rs                    # tauri-build 构建脚本
 │   ├── tauri.conf.json             # 窗口 / CSP / 打包目标 / updater 配置；assetProtocol 作用域仅放行 $APPDATA（封面预览经 convertFileSrc → asset:）
 │   └── Cargo.toml                  # 后端依赖与 crate 元信息
-├── docs/                           # ARCHITECTURE.md（本文件）、WORKFLOW.md（命令与流程）、INITIAL.md（派生项目定制与发布清单）、README_zh-CN.md、images/（模板截图）
+├── docs/                           # ARCHITECTURE.md（本文件）、WORKFLOW.md（命令与流程）、README_en.md、images/（界面截图：home.png 首页工作台、projects.png 项目管理）
 ├── static/                         # 原样拷贝到产物根目录的资源（favicon.png）
 ├── .github/workflows/              # ci.yml（质量门禁）、release.yml（打包发布）
 ├── Cargo.toml                      # 虚拟工作区 + 全局 lints / profile
@@ -204,15 +204,15 @@ const config = await invoke<Config>("get_config");
 
 > 改代码时同步改文档：下表是「改了 A 就必须检查 B」的正向清单，与上表「成对维护的配置」同等效力，改完对照打勾。
 
-| 代码改动               | 必须同步的文档位置                                                                                                |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 新增后端插件           | 本文件技术栈与目录树、`AGENTS.md` 安全红线#4、`README.md` 与 `docs/README_zh-CN.md` 功能与外壳、`PRODUCT.md` 能力 |
-| 新增 / 变更配置项      | 本文件配置节、`README.md` 与 `docs/README_zh-CN.md` 配置说明                                                      |
-| 新增 / 改签名命令      | `docs/WORKFLOW.md` 命令契约流程（如改流程）                                                                       |
-| 新增前端依赖 / 插件    | 本文件技术栈、`README.md` 与 `docs/README_zh-CN.md` 技术选型                                                      |
-| 新增文案键             | `README.md` 与 `docs/README_zh-CN.md` 对应章节                                                                    |
-| 新增设置分组 / 页面    | `README.md` 与 `docs/README_zh-CN.md` 页面一览与功能、`docs/images/` 截图重拍、本文件目录树                       |
-| 调整门禁 / 脚本 / 校验 | `docs/WORKFLOW.md` 对应章节、`AGENTS.md`「效力分级与定制」                                                        |
+| 代码改动               | 必须同步的文档位置                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 新增后端插件           | 本文件技术栈与目录树、`AGENTS.md` 安全红线#4、`README.md` 与 `docs/README_en.md` 功能与外壳、`PRODUCT.md` 能力 |
+| 新增 / 变更配置项      | 本文件配置节、`README.md` 与 `docs/README_en.md` 配置说明                                                      |
+| 新增 / 改签名命令      | `docs/WORKFLOW.md` 命令契约流程（如改流程）                                                                    |
+| 新增前端依赖 / 插件    | 本文件技术栈、`README.md` 与 `docs/README_en.md` 技术选型                                                      |
+| 新增文案键             | `README.md` 与 `docs/README_en.md` 对应章节                                                                    |
+| 新增设置分组 / 页面    | `README.md` 与 `docs/README_en.md` 页面一览与功能、`docs/images/` 截图重拍、本文件目录树                       |
+| 调整门禁 / 脚本 / 校验 | `docs/WORKFLOW.md` 对应章节、`AGENTS.md`「效力分级与定制」                                                     |
 
 ---
 

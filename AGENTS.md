@@ -1,7 +1,7 @@
 # AGENTS.md — 常驻开发规范
 
 > 面向 AI 智能体与新加入开发者：本文件是每次任务都适用的常驻规则层（自动加载），只放「红线、边界与门禁」。
-> 技术栈：Tauri v2 + SvelteKit 2 + Svelte 5 + Tailwind CSS v4 + shadcn-svelte + Paraglide + tauri-specta 的 Ebook Studio 桌面应用；人类向导读见 `docs/README_zh-CN.md`。
+> 技术栈：Tauri v2 + SvelteKit 2 + Svelte 5 + Tailwind CSS v4 + shadcn-svelte + Paraglide + tauri-specta 的 Ebook Studio 桌面应用；人类向导读见 `README.md`。
 > 优先级：安全红线 > 架构不变量 > 测试验证 > 代码风格。参考细节与「为什么」在按需文档中，按下方索引读取。
 
 ## 文档索引（做对应任务前先读）
