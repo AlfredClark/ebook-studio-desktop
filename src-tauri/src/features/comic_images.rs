@@ -1,14 +1,14 @@
-//! 漫画图片格式转换：将 `content.json` 全量页统一转码为指定格式。
+//! 漫画图片格式转换与压缩：将 `content.json` 全量页转码或原地重编码。
 //!
 //! 预览（按源格式分组计数）与执行（事务性两阶段）共用同一份扫描口径；
-//! 执行成功后更新 `content.json` 的 path 并清空下游 `build/` 与 `dist/`。
+//! 转换成功后更新 `content.json` 的 path，压缩保持路径不变；两者都清空下游 `build/` 与 `dist/`。
 //! 解码与 JPEG/PNG 编码走纯 Rust 的 `image`，WebP 有损走 libwebp 官方绑定。
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use image::ImageEncoder;
+use image::{GenericImageView, ImageEncoder};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -111,9 +111,24 @@ static CONVERTING: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+/// 进行中的压缩作业：与转换作业同构，暂存区独立（`.tmp-compress`）。
+static COMPRESSING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
 /// 是否有转换在跑（解析 / 导入互斥用）。
 pub fn is_converting(id: &str) -> bool {
     CONVERTING.lock().is_ok_and(|jobs| jobs.contains_key(id))
+}
+
+/// 是否有压缩在跑（解析 / 导入 / 转换互斥用）。
+pub fn is_compressing(id: &str) -> bool {
+    COMPRESSING.lock().is_ok_and(|jobs| jobs.contains_key(id))
+}
+
+/// 是否有图片作业在跑：转换或压缩任一在跑即忙，两者互斥。
+pub fn is_busy(id: &str) -> bool {
+    is_converting(id) || is_compressing(id)
 }
 
 /// 查询作业状态：未在跑回空闲零值。
@@ -138,6 +153,9 @@ pub fn convert_status(id: &str) -> ComicConvertStatus {
 
 /// 登记作业：同项目已有在跑任务时整单拒绝（暂存区按项目独占，不可并发）。
 fn register_convert(id: &str) -> anyhow::Result<()> {
+    if is_compressing(id) {
+        anyhow::bail!("compression already in progress for project {id}");
+    }
     let mut jobs = CONVERTING
         .lock()
         .map_err(|_| anyhow::anyhow!("convert registry poisoned"))?;
@@ -161,6 +179,125 @@ fn update_convert_progress(id: &str, done: u32, total: u32) {
 /// 注销作业：成功失败都走，锁中毒也尽力清理。
 fn finish_convert(id: &str) {
     if let Ok(mut jobs) = CONVERTING.lock() {
+        jobs.remove(id);
+    }
+}
+
+/// 压缩参数：原地重编码，保持源格式与路径不变。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CompressOptions {
+    /// 缩放比例（相对当前尺寸等比），25-100，100 为不缩放。
+    pub scale_percent: u8,
+    /// 灰度转换开关；已灰度图在无需缩放时跳过。
+    pub grayscale: bool,
+    /// JPEG/WebP 有损质量，1-100。
+    pub quality: u8,
+    /// WebP 无损开关（开则忽略质量）。
+    pub webp_lossless: bool,
+    /// PNG 压缩级别，0-9。
+    pub png_level: u8,
+}
+
+impl CompressOptions {
+    fn validate(&self) -> anyhow::Result<()> {
+        if !(25..=100).contains(&self.scale_percent) {
+            anyhow::bail!(
+                "scale_percent must be within 25..=100, got {}",
+                self.scale_percent
+            );
+        }
+        if !(1..=100).contains(&self.quality) {
+            anyhow::bail!("quality must be within 1..=100, got {}", self.quality);
+        }
+        if self.png_level > 9 {
+            anyhow::bail!("png_level must be within 0..=9, got {}", self.png_level);
+        }
+        Ok(())
+    }
+}
+
+/// 压缩预览：只读 `content.json` + 文件大小，不解码图片。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CompressPreview {
+    pub total: u32,
+    pub total_bytes: u32,
+}
+
+/// 压缩结果：原地覆盖后的大纲 + 何度跳过剩下的灰度。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct CompressOutcome {
+    pub outline: ComicOutline,
+    pub processed: u32,
+    pub skipped: u32,
+}
+
+/// 压缩进度事件名：与转换事件独立，前端 hook 分开订阅。
+pub const COMPRESS_PROGRESS_EVENT: &str = "comic-images-compress-progress";
+
+/// 压缩进度载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ComicCompressProgress {
+    pub id: String,
+    pub done_files: u32,
+    pub total_files: u32,
+}
+
+/// 压缩状态探针：供切回页面时回填进度；从未开始返回空闲零值。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ComicCompressStatus {
+    pub running: bool,
+    pub done_files: u32,
+    pub total_files: u32,
+}
+
+/// 查询压缩作业状态：未在跑回空闲零值。
+pub fn compress_status(id: &str) -> ComicCompressStatus {
+    COMPRESSING
+        .lock()
+        .ok()
+        .and_then(|jobs| jobs.get(id).copied())
+        .map_or_else(
+            || ComicCompressStatus {
+                running: false,
+                done_files: 0,
+                total_files: 0,
+            },
+            |(done_files, total_files)| ComicCompressStatus {
+                running: true,
+                done_files,
+                total_files,
+            },
+        )
+}
+
+/// 登记压缩作业：转换/压缩互斥，同项目已有在跑任务整单拒绝。
+fn register_compress(id: &str) -> anyhow::Result<()> {
+    if is_converting(id) {
+        anyhow::bail!("conversion already in progress for project {id}");
+    }
+    let mut jobs = COMPRESSING
+        .lock()
+        .map_err(|_| anyhow::anyhow!("compress registry poisoned"))?;
+    if jobs.contains_key(id) {
+        anyhow::bail!("compression already in progress for project {id}");
+    }
+    jobs.insert(id.to_string(), (0, 0));
+    drop(jobs);
+    Ok(())
+}
+
+/// 更新压缩作业进度：注册表缺失时静默跳过。
+fn update_compress_progress(id: &str, done: u32, total: u32) {
+    if let Ok(mut jobs) = COMPRESSING.lock()
+        && let Some(entry) = jobs.get_mut(id)
+    {
+        *entry = (done, total);
+    }
+}
+
+/// 注销压缩作业：成功失败都走。
+fn finish_compress(id: &str) {
+    if let Ok(mut jobs) = COMPRESSING.lock() {
         jobs.remove(id);
     }
 }
@@ -259,7 +396,7 @@ fn check_conflicts(images_dir: &Path, jobs: &[ConvertJob]) -> anyhow::Result<()>
     Ok(())
 }
 
-/// 单张编码：JPEG 去 alpha；PNG 保留原色彩类型；WebP 按开关选有损 / 无损。
+/// 单张编码：JPEG 去 alpha（灰度按 L8 落盘更小）；PNG 保留原色彩类型；WebP 按开关选有损 / 无损。
 fn encode_image(
     img: &image::DynamicImage,
     target: ImageTargetFormat,
@@ -267,6 +404,20 @@ fn encode_image(
 ) -> anyhow::Result<Vec<u8>> {
     match target {
         ImageTargetFormat::Jpeg => {
+            // 灰度图按 L8 编码：体积显著小于 RGB 展开。
+            if matches!(img.color(), image::ColorType::L8 | image::ColorType::La8) {
+                let gray = img.to_luma8();
+                let mut buf = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, options.quality)
+                    .encode(
+                        &gray,
+                        gray.width(),
+                        gray.height(),
+                        image::ExtendedColorType::L8,
+                    )
+                    .context("failed to encode JPEG")?;
+                return Ok(buf);
+            }
             let rgb = img.to_rgb8();
             let mut buf = Vec::new();
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, options.quality)
@@ -474,6 +625,232 @@ fn stage_all(
         }
     }
     Ok(staged)
+}
+
+/// 压缩暂存目录：与转换暂存区独立，避免互斥作业互相清理。
+const COMPRESS_STAGING_DIR: &str = ".tmp-compress";
+
+/// 灰度判定：Luma 系直接真，RGB 系逐像素比对（忽略 alpha）。
+fn is_grayscale(img: &image::DynamicImage) -> bool {
+    use image::ColorType;
+    match img.color() {
+        ColorType::L8 | ColorType::L16 | ColorType::La8 | ColorType::La16 => true,
+        _ => img.pixels().all(|(_, _, pixel)| {
+            let channels = pixel.0;
+            channels[0] == channels[1] && channels[1] == channels[2]
+        }),
+    }
+}
+
+/// 源扩展名映射回目标格式：压缩保持格式不变，未知格式报错。
+fn target_of_ext(ext: &str) -> anyhow::Result<ImageTargetFormat> {
+    match ext {
+        "jpg" => Ok(ImageTargetFormat::Jpeg),
+        "png" => Ok(ImageTargetFormat::Png),
+        "webp" => Ok(ImageTargetFormat::Webp),
+        _ => anyhow::bail!("unsupported image format: {ext}"),
+    }
+}
+
+/// 压缩变换：先等比缩放（`scale == 100` 跳过），再按开关灰度。
+fn apply_compress_transform(
+    img: image::DynamicImage,
+    options: &CompressOptions,
+) -> image::DynamicImage {
+    let mut current = img;
+    if options.scale_percent != 100 {
+        let (width, height) = current.dimensions();
+        let scale = u64::from(options.scale_percent);
+        let new_width =
+            u32::try_from(((u64::from(width) * scale + 50) / 100).clamp(1, u64::from(width)))
+                .unwrap_or(width);
+        let new_height =
+            u32::try_from(((u64::from(height) * scale + 50) / 100).clamp(1, u64::from(height)))
+                .unwrap_or(height);
+        if new_width != width || new_height != height {
+            current = current.resize(new_width, new_height, image::imageops::FilterType::Lanczos3);
+        }
+    }
+    if options.grayscale {
+        current = current.grayscale();
+    }
+    current
+}
+
+/// 预览压缩：只读 `content.json` + 文件大小，不解码图片。
+pub fn preview_compression_in(project_dir: &Path) -> anyhow::Result<CompressPreview> {
+    let content = comic_files::read_content(project_dir)?;
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let mut total = 0u32;
+    let mut total_bytes = 0u32;
+    for volume in &content.volumes {
+        for page in &volume.pages {
+            let ext = normalized_ext(&page.path)?;
+            if !matches!(ext.as_str(), "jpg" | "png" | "webp") {
+                anyhow::bail!("unsupported image format: {}", page.path);
+            }
+            total = total.saturating_add(1);
+            let abs = comic_files::join_images_path(&images, &page.path)?;
+            let size = std::fs::metadata(&abs).map_or(0, |meta| meta.len());
+            total_bytes = total_bytes.saturating_add(u32::try_from(size).unwrap_or(u32::MAX));
+        }
+    }
+    Ok(CompressPreview { total, total_bytes })
+}
+
+/// 预览压缩（`AppHandle` 入口）。
+pub fn preview_compression(app: &tauri::AppHandle, id: &str) -> anyhow::Result<CompressPreview> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    preview_compression_in(&dir)
+}
+
+/// 查询压缩状态（`AppHandle` 入口）：供切回页面时回填进度。
+pub fn compress_status_of(id: &str) -> ComicCompressStatus {
+    compress_status(id)
+}
+
+/// 压缩全量图片（`AppHandle` 入口）：阻塞池执行并推送逐文件进度。
+pub async fn compress_images(
+    app: &tauri::AppHandle,
+    id: &str,
+    options: &CompressOptions,
+) -> anyhow::Result<CompressOutcome> {
+    use tauri::Emitter;
+
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    register_compress(id)?;
+    let options = options.clone();
+    let handle = app.clone();
+    let report_id = id.to_string();
+    let progress_id = id.to_string();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let on_progress = move |done: u32, total: u32| {
+            update_compress_progress(&progress_id, done, total);
+            let _ = handle.emit(
+                COMPRESS_PROGRESS_EVENT,
+                ComicCompressProgress {
+                    id: report_id.clone(),
+                    done_files: done,
+                    total_files: total,
+                },
+            );
+        };
+        compress_images_in(&dir, &options, Some(&on_progress))
+    })
+    .await;
+    finish_compress(id);
+    outcome.context("compress task panicked")?
+}
+
+/// 压缩内核：事务性两阶段（暂存区编码→原地覆盖），路径不变故不写 `content.json`；
+/// 成功后清空下游 `build/` 与 `dist/`。已灰度且无需缩放的张直接跳过。
+fn compress_images_in(
+    project_dir: &Path,
+    options: &CompressOptions,
+    progress: Option<&dyn Fn(u32, u32)>,
+) -> anyhow::Result<CompressOutcome> {
+    options.validate()?;
+    let content = comic_files::read_content(project_dir)?;
+    let rels: Vec<String> = content
+        .volumes
+        .iter()
+        .flat_map(|volume| volume.pages.iter().map(|page| page.path.clone()))
+        .collect();
+    if rels.is_empty() {
+        let outline = comic_files::outline_in(project_dir)?
+            .with_context(|| "content.json missing, parse the images first".to_string())?;
+        return Ok(CompressOutcome {
+            outline,
+            processed: 0,
+            skipped: 0,
+        });
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let staging = project_dir.join(COMPRESS_STAGING_DIR);
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).context("failed to create compress staging dir")?;
+    let outcome =
+        stage_compress_all(&images, &staging, &rels, options, progress).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&staging);
+        })?;
+    for (rel, staged) in rels.iter().zip(outcome.staged.iter()) {
+        let Some(path) = staged else { continue };
+        let dest = comic_files::join_images_path(&images, rel)?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::rename(path, &dest)
+            .with_context(|| format!("failed to move {} to {}", path.display(), dest.display()))?;
+    }
+    let _ = std::fs::remove_dir_all(&staging);
+    let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
+    let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    let outline = comic_files::outline_in(project_dir)?
+        .with_context(|| "content.json missing after compress".to_string())?;
+    Ok(CompressOutcome {
+        outline,
+        processed: outcome.processed,
+        skipped: outcome.skipped,
+    })
+}
+
+struct CompressStageOutcome {
+    staged: Vec<Option<PathBuf>>,
+    processed: u32,
+    skipped: u32,
+}
+
+/// 压缩阶段一：逐张解码→判灰跳过→变换→按源格式编码进暂存区。
+fn stage_compress_all(
+    images: &Path,
+    staging: &Path,
+    rels: &[String],
+    options: &CompressOptions,
+    progress: Option<&dyn Fn(u32, u32)>,
+) -> anyhow::Result<CompressStageOutcome> {
+    let total = u32::try_from(rels.len()).unwrap_or(u32::MAX);
+    // 质量参数复用转换编码器：按源格式分发，其余忽略。
+    let encode_options = ConvertOptions {
+        quality: options.quality,
+        webp_lossless: options.webp_lossless,
+        png_level: options.png_level,
+        force: true,
+    };
+    let mut staged = Vec::with_capacity(rels.len());
+    let mut processed = 0u32;
+    let mut skipped = 0u32;
+    for (index, rel) in rels.iter().enumerate() {
+        let ext = normalized_ext(rel)?;
+        let target = target_of_ext(&ext)?;
+        let src = comic_files::join_images_path(images, rel)?;
+        let bytes =
+            std::fs::read(&src).with_context(|| format!("failed to read {}", src.display()))?;
+        let img =
+            image::load_from_memory(&bytes).with_context(|| format!("failed to decode {rel}"))?;
+        // 已灰度且无需缩放：跳过重编码（`quality` 变化亦跳过，见确认弹窗明示）。
+        if options.grayscale && options.scale_percent == 100 && is_grayscale(&img) {
+            staged.push(None);
+            skipped = skipped.saturating_add(1);
+        } else {
+            let transformed = apply_compress_transform(img, options);
+            let encoded = encode_image(&transformed, target, &encode_options)?;
+            let staged_path = staging.join(format!("{index:06}"));
+            std::fs::write(&staged_path, &encoded)
+                .with_context(|| format!("failed to stage {}", staged_path.display()))?;
+            staged.push(Some(staged_path));
+            processed = processed.saturating_add(1);
+        }
+        if let Some(report) = progress {
+            let done = u32::try_from(index + 1).unwrap_or(u32::MAX);
+            report(done, total);
+        }
+    }
+    Ok(CompressStageOutcome {
+        staged,
+        processed,
+        skipped,
+    })
 }
 
 #[cfg(test)]
@@ -740,6 +1117,216 @@ mod tests {
         assert!(images.join("a.jpg").is_file());
         let magic = std::fs::read(images.join("a.jpg")).expect("read converted");
         assert!(magic.starts_with(&[0xFF, 0xD8]));
+        cleanup(&root);
+    }
+
+    fn valid_compress_options() -> CompressOptions {
+        CompressOptions {
+            scale_percent: 100,
+            grayscale: false,
+            quality: 85,
+            webp_lossless: false,
+            png_level: 6,
+        }
+    }
+
+    /// 写一张指定尺寸的彩色图，供缩放断言用。
+    fn write_sized_image(dir: &Path, rel: &str, width: u32, height: u32) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create image parent");
+        }
+        let img = image::RgbImage::from_pixel(width, height, image::Rgb([20, 120, 200]));
+        image::DynamicImage::ImageRgb8(img)
+            .save(&path)
+            .expect("save test image");
+    }
+
+    /// 写一张灰度图（L8 落盘），供跳过断言用。
+    fn write_gray_image(dir: &Path, rel: &str) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create image parent");
+        }
+        let img = image::GrayImage::from_pixel(4, 4, image::Luma([128]));
+        image::DynamicImage::ImageLuma8(img)
+            .save(&path)
+            .expect("save test image");
+    }
+
+    #[test]
+    fn compress_rejects_invalid_options() {
+        let (root, dir) = test_project("compress-options");
+        seed_images(&dir, &["a.png"]);
+        let bad_scale = CompressOptions {
+            scale_percent: 24,
+            ..valid_compress_options()
+        };
+        assert!(compress_images_in(&dir, &bad_scale, None).is_err());
+        let bad_scale_high = CompressOptions {
+            scale_percent: 101,
+            ..valid_compress_options()
+        };
+        assert!(compress_images_in(&dir, &bad_scale_high, None).is_err());
+        let bad_quality = CompressOptions {
+            quality: 0,
+            ..valid_compress_options()
+        };
+        assert!(compress_images_in(&dir, &bad_quality, None).is_err());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn compress_registry_lifecycle_and_mutex() {
+        let id = "compress-registry-lifecycle";
+        assert!(!is_compressing(id));
+        assert!(!is_busy(id));
+        register_compress(id).expect("register");
+        assert!(is_compressing(id));
+        assert!(is_busy(id));
+        // 转换与压缩互斥：任一在跑另一整单拒绝。
+        assert!(register_convert(id).is_err());
+        finish_compress(id);
+        assert!(!is_busy(id));
+        register_convert(id).expect("convert after compress");
+        assert!(register_compress(id).is_err());
+        finish_convert(id);
+        assert!(!is_busy(id));
+    }
+
+    #[test]
+    fn compress_preview_counts_pages_without_decoding() {
+        let (root, dir) = test_project("compress-preview");
+        seed_images(&dir, &["a.png", "b.jpg"]);
+        let preview = preview_compression_in(&dir).expect("preview");
+        assert_eq!(preview.total, 2);
+        assert!(preview.total_bytes > 0);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn compress_scales_and_keeps_paths_and_clears_downstream() {
+        let (root, dir) = test_project("compress-scale");
+        let images = dir.join("sources").join("images");
+        write_sized_image(&images, "a.png", 8, 8);
+        // 最小 content.json：单张 8x8。
+        let content = ComicContent {
+            schema_version: 1,
+            mode: ComicMode::Flat,
+            parsed_at: "2026-01-01T00:00:00Z".to_string(),
+            volumes: vec![ComicVolume {
+                title: None,
+                pages: vec![ComicPage {
+                    path: "a.png".to_string(),
+                }],
+            }],
+        };
+        let text = serde_json::to_string_pretty(&content).expect("serialize content");
+        std::fs::write(dir.join("content.json"), text).expect("write content");
+        std::fs::create_dir_all(dir.join("build")).expect("create build");
+        std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+        let options = CompressOptions {
+            scale_percent: 50,
+            ..valid_compress_options()
+        };
+        let outcome = compress_images_in(&dir, &options, None).expect("compress");
+        assert_eq!(outcome.processed, 1);
+        assert_eq!(outcome.skipped, 0);
+        // 路径不变，尺寸减半。
+        assert_eq!(read_paths(&dir), vec!["a.png"]);
+        let bytes = std::fs::read(images.join("a.png")).expect("read compressed");
+        let img = image::load_from_memory(&bytes).expect("decode compressed");
+        assert_eq!(img.dimensions(), (4, 4));
+        assert_eq!(outcome.outline.page_count, 1);
+        assert!(!dir.join(".tmp-compress").exists());
+        assert!(!dir.join("build").exists());
+        assert!(!dir.join("dist").exists());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn compress_skips_already_gray_when_no_scale() {
+        let (root, dir) = test_project("compress-gray-skip");
+        let images = dir.join("sources").join("images");
+        write_gray_image(&images, "gray.png");
+        write_sized_image(&images, "color.png", 4, 4);
+        let content = ComicContent {
+            schema_version: 1,
+            mode: ComicMode::Flat,
+            parsed_at: "2026-01-01T00:00:00Z".to_string(),
+            volumes: vec![ComicVolume {
+                title: None,
+                pages: vec![
+                    ComicPage {
+                        path: "gray.png".to_string(),
+                    },
+                    ComicPage {
+                        path: "color.png".to_string(),
+                    },
+                ],
+            }],
+        };
+        let text = serde_json::to_string_pretty(&content).expect("serialize content");
+        std::fs::write(dir.join("content.json"), text).expect("write content");
+        let before_gray = std::fs::read(images.join("gray.png")).expect("read gray");
+        let options = CompressOptions {
+            grayscale: true,
+            ..valid_compress_options()
+        };
+        let outcome = compress_images_in(&dir, &options, None).expect("compress");
+        assert_eq!(outcome.processed, 1);
+        assert_eq!(outcome.skipped, 1);
+        // 已灰度原文件不动，彩色图被灰度化。
+        let after_gray = std::fs::read(images.join("gray.png")).expect("read gray after");
+        assert_eq!(before_gray, after_gray);
+        let color_bytes = std::fs::read(images.join("color.png")).expect("read color");
+        let color_img = image::load_from_memory(&color_bytes).expect("decode color");
+        assert!(is_grayscale(&color_img));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn compress_does_not_skip_gray_when_scaling() {
+        let (root, dir) = test_project("compress-gray-scale");
+        let images = dir.join("sources").join("images");
+        write_gray_image(&images, "gray.png");
+        let content = ComicContent {
+            schema_version: 1,
+            mode: ComicMode::Flat,
+            parsed_at: "2026-01-01T00:00:00Z".to_string(),
+            volumes: vec![ComicVolume {
+                title: None,
+                pages: vec![ComicPage {
+                    path: "gray.png".to_string(),
+                }],
+            }],
+        };
+        let text = serde_json::to_string_pretty(&content).expect("serialize content");
+        std::fs::write(dir.join("content.json"), text).expect("write content");
+        let options = CompressOptions {
+            scale_percent: 50,
+            grayscale: true,
+            ..valid_compress_options()
+        };
+        let outcome = compress_images_in(&dir, &options, None).expect("compress");
+        assert_eq!((outcome.processed, outcome.skipped), (1, 0));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn compress_corrupt_aborts_transactionally() {
+        let (root, dir) = test_project("compress-corrupt");
+        seed_images(&dir, &["good.png", "bad.png"]);
+        let images = dir.join("sources").join("images");
+        std::fs::write(images.join("bad.png"), b"not-an-image").expect("corrupt image");
+        let before = std::fs::read(images.join("good.png")).expect("read good");
+        let result = compress_images_in(&dir, &valid_compress_options(), None);
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(images.join("good.png")).expect("read good after"),
+            before
+        );
+        assert!(!dir.join(".tmp-compress").exists());
         cleanup(&root);
     }
 }

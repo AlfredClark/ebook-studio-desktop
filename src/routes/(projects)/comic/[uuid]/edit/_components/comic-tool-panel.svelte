@@ -15,7 +15,7 @@
   import type { ImageTargetFormat } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
 
-  /** 工具类型：格式转换 / 图片压缩（压缩后续接入）。 */
+  /** 工具类型：格式转换 / 图片压缩。 */
   export type ComicTool = "convert" | "compress";
 
   let {
@@ -25,6 +25,11 @@
     webpLossless = $bindable(false),
     pngLevel = $bindable(6),
     forceConvert = $bindable(false),
+    compressScale = $bindable(100),
+    compressGrayscale = $bindable(false),
+    compressQuality = $bindable(85),
+    compressWebpLossless = $bindable(false),
+    compressPngLevel = $bindable(6),
     running = false,
     canRun = false,
     hasOutcome = false,
@@ -38,6 +43,11 @@
     webpLossless: boolean;
     pngLevel: number;
     forceConvert: boolean;
+    compressScale: number;
+    compressGrayscale: boolean;
+    compressQuality: number;
+    compressWebpLossless: boolean;
+    compressPngLevel: number;
     running: boolean;
     canRun: boolean;
     hasOutcome: boolean;
@@ -162,8 +172,76 @@
         {m.comic_edit_tool_force()}
       </label>
     {:else}
-      <!-- 占位：图片压缩参数区，后续接入具体实现时替换并补国际化。 -->
-      <p class="text-sm text-muted-foreground">图片压缩参数占位，后续接入</p>
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-baseline justify-between">
+          <span id="comic-tool-scale-label" class="text-sm font-medium">
+            {m.comic_edit_tool_scale()}
+          </span>
+          <span class="text-sm text-muted-foreground tabular-nums">{compressScale}%</span>
+        </div>
+        <Slider
+          type="single"
+          value={compressScale}
+          min={25}
+          max={100}
+          step={1}
+          onValueChange={(value) => (compressScale = value)}
+          aria-labelledby="comic-tool-scale-label"
+        />
+        <p class="text-xs text-muted-foreground">{m.comic_edit_tool_scale_hint()}</p>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+          <Switch
+            checked={compressGrayscale}
+            onCheckedChange={(value) => (compressGrayscale = value === true)}
+          />
+          {m.comic_edit_tool_grayscale()}
+        </label>
+        <p class="text-xs text-muted-foreground">{m.comic_edit_tool_grayscale_hint()}</p>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-baseline justify-between">
+          <span id="comic-tool-compress-quality-label" class="text-sm font-medium">
+            {m.comic_edit_tool_quality()}
+          </span>
+          <span class="text-sm text-muted-foreground tabular-nums">{compressQuality}</span>
+        </div>
+        <Slider
+          type="single"
+          value={compressQuality}
+          min={1}
+          max={100}
+          step={1}
+          onValueChange={(value) => (compressQuality = value)}
+          aria-labelledby="comic-tool-compress-quality-label"
+        />
+      </div>
+      <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+        <Switch
+          checked={compressWebpLossless}
+          onCheckedChange={(value) => (compressWebpLossless = value === true)}
+        />
+        {m.comic_edit_tool_webp_lossless()}
+      </label>
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-baseline justify-between">
+          <span id="comic-tool-compress-png-level-label" class="text-sm font-medium">
+            {m.comic_edit_tool_png_level()}
+          </span>
+          <span class="text-sm text-muted-foreground tabular-nums">{compressPngLevel}</span>
+        </div>
+        <Slider
+          type="single"
+          value={compressPngLevel}
+          min={0}
+          max={9}
+          step={1}
+          onValueChange={(value) => (compressPngLevel = value)}
+          aria-labelledby="comic-tool-compress-png-level-label"
+        />
+      </div>
+      <p class="text-xs text-muted-foreground">{m.comic_edit_tool_format_note()}</p>
     {/if}
     {#if running && progress != null}
       <div class="flex flex-col gap-1.5" role="status" aria-live="polite">

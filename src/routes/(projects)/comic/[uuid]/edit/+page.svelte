@@ -18,6 +18,12 @@
     refreshConvertStatus,
     setConvertRunning,
   } from "#libs/hooks/comic-convert.svelte";
+  import {
+    compressJobOf,
+    ensureCompressListener,
+    refreshCompressStatus,
+    setCompressRunning,
+  } from "#libs/hooks/comic-compress.svelte";
   import { m } from "#libs/i18n/paraglide/messages";
   import { toast } from "#libs/utils/toast";
   import ComicStepGuide from "../../_components/comic-step-guide.svelte";
@@ -45,7 +51,7 @@
   } from "./_components/comic-navigate";
   import ComicToolPanel, { type ComicTool } from "./_components/comic-tool-panel.svelte";
   import type { ComicDropOrder } from "./_components/comic-sortable";
-  import type { ConvertPreview, ImageTargetFormat } from "#libs/commands/types";
+  import type { CompressPreview, ConvertPreview, ImageTargetFormat } from "#libs/commands/types";
   import { formatBytes, pageFileName } from "../files/_components/comic-files";
 
   const uuid = $derived(page.params.uuid ?? "");
@@ -152,7 +158,7 @@
 
   /** 拖拽/键盘提交移动：只改本地工作话，选中按 path 跟随；转换中锁定。 */
   function handleMove(from: PageRef, to: DropTarget): void {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     working = movePage(working, from, to);
@@ -172,35 +178,58 @@
   let convertPreview = $state<ConvertPreview | null>(null);
   let convertPreviewToken = 0;
   let convertConfirmOpen = $state(false);
-  /** 跨页面转换作业：切页不丢进度，以 Rust 侧注册表为准回填。 */
+  /** 右栏图片压缩：缩放 + 灰度 + 按源格式重编码；确认弹窗展示参数摘要。 */
+  let compressScale = $state(100);
+  let compressGrayscale = $state(false);
+  let compressQuality = $state(85);
+  let compressWebpLossless = $state(false);
+  let compressPngLevel = $state(6);
+  let compressPreview = $state<CompressPreview | null>(null);
+  let compressConfirmOpen = $state(false);
+  /** 跨页面图片作业：切页不丢进度，以 Rust 侧注册表为准回填；转换与压缩互斥。 */
   const convertJob = $derived(convertJobOf(uuid));
-  const convertProgress = $derived(
-    convertJob.total === 0 ? null : Math.round((convertJob.done / convertJob.total) * 100),
-  );
-  /** 转换中锁定编辑：除预览翻页外，禁止一切改 content.json 的操作。 */
-  const convertLocked = $derived(convertJob.running);
+  const compressJob = $derived(compressJobOf(uuid));
+  const toolRunning = $derived(convertJob.running || compressJob.running);
+  const toolProgress = $derived.by(() => {
+    const active = convertJob.running ? convertJob : compressJob;
+    return active.total === 0 ? null : Math.round((active.done / active.total) * 100);
+  });
+  /** 图片作业中锁定编辑：除预览翻页外，禁止一切改 content.json 的操作。 */
+  const imageLocked = $derived(toolRunning);
 
   /** 右栏工具：当前所选工具。 */
   let tool: ComicTool = $state("convert");
 
-  /** 格式转换参数是否偏离默认值：重置按钮门禁。 */
-  const convertModified = $derived(
-    convertTarget !== "jpeg" ||
+  /** 参数是否偏离默认值：重置按钮门禁（按当前工具判定）。 */
+  const hasOutcome = $derived.by(() => {
+    if (tool === "compress") {
+      return (
+        compressScale !== 100 ||
+        compressGrayscale !== false ||
+        compressQuality !== 85 ||
+        compressWebpLossless !== false ||
+        compressPngLevel !== 6
+      );
+    }
+    return (
+      convertTarget !== "jpeg" ||
       convertQuality !== 85 ||
       convertWebpLossless !== false ||
       convertPngLevel !== 6 ||
-      convertForce !== false,
-  );
+      convertForce !== false
+    );
+  });
 
-  /** 开始按钮门禁：脏态、保存中、运行中、无可转页时禁用。 */
-  const convertRunnable = $derived(
-    tool === "convert" &&
-      outline != null &&
-      !dirty &&
-      !saving &&
-      !convertJob.running &&
-      (convertPreview?.total ?? 0) > 0,
-  );
+  /** 开始按钮门禁：脏态、保存中、运行中、无可处理页时禁用。 */
+  const toolRunnable = $derived.by(() => {
+    if (outline == null || dirty || saving || toolRunning) {
+      return false;
+    }
+    if (tool === "compress") {
+      return (compressPreview?.total ?? 0) > 0;
+    }
+    return (convertPreview?.total ?? 0) > 0;
+  });
 
   /** 转换预览跟随：工具 / 目标格式 / 强制开关 / 大纲变化时刷新分组。 */
   $effect(() => {
@@ -222,6 +251,20 @@
     })();
   });
 
+  /** 压缩预览跟随：仅工具 / 大纲变化时刷新（不跟随滑块，避免解码风暴）。 */
+  $effect(() => {
+    const currentTool = tool;
+    const hasOutline = outline != null;
+    if (currentTool !== "compress" || !hasOutline) {
+      compressPreview = null;
+      return;
+    }
+    void (async () => {
+      const result = await commands.previewComicImageCompression(uuid).result();
+      compressPreview = result.status === "ok" ? result.data : null;
+    })();
+  });
+
   /** 确认弹窗行：源格式按列对齐，`→` 后统一为目标格式大写。 */
   function convertConfirmLines(preview: ConvertPreview, targetLabel: string): string[] {
     const fromWidth = Math.max(...preview.items.map((item) => item.from.length));
@@ -233,9 +276,36 @@
     });
   }
 
-  /** 工具执行：刷新预览后弹确认框（无可转页直接提示）。 */
+  /** 压缩确认行：参数摘要逐行展示。 */
+  function compressConfirmLines(): string[] {
+    const unit = m.comic_edit_convert_count_unit();
+    const count = compressPreview == null ? `0 ${unit}` : `${compressPreview.total} ${unit}`;
+    return [
+      `${m.comic_edit_tool_scale()}  ${compressScale}%`,
+      `${m.comic_edit_tool_grayscale()}  ${compressGrayscale ? "ON" : "OFF"}`,
+      `${m.comic_edit_tool_quality()}  ${compressQuality}`,
+      `${m.comic_edit_tool_png_level()}  ${compressPngLevel}`,
+      count,
+    ];
+  }
+
+  /** 工具执行：刷新预览后弹确认框（无可处理页直接提示）。 */
   async function handleToolRun(): Promise<void> {
-    if (tool !== "convert" || convertJob.running) {
+    if (toolRunning) {
+      return;
+    }
+    if (tool === "compress") {
+      const preview = await commands.previewComicImageCompression(uuid).result();
+      if (preview.status === "error") {
+        toast.error(m.comic_edit_compress_failed());
+        return;
+      }
+      compressPreview = preview.data;
+      if (compressPreview.total === 0) {
+        toast.info(m.comic_edit_compress_nothing());
+        return;
+      }
+      compressConfirmOpen = true;
       return;
     }
     const preview = await commands
@@ -253,8 +323,16 @@
     convertConfirmOpen = true;
   }
 
-  /** 工具重置：格式转换参数回到默认值。 */
+  /** 工具重置：当前工具参数回到默认值。 */
   function handleToolReset(): void {
+    if (tool === "compress") {
+      compressScale = 100;
+      compressGrayscale = false;
+      compressQuality = 85;
+      compressWebpLossless = false;
+      compressPngLevel = 6;
+      return;
+    }
     convertTarget = "jpeg";
     convertQuality = 85;
     convertWebpLossless = false;
@@ -264,7 +342,11 @@
 
   /** 确认转换：全局进度监听在 hook 侧常驻，成功后按原全局序号跟随选中。 */
   async function handleToolConfirm(): Promise<void> {
-    if (convertJob.running) {
+    if (toolRunning) {
+      return;
+    }
+    if (tool === "compress") {
+      await handleCompressConfirm();
       return;
     }
     setConvertRunning(uuid, true);
@@ -299,9 +381,40 @@
     toast.success(m.comic_edit_convert_success());
   }
 
+  /** 确认压缩：原地重编码，路径不变故选中无需跟随；成功提示处理/跳过数。 */
+  async function handleCompressConfirm(): Promise<void> {
+    setCompressRunning(uuid, true);
+    const result = await commands
+      .compressComicImages(uuid, {
+        scale_percent: compressScale,
+        grayscale: compressGrayscale,
+        quality: compressQuality,
+        webp_lossless: compressWebpLossless,
+        png_level: compressPngLevel,
+      })
+      .result();
+    setCompressRunning(uuid, false);
+    if (result.status === "error") {
+      toast.error(m.comic_edit_compress_failed());
+      return;
+    }
+    outline = result.data.outline;
+    working = toWorking(result.data.outline.volumes);
+    saved = toWorking(result.data.outline.volumes);
+    if (selectedPath != null) {
+      void loadPreview(selectedPath);
+    }
+    toast.success(
+      m.comic_edit_compress_success_detail({
+        processed: result.data.processed,
+        skipped: result.data.skipped,
+      }),
+    );
+  }
+
   /** 键盘话重排：选中页所在话整体上移 / 下移一位；转换中锁定。 */
   function keyboardMoveVolume(delta: 1 | -1): void {
-    if (convertLocked || selectedPath == null) {
+    if (imageLocked || selectedPath == null) {
       return;
     }
     const ref = findPage(working, selectedPath);
@@ -320,7 +433,7 @@
 
   /** 改名提交：标题已由树组件校验，直接落本地工作话。 */
   function handleRename(volume: number, title: string): void {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     if (working[volume] == null) {
@@ -337,7 +450,7 @@
   );
 
   function handleDeleteRequest(volume: number): void {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     pendingDelete = volume;
@@ -345,7 +458,7 @@
   }
 
   function handleDeleteConfirm(): void {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     const target = pendingDelete == null ? null : working[pendingDelete];
@@ -376,7 +489,7 @@
   }
 
   function handleCreateVolume(): void {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     const error = titleErrorOf(newTitle);
@@ -399,7 +512,7 @@
 
   /** 保存：全量分话结构覆写落盘，成功后快照同步、失败保留本地可再保存。 */
   async function handleSave(): Promise<void> {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     if (!dirty || saving) {
@@ -425,7 +538,7 @@
 
   /** 删除页记录：只从工作话移除顺序记录，sources/images 中的图片文件保留； 未保存前可在左栏放弃更改找回。 */
   function handleDeletePage(): void {
-    if (convertLocked) {
+    if (imageLocked) {
       return;
     }
     if (selectedPath == null) {
@@ -479,7 +592,7 @@
 
   /** 键盘重排：在话内换位，到边界自动跨入相邻话首 / 末；转换中锁定。 */
   function keyboardMove(delta: 1 | -1): void {
-    if (convertLocked || selectedPath == null) {
+    if (imageLocked || selectedPath == null) {
       return;
     }
     const ref = findPage(working, selectedPath);
@@ -607,6 +720,8 @@
     void loadOutline();
     ensureConvertListener();
     void refreshConvertStatus(uuid);
+    ensureCompressListener();
+    void refreshCompressStatus(uuid);
   });
 </script>
 
@@ -658,7 +773,7 @@
               {selectedPath}
               sizes={pageSizes}
               locateRequest={locateNonce}
-              locked={convertLocked}
+              locked={imageLocked}
               onSelect={handleSelect}
               onDropOrder={handleDropOrder}
               onRename={handleRename}
@@ -670,7 +785,7 @@
               <input
                 bind:this={newVolumeInput}
                 bind:value={newTitle}
-                disabled={convertLocked}
+                disabled={imageLocked}
                 aria-label={m.comic_edit_episode_new()}
                 placeholder={m.comic_edit_episode_name_placeholder()}
                 onkeydown={(event) => {
@@ -689,7 +804,7 @@
                 <Button
                   class="flex-1"
                   size="sm"
-                  disabled={saving || convertLocked}
+                  disabled={saving || imageLocked}
                   onclick={handleCreateVolume}
                 >
                   {m.comic_edit_episode_create()}
@@ -710,7 +825,7 @@
               <Button
                 variant="outline"
                 class="w-full"
-                disabled={saving || convertLocked}
+                disabled={saving || imageLocked}
                 onclick={() => {
                   creatingVolume = true;
                   newTitle = "";
@@ -724,7 +839,7 @@
             <div class="flex shrink-0 flex-col gap-2 border-t border-border p-3">
               <Button
                 class="w-full"
-                disabled={saving || convertLocked}
+                disabled={saving || imageLocked}
                 onclick={() => void handleSave()}
               >
                 {saving ? m.comic_edit_saving() : m.comic_edit_save()}
@@ -732,7 +847,7 @@
               <Button
                 variant="outline"
                 class="w-full"
-                disabled={saving || convertLocked}
+                disabled={saving || imageLocked}
                 onclick={() => (confirmOpen = true)}
               >
                 {m.comic_edit_discard()}
@@ -770,7 +885,7 @@
               size="icon"
               aria-label={m.comic_edit_delete_page()}
               title={m.comic_edit_delete_page_hint()}
-              disabled={saving || location == null || convertLocked}
+              disabled={saving || location == null || imageLocked}
               onclick={handleDeletePage}
             >
               <TrashIcon class="size-4" />
@@ -846,10 +961,15 @@
               bind:webpLossless={convertWebpLossless}
               bind:pngLevel={convertPngLevel}
               bind:forceConvert={convertForce}
-              running={convertJob.running}
-              canRun={convertRunnable}
-              hasOutcome={convertModified}
-              progress={convertProgress}
+              bind:compressScale
+              bind:compressGrayscale
+              bind:compressQuality
+              bind:compressWebpLossless
+              bind:compressPngLevel
+              running={toolRunning}
+              canRun={toolRunnable}
+              {hasOutcome}
+              progress={toolProgress}
               onRun={() => void handleToolRun()}
               onClear={handleToolReset}
             />
@@ -886,6 +1006,17 @@
   details={convertPreview == null
     ? []
     : convertConfirmLines(convertPreview, convertTarget.toUpperCase())}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_edit_tool_run()}
+  onConfirm={() => void handleToolConfirm()}
+/>
+<ConfirmDialog
+  bind:open={compressConfirmOpen}
+  title={m.comic_edit_compress_confirm_title()}
+  description={m.comic_edit_compress_confirm_description({
+    total: compressPreview?.total ?? 0,
+  })}
+  details={compressConfirmLines()}
   cancelLabel={m.projects_create_cancel()}
   confirmLabel={m.comic_edit_tool_run()}
   onConfirm={() => void handleToolConfirm()}

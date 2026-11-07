@@ -5,7 +5,8 @@ use crate::features::comic_files::{
     self, ComicImageInfo, ComicImagesStatus, ComicOutline, ComicVolumeInput,
 };
 use crate::features::comic_images::{
-    self, ComicConvertStatus, ConvertOptions, ConvertPreview, ImageTargetFormat,
+    self, ComicCompressStatus, ComicConvertStatus, CompressOptions, CompressOutcome,
+    CompressPreview, ConvertOptions, ConvertPreview, ImageTargetFormat,
 };
 
 /// 查询漫画原稿状态；缺目录回落空态，不建文件。
@@ -107,4 +108,36 @@ pub async fn convert_comic_images(
     options: ConvertOptions,
 ) -> CommandResult<ComicOutline> {
     Ok(comic_images::convert_images(&app, &id, target, &options).await?)
+}
+
+/// 预览图片压缩：只读 `content.json` + 文件大小，不解码图片。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_comic_image_compression(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<CompressPreview> {
+    Ok(comic_images::preview_compression(&app, &id)?)
+}
+
+/// 查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_comic_compress_status(id: String) -> CommandResult<ComicCompressStatus> {
+    Ok(comic_images::compress_status_of(&id))
+}
+
+/// 压缩全量图片：原地重编码（缩放 + 灰度 + 按源格式重编码），路径不变；
+/// 成功后清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn compress_comic_images(
+    app: tauri::AppHandle,
+    id: String,
+    options: CompressOptions,
+) -> CommandResult<CompressOutcome> {
+    Ok(comic_images::compress_images(&app, &id, &options).await?)
 }

@@ -663,14 +663,14 @@ pub fn images_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicIm
     status_in(&dir)
 }
 
-/// 导入漫画目录（`AppHandle` 入口）：转换进行中拒绝，避免与批量替换互斥。
+/// 导入漫画目录（`AppHandle` 入口）：转换/压缩进行中拒绝，避免与批量替换互斥。
 pub fn import_images(
     app: &tauri::AppHandle,
     id: &str,
     source_path: &str,
 ) -> anyhow::Result<ComicImagesStatus> {
-    if super::comic_images::is_converting(id) {
-        anyhow::bail!("image conversion in progress for project {id}, try again later");
+    if super::comic_images::is_busy(id) {
+        anyhow::bail!("image job in progress for project {id}, try again later");
     }
     let dir = super::projects::resolve_project_dir(app, id)?;
     import_dir_in(&dir, Path::new(source_path))
@@ -878,10 +878,10 @@ pub fn outline_in(project_dir: &Path) -> anyhow::Result<Option<ComicOutline>> {
     Ok(Some(outline_of(project_dir, &content, 0)?))
 }
 
-/// 解析图片顺序（`AppHandle` 入口）：转换进行中拒绝，避免与批量替换互斥。
+/// 解析图片顺序（`AppHandle` 入口）：转换/压缩进行中拒绝，避免与批量替换互斥。
 pub fn parse_images(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
-    if super::comic_images::is_converting(id) {
-        anyhow::bail!("image conversion in progress for project {id}, try again later");
+    if super::comic_images::is_busy(id) {
+        anyhow::bail!("image job in progress for project {id}, try again later");
     }
     let dir = super::projects::resolve_project_dir(app, id)?;
     parse_images_in(&dir)

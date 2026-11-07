@@ -17,7 +17,7 @@ if (typeof ResizeObserver === "undefined") {
   } as unknown as typeof ResizeObserver;
 }
 
-// 右栏图片工具：工具切换走回调，参数区按工具切换占位，按钮门禁透传。
+// 右栏图片工具：工具切换走回调，参数区按工具切换，按钮门禁透传。
 const runMock = vi.hoisted(() => vi.fn());
 const clearMock = vi.hoisted(() => vi.fn());
 
@@ -33,6 +33,11 @@ function renderPanel(
       webpLossless: false,
       pngLevel: 6,
       forceConvert: false,
+      compressScale: 100,
+      compressGrayscale: false,
+      compressQuality: 85,
+      compressWebpLossless: false,
+      compressPngLevel: 6,
       running: false,
       canRun: false,
       hasOutcome: false,
@@ -58,9 +63,10 @@ describe("图片工具面板", () => {
     expect(screen.getByRole("button", { name: "Reset" })).toHaveProperty("disabled", true);
   });
 
-  it("压缩工具保留占位", () => {
+  it("压缩工具展示缩放与灰度参数控件", () => {
     renderPanel("compress");
-    expect(screen.getByText("图片压缩参数占位，后续接入")).not.toBeNull();
+    expect(screen.getByText("Scale")).not.toBeNull();
+    expect(screen.getByText("Grayscale")).not.toBeNull();
     expect(screen.queryByText("Target format")).toBeNull();
   });
 
@@ -95,7 +101,7 @@ describe("图片工具面板", () => {
       expect(document.querySelector('[data-value="compress"]')).not.toBeNull();
     });
     await user.click(document.querySelector('[data-value="compress"]') as HTMLElement);
-    expect(screen.getByText("图片压缩参数占位，后续接入")).not.toBeNull();
+    expect(screen.getByText("Scale")).not.toBeNull();
     expect(screen.queryByText("Target format")).toBeNull();
   });
 });

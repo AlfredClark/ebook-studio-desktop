@@ -47,6 +47,15 @@ export const commands = {
 	 *  并清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度，前端据此渲染进度。
 	 */
 	convertComicImages: (id: string, target: ImageTargetFormat, options: ConvertOptions) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("convert_comic_images", { id, target, options })),
+	/**  预览图片压缩：只读 `content.json` + 文件大小，不解码图片。 */
+	previewComicImageCompression: (id: string) => typedError<CompressPreview, CommandError>(__TAURI_INVOKE("preview_comic_image_compression", { id })),
+	/**  查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值。 */
+	getComicCompressStatus: (id: string) => typedError<ComicCompressStatus, CommandError>(__TAURI_INVOKE("get_comic_compress_status", { id })),
+	/**
+	 *  压缩全量图片：原地重编码（缩放 + 灰度 + 按源格式重编码），路径不变；
+	 *  成功后清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度。
+	 */
+	compressComicImages: (id: string, options: CompressOptions) => typedError<CompressOutcome, CommandError>(__TAURI_INVOKE("compress_comic_images", { id, options })),
 	/**  构建漫画：清空构建目录后全量重生成，返回文件树。 */
 	buildComicContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_comic_content", { id, titles })),
 	/**  预览标题格式：按话取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
@@ -348,6 +357,13 @@ export type CleanupPreset =
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
 
+/**  压缩状态探针：供切回页面时回填进度；从未开始返回空闲零值。 */
+export type ComicCompressStatus = {
+	running: boolean,
+	done_files: number,
+	total_files: number,
+};
+
 /**  转换状态探针：供切回页面时回填进度；从未开始返回空闲零值。 */
 export type ComicConvertStatus = {
 	running: boolean,
@@ -476,6 +492,33 @@ export type ComicVolumeOutline = {
 export type CommandError = 
 /**  内部错误（`anyhow` 的链式上下文会展开成可读文本） */
 { kind: "Internal"; message: string };
+
+/**  压缩参数：原地重编码，保持源格式与路径不变。 */
+export type CompressOptions = {
+	/**  缩放比例（相对当前尺寸等比），25-100，100 为不缩放。 */
+	scale_percent: number,
+	/**  灰度转换开关；已灰度图在无需缩放时跳过。 */
+	grayscale: boolean,
+	/**  JPEG/WebP 有损质量，1-100。 */
+	quality: number,
+	/**  WebP 无损开关（开则忽略质量）。 */
+	webp_lossless: boolean,
+	/**  PNG 压缩级别，0-9。 */
+	png_level: number,
+};
+
+/**  压缩结果：原地覆盖后的大纲 + 何度跳过剩下的灰度。 */
+export type CompressOutcome = {
+	outline: ComicOutline,
+	processed: number,
+	skipped: number,
+};
+
+/**  压缩预览：只读 `content.json` + 文件大小，不解码图片。 */
+export type CompressPreview = {
+	total: number,
+	total_bytes: number,
+};
 
 /**
  *  应用完整配置：各持久化项聚合于此，`store` 内仍按扁平键（`KEY_*`）逐项存储。
