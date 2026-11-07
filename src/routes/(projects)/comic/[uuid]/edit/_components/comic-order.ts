@@ -1,8 +1,9 @@
 // 漫画编辑左栏纯逻辑：工作话模型与跨话移动；鼠标拖拽与键盘重排共用同一纯函数。
 // 工作话与后端 content.json 话序同源，标题由落盘保持、只动页序。
 
-/** 工作话：标题沿落盘，页为相对 images/ 的有序路径。 */
+/** 工作话：id 仅内存排序与 key 用（派生时按序分配，新建时随机），不落盘；标题沿落盘，页为相对 images/ 的有序路径。 */
 export interface WorkingVolume {
+  id: string;
   title: string | null;
   pages: string[];
 }
@@ -23,19 +24,32 @@ export interface DropTarget {
   edge: DropEdge;
 }
 
-/** 由识别大纲派生工作话（深拷贝，拖拽只改本地，落盘前不碰 saved）。 */
+/** 由识别大纲派生工作话（深拷贝，拖拽只改本地，落盘前不碰 saved）。id 按派生序分配，排序时跟随话走。 */
 export function toWorking(
   volumes: { title: string | null; pages: { path: string }[] }[],
 ): WorkingVolume[] {
-  return volumes.map((volume) => ({
+  return volumes.map((volume, index) => ({
+    id: `volume-${index}`,
     title: volume.title,
     pages: volume.pages.map((page) => page.path),
   }));
 }
 
-/** 工作话比对：脏态判定用，序列化直比即可（同一派生口径）。 */
+/** 深拷贝工作话：拖拽开始时拍快照，取消回滚用。 */
+export function cloneVolumes(volumes: WorkingVolume[]): WorkingVolume[] {
+  return volumes.map((volume) => ({ ...volume, pages: [...volume.pages] }));
+}
+
+/** 新建空话：id 随机分配避免与派生 id 碰撞；标题由调用方修边后传入。 */
+export function createVolume(title: string): WorkingVolume {
+  return { id: crypto.randomUUID(), title, pages: [] };
+}
+
+/** 工作话比对：脏态判定用，只比标题与页序，忽略内存 id。 */
 export function sameOrder(a: WorkingVolume[], b: WorkingVolume[]): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  const orderOf = (volumes: WorkingVolume[]): { title: string | null; pages: string[] }[] =>
+    volumes.map((volume) => ({ title: volume.title, pages: volume.pages }));
+  return JSON.stringify(orderOf(a)) === JSON.stringify(orderOf(b));
 }
 
 /** 定位页：按 path 查找，找不到回 null。 */
@@ -52,6 +66,50 @@ export function findPage(volumes: WorkingVolume[], path: string): PageRef | null
 /** 展平：全局顺序的 path 清单（上一页 / 下一页导航用）。 */
 export function flattenPages(volumes: WorkingVolume[]): string[] {
   return volumes.flatMap((volume) => volume.pages);
+}
+
+/**
+ * 按落点 DOM 顺序重建工作话（Sortable 落点唯一入口；键盘重排仍走 movePage/moveVolume）。 话按 volumeIds
+ * 排（标题跟话走），页按各话 id 表排；未知 path 丢弃， DOM 漏掉的已知 path 缀回原话末尾（库异常时也不丢数据）。
+ */
+export function applyDomOrder(
+  working: WorkingVolume[],
+  volumeIds: string[],
+  pageOrders: Map<string, string[]>,
+): WorkingVolume[] {
+  const byId = new Map(working.map((volume) => [volume.id, volume]));
+  const ordered = volumeIds
+    .map((id) => byId.get(id))
+    .filter((volume): volume is WorkingVolume => volume != null);
+  for (const volume of working) {
+    if (!volumeIds.includes(volume.id)) {
+      ordered.push(volume);
+    }
+  }
+  const known = new Set(working.flatMap((volume) => volume.pages));
+  const seen = new Set<string>();
+  const next = ordered.map((volume) => {
+    const ids = pageOrders.get(volume.id) ?? volume.pages;
+    const pages = ids.filter((path) => {
+      if (!known.has(path) || seen.has(path)) {
+        return false;
+      }
+      seen.add(path);
+      return true;
+    });
+    return { ...volume, pages };
+  });
+  const missing = working.flatMap((volume) => volume.pages).filter((path) => !seen.has(path));
+  if (missing.length > 0) {
+    const merged = new Map(next.map((volume) => [volume.id, volume]));
+    for (const volume of working) {
+      const rest = missing.filter((path) => volume.pages.includes(path));
+      if (rest.length > 0) {
+        merged.get(volume.id)?.pages.push(...rest);
+      }
+    }
+  }
+  return next;
 }
 
 /** 话移动目标：参照话下标 + 边（话头上下半区）。 */
@@ -96,7 +154,7 @@ export function moveVolume(
   if (to.index < 0 || to.index >= volumes.length) {
     return volumes;
   }
-  const next = volumes.map((volume) => ({ title: volume.title, pages: [...volume.pages] }));
+  const next = volumes.map((volume) => ({ ...volume, pages: [...volume.pages] }));
   const [entry] = next.splice(from, 1);
   let at = Math.max(0, Math.min(to.index, next.length));
   if (from < to.index) {
@@ -122,7 +180,7 @@ export function movePage(volumes: WorkingVolume[], from: PageRef, to: DropTarget
   if (to.volume < 0 || to.volume >= volumes.length) {
     return volumes;
   }
-  const next = volumes.map((volume) => ({ title: volume.title, pages: [...volume.pages] }));
+  const next = volumes.map((volume) => ({ ...volume, pages: [...volume.pages] }));
   const [path] = next[from.volume].pages.splice(from.index, 1);
   const target = next[to.volume].pages;
   if (to.edge === "append" || to.index == null) {

@@ -5,11 +5,10 @@
   import { page } from "$app/state";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import ImageIcon from "@lucide/svelte/icons/image";
+  import LocateFixedIcon from "@lucide/svelte/icons/locate-fixed";
   import TrashIcon from "@lucide/svelte/icons/trash-2";
   import { Button } from "#components/shadcn-svelte/button";
   import * as Resizable from "#components/shadcn-svelte/resizable";
-  import CardRow from "#components/common/card-row.svelte";
-  import CardSection from "#components/common/card-section.svelte";
   import ConfirmDialog from "#components/common/confirm-dialog.svelte";
   import commands from "#libs/commands";
   import type { ComicOutline } from "#libs/commands/types";
@@ -18,6 +17,9 @@
   import ComicStepGuide from "../../_components/comic-step-guide.svelte";
   import ComicPageTree from "./_components/comic-page-tree.svelte";
   import {
+    applyDomOrder,
+    cloneVolumes,
+    createVolume,
     findPage,
     flattenPages,
     movePage,
@@ -27,10 +29,16 @@
     validateVolumeTitle,
     type DropTarget,
     type PageRef,
-    type VolumeMoveTarget,
     type VolumeTitleError,
     type WorkingVolume,
   } from "./_components/comic-order";
+  import {
+    accumulateWheelFlip,
+    normalizeWheelDelta,
+    resolveArrowStep,
+  } from "./_components/comic-navigate";
+  import ComicToolPanel, { type ComicTool } from "./_components/comic-tool-panel.svelte";
+  import type { ComicDropOrder } from "./_components/comic-sortable";
   import { formatBytes, pageFileName } from "../files/_components/comic-files";
 
   const uuid = $derived(page.params.uuid ?? "");
@@ -46,6 +54,8 @@
   let saving = $state(false);
   /** 放弃更改确认框：纯 UI 态，执行走回滚回调。 */
   let confirmOpen = $state(false);
+  /** 定位请求：递增即通知页序树展开并滚动到当前选中页。 */
+  let locateNonce = $state(0);
 
   /** 预览选中：相对 images/ 的 POSIX 路径，拖拽后按 path 跟随。 */
   let selectedPath = $state<string | null>(null);
@@ -56,6 +66,10 @@
   let previewLoading = $state(false);
   let previewFailed = $state(false);
   let previewToken = 0;
+  /** 预览容器：挂滚轮翻页监听（显式非被动监听以便吞掉翻页手势）。 */
+  let previewBox: HTMLElement | null = $state(null);
+  /** 滚轮翻页累积量：非渲染态，容器重挂时随 effect 清理重置。 */
+  let wheelAcc = 0;
 
   /** 页大小表：path → 字节数，按 path 查表，拖拽改序不影响。 */
   const pageSizes = $derived(
@@ -76,9 +90,12 @@
       return null;
     }
     const flat = flattenPages(working);
+    const volumePages = working[ref.volume]?.pages ?? [];
     return {
       ref,
       title: working[ref.volume]?.title ?? null,
+      episode: ref.volume + 1,
+      serial: String(ref.index + 1).padStart(String(volumePages.length).length, "0"),
       index: flat.indexOf(selectedPath) + 1,
       total: flat.length,
     };
@@ -131,9 +148,37 @@
     working = movePage(working, from, to);
   }
 
-  /** 拖拽/键盘提交话移动：只改本地工作话顺序。 */
-  function handleMoveVolume(from: number, to: VolumeMoveTarget): void {
-    working = moveVolume(working, from, to);
+  /** 落点提交：Sortable onEnd 后按 DOM 顺序一次性落本地工作话。 */
+  function handleDropOrder(order: ComicDropOrder): void {
+    working = applyDomOrder(working, order.volumeIds, order.pages);
+  }
+
+  /** 右栏工具：当前所选工具；执行与重置为占位回调，后续接入具体实现。 */
+  let tool: ComicTool = $state("convert");
+  function handleToolRun(): void {
+    // 占位：后续接入格式转换 / 图片压缩执行逻辑。
+  }
+  function handleToolReset(): void {
+    // 占位：后续接入参数重置逻辑。
+  }
+
+  /** 键盘话重排：选中页所在话整体上移 / 下移一位。 */
+  function keyboardMoveVolume(delta: 1 | -1): void {
+    if (selectedPath == null) {
+      return;
+    }
+    const ref = findPage(working, selectedPath);
+    if (ref == null) {
+      return;
+    }
+    const target = ref.volume + delta;
+    if (target < 0 || target >= working.length) {
+      return;
+    }
+    working = moveVolume(working, ref.volume, {
+      index: target,
+      edge: delta > 0 ? "after" : "before",
+    });
   }
 
   /** 改名提交：标题已由树组件校验，直接落本地工作话。 */
@@ -198,7 +243,7 @@
       toast.error(m.comic_edit_episode_title_too_long());
       return;
     }
-    working = [...working, { title: newTitle.trim(), pages: [] }];
+    working = [...working, createVolume(newTitle.trim())];
     newTitle = "";
     creatingVolume = false;
   }
@@ -258,7 +303,7 @@
 
   /** 放弃更改：回到已落盘快照，选中页丢失时回首个有效页。 */
   function handleDiscard(): void {
-    working = saved.map((volume) => ({ title: volume.title, pages: [...volume.pages] }));
+    working = cloneVolumes(saved);
     if (selectedPath == null || findPage(working, selectedPath) == null) {
       selectFirstPage();
     }
@@ -308,7 +353,7 @@
     );
   }
 
-  /** 全局快捷键：保存 / 切页 / 键盘重排，门禁由各自回调把守。 输入框聚焦时只响应保存，其余方向键留给输入框自身。 */
+  /** 全局快捷键：保存 / 切页（上下左右）/ 键盘重排，门禁由各自回调把守。 输入框聚焦时只响应保存，其余方向键留给输入框自身。 */
   function handleGlobalKeydown(event: KeyboardEvent): void {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -336,33 +381,43 @@
       }
       return;
     }
-    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
-      stepPage(-1);
-      return;
-    }
-    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowRight") {
-      stepPage(1);
+    const step = resolveArrowStep(event.key, {
+      alt: event.altKey,
+      ctrl: event.ctrlKey,
+      meta: event.metaKey,
+    });
+    if (step !== 0) {
+      stepPage(step);
     }
   }
 
-  /** 键盘话重排：选中页所在话整体上移 / 下移一位。 */
-  function keyboardMoveVolume(delta: 1 | -1): void {
-    if (selectedPath == null) {
+  /** 预览区滚轮翻页：主导轴累积超阈值翻页；缩放手势放过。 */
+  $effect(() => {
+    const box = previewBox;
+    if (box == null) {
       return;
     }
-    const ref = findPage(working, selectedPath);
-    if (ref == null) {
-      return;
-    }
-    const target = ref.volume + delta;
-    if (target < 0 || target >= working.length) {
-      return;
-    }
-    working = moveVolume(working, ref.volume, {
-      index: target,
-      edge: delta > 0 ? "after" : "before",
-    });
-  }
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) {
+        return;
+      }
+      const delta = normalizeWheelDelta(
+        Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX,
+        event.deltaMode,
+      );
+      const { flip, acc } = accumulateWheelFlip(wheelAcc, delta);
+      wheelAcc = acc;
+      if (flip !== 0) {
+        event.preventDefault();
+        stepPage(flip);
+      }
+    };
+    box.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      box.removeEventListener("wheel", onWheel);
+      wheelAcc = 0;
+    };
+  });
 
   /** 图片预览：绝对路径转 asset: URL，切走后回来的迟到结果直接丢弃。 */
   async function loadPreview(path: string): Promise<void> {
@@ -422,17 +477,32 @@
     <Resizable.PaneGroup direction="horizontal">
       <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
         <div class="flex h-full min-h-0 flex-col">
-          <p class="shrink-0 px-3 pt-3 text-xs text-muted-foreground">
-            {dirty ? m.comic_edit_dirty_hint() : m.comic_edit_drag_hint()}
-          </p>
-          <div class="min-h-0 flex-1 overflow-y-auto">
+          <div class="flex shrink-0 items-center gap-1 px-3 pt-3">
+            <p class="min-w-0 flex-1 text-xs text-muted-foreground">
+              {dirty ? m.comic_edit_dirty_hint() : m.comic_edit_drag_hint()}
+            </p>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-6 shrink-0"
+              aria-label={m.comic_edit_locate_page()}
+              title={m.comic_edit_locate_page()}
+              disabled={selectedPath == null}
+              onclick={() => {
+                locateNonce += 1;
+              }}
+            >
+              <LocateFixedIcon class="size-4" />
+            </Button>
+          </div>
+          <div class="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
             <ComicPageTree
               volumes={working}
               {selectedPath}
               sizes={pageSizes}
+              locateRequest={locateNonce}
               onSelect={handleSelect}
-              onMove={handleMove}
-              onMoveVolume={handleMoveVolume}
+              onDropOrder={handleDropOrder}
               onRename={handleRename}
               onDeleteRequest={handleDeleteRequest}
             />
@@ -506,43 +576,42 @@
       <Resizable.Handle withHandle aria-label={m.edit_resize_left_label()} />
       <Resizable.Pane defaultSize={56} minSize={30} class="min-w-0">
         <div class="flex h-full min-h-0 flex-col">
-          <div class="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={location == null || location.index <= 1}
-              onclick={() => stepPage(-1)}
-            >
-              {m.comic_edit_prev()}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={location == null || location.index >= location.total}
-              onclick={() => stepPage(1)}
-            >
-              {m.comic_edit_next()}
-            </Button>
+          <div class="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
             {#if location != null && selectedPath != null}
-              <span class="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-                {location.index} / {location.total} · {pageFileName(selectedPath)}
-                {#if previewSize != null}
-                  · {formatBytes(previewSize)}
-                {/if}
+              <span class="shrink-0 text-sm font-medium text-foreground">
+                {m.comic_edit_episode_number({ index: location.episode })}
               </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={m.comic_edit_delete_page()}
-                title={m.comic_edit_delete_page_hint()}
-                disabled={saving}
-                onclick={handleDeletePage}
-              >
-                <TrashIcon class="size-4" />
-              </Button>
+              <span class="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                {location.serial} - {selectedPath}
+              </span>
+              <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
+                {previewDims == null
+                  ? m.comic_files_preview_loading()
+                  : `${previewDims.width} × ${previewDims.height}`}
+              </span>
+              {#if previewSize != null}
+                <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  {formatBytes(previewSize)}
+                </span>
+              {/if}
+            {:else}
+              <span class="min-w-0 flex-1" aria-hidden="true"></span>
             {/if}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={m.comic_edit_delete_page()}
+              title={m.comic_edit_delete_page_hint()}
+              disabled={saving || location == null}
+              onclick={handleDeletePage}
+            >
+              <TrashIcon class="size-4" />
+            </Button>
           </div>
-          <div class="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
+          <div
+            bind:this={previewBox}
+            class="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4"
+          >
             {#if selectedPath == null}
               <div class="flex flex-col items-center gap-2 text-center">
                 <ImageIcon class="size-10 text-muted-foreground" />
@@ -573,33 +642,44 @@
               />
             {/if}
           </div>
+          <div class="flex shrink-0 items-center gap-2 border-t border-border px-4 py-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={location == null || location.index <= 1}
+              onclick={() => stepPage(-1)}
+            >
+              {m.comic_edit_prev()}
+            </Button>
+            <span class="min-w-0 flex-1 text-center text-sm text-muted-foreground tabular-nums">
+              {#if location != null}
+                {location.index} / {location.total}
+              {/if}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={location == null || location.index >= location.total}
+              onclick={() => stepPage(1)}
+            >
+              {m.comic_edit_next()}
+            </Button>
+          </div>
         </div>
       </Resizable.Pane>
       <Resizable.Handle withHandle aria-label={m.edit_resize_right_label()} />
       <Resizable.Pane defaultSize={22} minSize={15} maxSize={35} class="min-w-0">
-        <div class="flex h-full min-h-0 flex-col gap-4 overflow-auto p-6">
-          <CardSection title={m.comic_edit_info_section()}>
-            {#if location != null && selectedPath != null}
-              <CardRow
-                label={m.comic_edit_info_episode()}
-                description={location.title ?? m.comic_untitled_episode()}
-              />
-              <CardRow label={m.comic_edit_info_file()} description={pageFileName(selectedPath)} />
-              <CardRow label={m.comic_edit_info_path()} description={selectedPath} />
-              {#if previewSize != null}
-                <CardRow label={m.comic_edit_info_size()} description={formatBytes(previewSize)} />
-              {/if}
-              <CardRow
-                label={m.comic_edit_info_dimensions()}
-                description={previewDims == null
-                  ? m.comic_files_preview_loading()
-                  : `${previewDims.width} × ${previewDims.height}`}
-              />
-            {:else}
-              <CardRow label={m.comic_edit_no_selection()} description="" />
-            {/if}
-          </CardSection>
-          <p class="text-xs text-muted-foreground">{m.comic_edit_side_pending()}</p>
+        <div class="flex h-full min-h-0 flex-col overflow-hidden">
+          <div class="min-h-0 flex-1">
+            <ComicToolPanel
+              bind:tool
+              running={false}
+              canRun={false}
+              hasOutcome={false}
+              onRun={handleToolRun}
+              onClear={handleToolReset}
+            />
+          </div>
         </div>
       </Resizable.Pane>
     </Resizable.PaneGroup>

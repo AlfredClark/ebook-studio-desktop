@@ -28,6 +28,7 @@
   /** 预览图：asset URL 与字节大小，迟到结果按 token 丢弃。 */
   let previewUrl = $state<string | null>(null);
   let previewSize = $state<number | null>(null);
+  let previewDims = $state<{ width: number; height: number } | null>(null);
   let previewLoading = $state(false);
   let previewFailed = $state(false);
   let previewToken = 0;
@@ -40,6 +41,7 @@
     selectedPath = null;
     previewUrl = null;
     previewSize = null;
+    previewDims = null;
     previewFailed = false;
     const result = await commands.getComicImagesStatus(uuid).result();
     if (result.status === "error") {
@@ -96,6 +98,7 @@
     selectedPath = null;
     previewUrl = null;
     previewSize = null;
+    previewDims = null;
     previewFailed = false;
     if (wasReselect) {
       toast.success(m.comic_files_source_reselect_cleared());
@@ -132,6 +135,7 @@
     const token = (previewToken += 1);
     previewLoading = true;
     previewFailed = false;
+    previewDims = null;
     const image = await commands.getComicImagePath(uuid, path).result();
     if (token !== previewToken) {
       return;
@@ -219,12 +223,19 @@
                 <img
                   src={previewUrl}
                   alt={pageFileName(selectedPath)}
+                  onload={(event) => {
+                    const img = event.currentTarget as HTMLImageElement | null;
+                    if (img != null) {
+                      previewDims = { width: img.naturalWidth, height: img.naturalHeight };
+                    }
+                  }}
                   class="max-h-full max-w-full object-contain"
                 />
               </div>
-              {#if previewSize != null}
-                <p class="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {pageFileName(selectedPath)} · {formatBytes(previewSize)}
+              {#if previewSize != null && previewDims != null}
+                <p class="shrink-0 text-center text-xs text-muted-foreground tabular-nums">
+                  {pageFileName(selectedPath)} · {previewDims.width} × {previewDims.height} ·
+                  {formatBytes(previewSize)}
                 </p>
               {/if}
             {/if}

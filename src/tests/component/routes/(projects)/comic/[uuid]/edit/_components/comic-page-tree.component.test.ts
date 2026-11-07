@@ -1,63 +1,97 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
+import { tick } from "svelte";
+import Sortable from "sortablejs";
+import type { Options as SortableFullOptions, SortableEvent } from "sortablejs";
 import type { WorkingVolume } from "../../../../../../../../routes/(projects)/comic/[uuid]/edit/_components/comic-order";
 import ComicPageTree from "../../../../../../../../routes/(projects)/comic/[uuid]/edit/_components/comic-page-tree.svelte";
 
-// 页序树拖拽接线：用模拟 DataTransfer 走 dragstart→dragover→drop，断言 onMove 参数；
-// jsdom 无真实拖拽引擎，只验证事件接线与自放 guard，不验证浏览器拖拽行为。
+// Sortable 截桩：库本身不跑，只捕获各列表实例的 options；测试人调 onStart/onEnd
+// 模拟手势，落点 DOM 顺序走真实 jsdom 读出（挪节点 + 调 onEnd）。
+vi.mock("sortablejs", () => {
+  class FakeSortable {
+    static instances: { el: HTMLElement; options: SortableFullOptions }[] = [];
+    constructor(el: HTMLElement, options: SortableFullOptions) {
+      FakeSortable.instances.push({ el, options });
+    }
+    destroy(): void {}
+  }
+  return { default: FakeSortable };
+});
+
+type FakeSortable = { instances: { el: HTMLElement; options: SortableFullOptions }[] };
+const sortableInstances = () => (Sortable as unknown as FakeSortable).instances;
+
+// 页序树拖拽接线：落点提交按 DOM 顺序，折叠悬停展开，拖后点击屏蔽。
 const selectMock = vi.hoisted(() => vi.fn());
-const moveMock = vi.hoisted(() => vi.fn());
-const moveVolumeMock = vi.hoisted(() => vi.fn());
+const dropOrderMock = vi.hoisted(() => vi.fn());
 const renameMock = vi.hoisted(() => vi.fn());
 const deleteRequestMock = vi.hoisted(() => vi.fn());
 
 function volumes(): WorkingVolume[] {
   return [
-    { title: null, pages: ["a.jpg", "b.jpg"] },
-    { title: "第1话", pages: ["第1话/01.jpg"] },
+    { id: "v0", title: null, pages: ["a.jpg", "b.jpg"] },
+    { id: "v1", title: "第1话", pages: ["第1话/01.jpg"] },
   ];
 }
 
-function renderTree(current: WorkingVolume[] = volumes(), sizes: Map<string, number> = new Map()) {
+function renderTree(
+  current: WorkingVolume[] = volumes(),
+  sizes: Map<string, number> = new Map(),
+  selectedPath: string | null = null,
+  locateRequest = 0,
+) {
   return render(ComicPageTree, {
     props: {
       volumes: current,
-      selectedPath: null,
+      selectedPath,
       sizes,
+      locateRequest,
       onSelect: selectMock,
-      onMove: moveMock,
-      onMoveVolume: moveVolumeMock,
+      onDropOrder: dropOrderMock,
       onRename: renameMock,
       onDeleteRequest: deleteRequestMock,
     },
   });
 }
 
-/** 单次手势共用的 DataTransfer 替身：setData 存载荷，getData 回放。 */
-function makeTransfer() {
-  const store = new Map<string, string>();
-  return {
-    setData: vi.fn((type: string, data: string) => store.set(type, data)),
-    getData: vi.fn((type: string) => store.get(type) ?? ""),
-    effectAllowed: "",
-    dropEffect: "",
-    types: ["text/plain"],
-  };
+/** 取某话页列表的 Sortable 实例。 */
+function pageInstance(volumeId: string) {
+  const found = sortableInstances().find(
+    (entry) => (entry.el as HTMLElement).dataset.volumeList === volumeId,
+  );
+  if (found == null) {
+    throw new Error(`missing page list for ${volumeId}`);
+  }
+  return found.options;
 }
 
-function dragEvent(type: string, transfer: ReturnType<typeof makeTransfer>): Event {
-  // jsdom 无 DragEvent 构造器：处理器只用 preventDefault/dataTransfer/clientY，
-  // 普通 Event 挂载同样属性即可走通接线。
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: transfer });
-  // jsdom 布局全零：clientY=0 落在上半区判定之外，稳定走 after。
-  Object.defineProperty(event, "clientY", { value: 0 });
-  return event;
+/** 取话列表实例（grouped 才有）。 */
+function volumeInstance() {
+  const found = sortableInstances().find(
+    (entry) => (entry.el as HTMLElement).dataset.volumeList == null,
+  );
+  if (found == null) {
+    throw new Error("missing volume list");
+  }
+  return found.options;
+}
+
+async function startDrag(options: SortableFullOptions, item: Element) {
+  options.onStart?.({ item } as unknown as SortableEvent);
+  // 直接调回调不经过事件派发，手动刷 Svelte 状态。
+  await tick();
+}
+
+function endDrag(options: SortableFullOptions, item: Element) {
+  options.onEnd?.({ item } as unknown as SortableEvent);
 }
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
+  sortableInstances().length = 0;
 });
 
 /** 分话默认折叠：先点开全部话头，再操作行。 */
@@ -82,57 +116,108 @@ describe("页序树拖拽", () => {
     expect(selectMock).toHaveBeenCalledWith("a.jpg");
   });
 
-  it("行间放下提交跨位移动", async () => {
-    renderTree();
+  it("落点按 DOM 顺序提交", async () => {
+    const { container } = renderTree();
     await expandAll();
-    const transfer = makeTransfer();
-    const source = screen.getByRole("button", { name: /a\.jpg/ });
-    await fireEvent(source, dragEvent("dragstart", transfer));
-    const target = screen.getByRole("button", { name: /b\.jpg/ });
-    await fireEvent(target, dragEvent("dragover", transfer));
-    await fireEvent(target, dragEvent("drop", transfer));
-    expect(moveMock).toHaveBeenCalledOnce();
-    expect(moveMock).toHaveBeenCalledWith(
-      { volume: 0, index: 0 },
-      { volume: 0, index: 1, edge: "after" },
-    );
+    const body = container.querySelector('[data-volume-list="v0"]');
+    expect(body).not.toBeNull();
+    const rowA = screen.getByRole("button", { name: /a\.jpg/ });
+    const rowB = screen.getByRole("button", { name: /b\.jpg/ });
+    // 模拟库已把 b 搬到 a 之前。
+    body!.insertBefore(rowB, rowA);
+    const options = pageInstance("v0");
+    await startDrag(options, rowB);
+    expect(screen.getByRole("navigation").getAttribute("aria-busy")).toBe("true");
+    endDrag(options, rowB);
+    expect(dropOrderMock).toHaveBeenCalledOnce();
+    expect(dropOrderMock).toHaveBeenCalledWith({
+      volumeIds: ["v0", "v1"],
+      pages: new Map([
+        ["v0", ["b.jpg", "a.jpg"]],
+        ["v1", ["第1话/01.jpg"]],
+      ]),
+    });
   });
 
-  it("放在自身行上视为取消，不提交移动", async () => {
+  it("无效落点提交原序，节点保留", async () => {
     renderTree();
     await expandAll();
-    const transfer = makeTransfer();
-    const source = screen.getByRole("button", { name: /a\.jpg/ });
-    await fireEvent(source, dragEvent("dragstart", transfer));
-    await fireEvent(source, dragEvent("dragover", transfer));
-    await fireEvent(source, dragEvent("drop", transfer));
-    expect(moveMock).not.toHaveBeenCalled();
+    const options = pageInstance("v0");
+    const rowA = screen.getByRole("button", { name: /a\.jpg/ });
+    await startDrag(options, rowA);
+    endDrag(options, rowA);
+    expect(dropOrderMock).toHaveBeenCalledOnce();
+    expect(dropOrderMock).toHaveBeenCalledWith({
+      volumeIds: ["v0", "v1"],
+      pages: new Map([
+        ["v0", ["a.jpg", "b.jpg"]],
+        ["v1", ["第1话/01.jpg"]],
+      ]),
+    });
+    // 同序提交不动 DOM：被拖行仍在文档中。
+    expect(rowA.isConnected).toBe(true);
+    expect(screen.getByRole("button", { name: /a\.jpg/ })).not.toBeNull();
   });
 
-  it("放在话头追加到该话末尾，支持跨话", async () => {
+  it("拖后点击被屏蔽一次", async () => {
     renderTree();
-    // 话头本身始终可见：展开源话取行，直接往折叠话头上放。
+    await expandAll();
+    const options = pageInstance("v0");
+    const rowA = screen.getByRole("button", { name: /a\.jpg/ });
+    await startDrag(options, rowA);
+    endDrag(options, rowA);
+    await fireEvent.click(rowA);
+    expect(selectMock).not.toHaveBeenCalled();
+  });
+
+  it("悬停折叠话头计时展开", async () => {
+    vi.useFakeTimers();
+    const { container } = renderTree();
     await fireEvent.click(screen.getByRole("button", { name: /Untitled/ }));
-    const transfer = makeTransfer();
-    const source = screen.getByRole("button", { name: /a\.jpg/ });
-    await fireEvent(source, dragEvent("dragstart", transfer));
-    const header = screen.getByRole("button", { name: /第1话/ });
-    await fireEvent(header, dragEvent("dragover", transfer));
-    await fireEvent(header, dragEvent("drop", transfer));
-    expect(moveMock).toHaveBeenCalledOnce();
-    expect(moveMock).toHaveBeenCalledWith({ volume: 0, index: 0 }, { volume: 1, edge: "append" });
+    expect(screen.queryByRole("button", { name: /01\.jpg/ })).toBeNull();
+    const header = container.querySelector('[data-volume-header="1"]');
+    expect(header).not.toBeNull();
+    document.elementFromPoint = vi.fn().mockReturnValue(header);
+    const options = pageInstance("v0");
+    const rowA = screen.getByRole("button", { name: /a\.jpg/ });
+    await startDrag(options, rowA);
+    await fireEvent.mouseMove(window, { clientX: 30, clientY: 200 });
+    await vi.advanceTimersByTimeAsync(450);
+    // 行按钮名取文件名：跨话路径只显示 basename。
+    expect(screen.getByRole("button", { name: /01\.jpg/ })).not.toBeNull();
+    endDrag(options, rowA);
+  });
+
+  it("话拖拽悬停折叠话头不展开", async () => {
+    vi.useFakeTimers();
+    const { container } = renderTree();
+    await fireEvent.click(screen.getByRole("button", { name: /Untitled/ }));
+    const header = container.querySelector('[data-volume-header="1"]');
+    document.elementFromPoint = vi.fn().mockReturnValue(header);
+    const options = volumeInstance();
+    const section = container.querySelector('section[data-volume-section][data-id="v0"]');
+    expect(section).not.toBeNull();
+    await startDrag(options, section as Element);
+    await fireEvent.mouseMove(window, { clientX: 30, clientY: 200 });
+    await vi.advanceTimersByTimeAsync(450);
+    expect(screen.queryByRole("button", { name: /01\.jpg/ })).toBeNull();
+    endDrag(options, section as Element);
   });
 
   it("拖话头到另一话头提交话排序", async () => {
     const { container } = renderTree();
-    const headers = container.querySelectorAll('button[draggable="true"]');
-    expect(headers.length).toBe(2);
-    const transfer = makeTransfer();
-    await fireEvent(headers[0], dragEvent("dragstart", transfer));
-    await fireEvent(headers[1], dragEvent("dragover", transfer));
-    await fireEvent(headers[1], dragEvent("drop", transfer));
-    expect(moveVolumeMock).toHaveBeenCalledOnce();
-    expect(moveVolumeMock).toHaveBeenCalledWith(0, { index: 1, edge: "after" });
+    const sections = [...container.querySelectorAll("section[data-volume-section]")];
+    expect(sections.length).toBe(2);
+    // 模拟库已把第 2 话搬到前面。
+    sections[0].parentElement!.insertBefore(sections[1], sections[0]);
+    const options = volumeInstance();
+    await startDrag(options, sections[1] as HTMLElement);
+    endDrag(options, sections[1] as HTMLElement);
+    expect(dropOrderMock).toHaveBeenCalledOnce();
+    expect(dropOrderMock).toHaveBeenCalledWith({
+      volumeIds: ["v1", "v0"],
+      pages: new Map(),
+    });
   });
 
   it("改名提交走回调，空标题内联报错不提交", async () => {
@@ -155,6 +240,21 @@ describe("页序树拖拽", () => {
     expect(screen.getByText("Episode title is required")).not.toBeNull();
   });
 
+  it("序号按总数补零对齐", () => {
+    const pages = Array.from({ length: 12 }, (_, i) => `p${String(i + 1).padStart(2, "0")}.jpg`);
+    renderTree([{ id: "v", title: null, pages }]);
+    expect(screen.getByText("01")).not.toBeNull();
+    expect(screen.getByText("12")).not.toBeNull();
+    // 未补零的个位数不应出现。
+    expect(screen.queryByText("1", { exact: true })).toBeNull();
+  });
+
+  it("定位请求展开并露出当前页", async () => {
+    renderTree(volumes(), new Map(), "第1话/01.jpg", 1);
+    await tick();
+    expect(screen.getByRole("button", { name: /01\.jpg/ })).not.toBeNull();
+  });
+
   it("行尾展示图片大小，缺失不展示", async () => {
     renderTree(volumes(), new Map([["a.jpg", 2048]]));
     await fireEvent.click(screen.getByRole("button", { name: /Untitled/ }));
@@ -165,8 +265,8 @@ describe("页序树拖拽", () => {
 
   it("仅空话显示删除按钮，点击走删除请求", async () => {
     renderTree([
-      { title: "空话", pages: [] },
-      { title: "正文", pages: ["b.jpg"] },
+      { id: "empty", title: "空话", pages: [] },
+      { id: "body", title: "正文", pages: ["b.jpg"] },
     ]);
     const deletes = screen.getAllByRole("button", { name: /Delete episode/ });
     expect(deletes.length).toBe(1);

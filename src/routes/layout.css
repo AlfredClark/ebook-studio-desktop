@@ -164,3 +164,19 @@
     font-size: var(--app-font-size);
   }
 }
+
+/* 漫画左栏拖拽（SortableJS forceFallback）：幽灵不拦截命中，其余半透明示意。 */
+.comic-sortable-fallback {
+  opacity: 0.9;
+  pointer-events: none;
+}
+.comic-sortable-ghost {
+  opacity: 0.35;
+}
+.comic-sortable-chosen {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.comic-sortable-drag {
+  opacity: 0.85;
+}
