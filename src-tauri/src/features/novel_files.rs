@@ -105,6 +105,7 @@ pub fn import_txt_in(project_dir: &Path, source: &Path) -> anyhow::Result<NovelT
         .with_context(|| format!("failed to create {}", sources.display()))?;
     std::fs::copy(source, sources.join(CONTENT_FILE)).context("failed to copy text")?;
     clear_downstream(project_dir);
+    super::projects::touch_updated(project_dir);
     status_in(project_dir)
 }
 
@@ -756,6 +757,7 @@ pub fn parse_txt_in(
     let outline = outline_of(&content);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
+    super::projects::touch_updated(project_dir);
     Ok(outline)
 }
 
@@ -776,6 +778,7 @@ pub fn renumber_in(project_dir: &Path) -> anyhow::Result<ParseOutline> {
     content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
+    super::projects::touch_updated(project_dir);
     Ok(outline_of(&content))
 }
 /// 读取已落盘的识别大纲：缺失或损坏回落空，不建文件（初始开发阶段不做版本门）。
@@ -887,6 +890,7 @@ pub fn update_chapter_in(
     content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
+    super::projects::touch_updated(project_dir);
     Ok(outline_of(&content))
 }
 

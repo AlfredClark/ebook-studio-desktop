@@ -593,6 +593,7 @@ fn convert_images_in(
     // 下游构建与打包产物含旧格式图片，一并失效（`content.json` 保留）。
     let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
     let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    super::projects::touch_updated(project_dir);
     comic_files::outline_in(project_dir)?
         .with_context(|| "content.json missing after convert".to_string())
 }
@@ -788,6 +789,7 @@ fn compress_images_in(
     let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
     let outline = comic_files::outline_in(project_dir)?
         .with_context(|| "content.json missing after compress".to_string())?;
+    super::projects::touch_updated(project_dir);
     Ok(CompressOutcome {
         outline,
         processed: outcome.processed,

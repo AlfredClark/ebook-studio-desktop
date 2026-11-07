@@ -606,6 +606,8 @@
   "comic_edit_tool_scale_hint": "Scales relative to current size; repeated runs shrink further",
   "comic_edit_tool_grayscale": "Grayscale",
   "comic_edit_tool_grayscale_hint": "Already-grayscale images are skipped when no scaling is needed",
+  "comic_edit_tool_switch_on": "On",
+  "comic_edit_tool_switch_off": "Off",
   "comic_edit_tool_format_note": "Quality / compression level applies per source format, others ignored",
   "comic_edit_compress_confirm_title": "Confirm compression?",
   "comic_edit_compress_confirm_description": "The following {total} images will be re-encoded in place:",

@@ -402,6 +402,7 @@ pub fn build_in(
         .replace("lang=\"zh-CN\"", &lang_attr);
     write_bytes(&build_dir, "EPUB/cover.xhtml", cover.as_bytes())?;
 
+    super::projects::touch_updated(project_dir);
     tree_in(project_dir).with_context(|| format!("failed to list {}", build_dir.display()))
 }
 

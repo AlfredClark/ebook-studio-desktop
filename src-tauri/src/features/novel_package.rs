@@ -549,6 +549,8 @@ async fn package_with_progress_inner(
     let validation = tauri::async_runtime::spawn_blocking(move || validate_in(&dir))
         .await
         .context("validate task panicked")??;
+    let project_dir = super::projects::resolve_project_dir(app, id)?;
+    super::projects::touch_updated(&project_dir);
     Ok(PackageOutcome {
         package,
         validation,

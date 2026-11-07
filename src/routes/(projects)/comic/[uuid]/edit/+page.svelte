@@ -176,7 +176,7 @@
   let convertPngLevel = $state(6);
   let convertForce = $state(false);
   let convertPreview = $state<ConvertPreview | null>(null);
-  let convertPreviewToken = 0;
+  let toolPreviewToken = 0;
   let convertConfirmOpen = $state(false);
   /** 右栏图片压缩：缩放 + 灰度 + 按源格式重编码；确认弹窗展示参数摘要。 */
   let compressScale = $state(100);
@@ -241,10 +241,10 @@
       convertPreview = null;
       return;
     }
-    const token = (convertPreviewToken += 1);
+    const token = (toolPreviewToken += 1);
     void (async () => {
       const result = await commands.previewComicImageConversion(uuid, target, force).result();
-      if (token !== convertPreviewToken) {
+      if (token !== toolPreviewToken) {
         return;
       }
       convertPreview = result.status === "ok" ? result.data : null;
@@ -259,8 +259,12 @@
       compressPreview = null;
       return;
     }
+    const token = (toolPreviewToken += 1);
     void (async () => {
       const result = await commands.previewComicImageCompression(uuid).result();
+      if (token !== toolPreviewToken) {
+        return;
+      }
       compressPreview = result.status === "ok" ? result.data : null;
     })();
   });
@@ -282,7 +286,7 @@
     const count = compressPreview == null ? `0 ${unit}` : `${compressPreview.total} ${unit}`;
     return [
       `${m.comic_edit_tool_scale()}  ${compressScale}%`,
-      `${m.comic_edit_tool_grayscale()}  ${compressGrayscale ? "ON" : "OFF"}`,
+      `${m.comic_edit_tool_grayscale()}  ${compressGrayscale ? m.comic_edit_tool_switch_on() : m.comic_edit_tool_switch_off()}`,
       `${m.comic_edit_tool_quality()}  ${compressQuality}`,
       `${m.comic_edit_tool_png_level()}  ${compressPngLevel}`,
       count,

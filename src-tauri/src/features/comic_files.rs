@@ -614,6 +614,7 @@ pub fn import_dir_in(project_dir: &Path, source: &Path) -> anyhow::Result<ComicI
     // 记账复制时跳过的文件数：解析大纲的“无效项”即此数与落盘扫描数之和。
     write_import_meta(&images, skipped)?;
     clear_downstream(project_dir);
+    super::projects::touch_updated(project_dir);
     status_in(project_dir)
 }
 
@@ -811,6 +812,7 @@ pub fn parse_images_in(project_dir: &Path) -> anyhow::Result<ComicOutline> {
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     // “无效项”口径：复制时跳过数（导入元信息）+ 落盘扫描时跳过数（手动增删）。
     let skipped = read_import_skipped(&images).saturating_add(ignored);
+    super::projects::touch_updated(project_dir);
     outline_of(project_dir, &content, skipped)
 }
 
@@ -1028,16 +1030,20 @@ pub fn update_volumes_in(
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     let live_ignored = scan_images_dir(&images).map_or(0, |(_, _, _, ignored)| ignored);
     let skipped = read_import_skipped(&images).saturating_add(live_ignored);
+    super::projects::touch_updated(project_dir);
     outline_of(project_dir, &content, skipped)
 }
 
-/// 全量更新分话结构（`AppHandle` 入口）。
+/// 全量更新分话结构（`AppHandle` 入口）：转换/压缩进行中拒绝，避免与批量替换互斥。
 #[allow(clippy::needless_pass_by_value)]
 pub fn update_volumes(
     app: &tauri::AppHandle,
     id: &str,
     volumes: Vec<ComicVolumeInput>,
 ) -> anyhow::Result<ComicOutline> {
+    if super::comic_images::is_busy(id) {
+        anyhow::bail!("image job in progress for project {id}, try again later");
+    }
     let dir = super::projects::resolve_project_dir(app, id)?;
     update_volumes_in(&dir, &volumes)
 }

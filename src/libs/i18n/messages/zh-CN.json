@@ -606,6 +606,8 @@
   "comic_edit_tool_scale_hint": "按当前尺寸等比缩放，重复执行会累积缩小",
   "comic_edit_tool_grayscale": "灰度转换",
   "comic_edit_tool_grayscale_hint": "已灰度图片在无需缩放时跳过重编码",
+  "comic_edit_tool_switch_on": "开",
+  "comic_edit_tool_switch_off": "关",
   "comic_edit_tool_format_note": "质量 / 压缩级别按源格式生效，其余忽略",
   "comic_edit_compress_confirm_title": "确认压缩图片？",
   "comic_edit_compress_confirm_description": "以下 {total} 张图片将原地重编码，原文件将被替换：",

@@ -221,7 +221,9 @@ pub fn reset_metadata_in(project_dir: &Path) -> anyhow::Result<ProjectMetadata> 
         std::fs::remove_file(&path)
             .with_context(|| format!("failed to delete {}", path.display()))?;
     }
-    load_or_init_metadata_in(project_dir)
+    let meta = load_or_init_metadata_in(project_dir)?;
+    super::projects::touch_updated(project_dir);
+    Ok(meta)
 }
 
 /// 保存元数据：服务端字段（标识 / 版本 / 小说语言 / 存量封面 / 更新时间）一律回填，
@@ -243,6 +245,7 @@ pub fn save_metadata_in(
     validate_metadata(&incoming, info.project_type)?;
     incoming.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     write_metadata(project_dir, &incoming)?;
+    super::projects::touch_updated(project_dir);
     Ok(incoming)
 }
 
@@ -312,6 +315,7 @@ pub fn import_cover_in(project_dir: &Path, source: &Path) -> anyhow::Result<Proj
     meta.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     validate_metadata(&meta, info.project_type)?;
     write_metadata(project_dir, &meta)?;
+    super::projects::touch_updated(project_dir);
     Ok(meta)
 }
 

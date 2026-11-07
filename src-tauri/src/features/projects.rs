@@ -186,6 +186,37 @@ pub fn rename_project(app: &tauri::AppHandle, id: &str, name: &str) -> anyhow::R
     let root = resolve_projects_root(app)?;
     rename_project_in(&root, id, name)
 }
+
+/// 刷新项目更新时间：内容落盘成功后调用，标记最后活跃。
+/// 纯辅助埋点，失败只记日志不影响主流程，调用方无需处理返回值。
+pub fn touch_updated(project_dir: &Path) {
+    let manifest = project_dir.join("project.json");
+    let mut info = match read_manifest(&manifest) {
+        Ok(info) => info,
+        Err(err) => {
+            log::warn!(
+                "跳过更新时间刷新（清单不可读） {}: {err:#}",
+                manifest.display()
+            );
+            return;
+        }
+    };
+    info.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let text = match serde_json::to_string_pretty(&info) {
+        Ok(text) => text,
+        Err(err) => {
+            log::warn!("跳过更新时间刷新（序列化失败）: {err:#}");
+            return;
+        }
+    };
+    if let Err(err) = std::fs::write(&manifest, text) {
+        log::warn!(
+            "跳过更新时间刷新（落盘失败） {}: {err:#}",
+            manifest.display()
+        );
+    }
+}
+
 /// 批量删除项目：id 必须为合法 `UUID`（兼作路径穿越守卫，`..` 与分隔符一律拒绝）；
 /// 不存在的目录跳过（删除幂等），返回实际删除数。
 pub fn delete_projects_in(root: &Path, ids: &[String]) -> anyhow::Result<u32> {
@@ -269,6 +300,29 @@ mod tests {
         let listed = list_projects_in(&root).expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "雾镇·改");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn touch_updated_bumps_timestamp_without_renaming() {
+        let root = test_root("touch");
+        let created = create_project_in(&root, "雾镇", ProjectType::Comic).expect("create");
+        // 先写死一个旧时间，保证断言不依赖秒级等待。
+        let dir = root.join(&created.id);
+        let manifest = dir.join("project.json");
+        let mut info = read_manifest(&manifest).expect("read");
+        info.updated_at = "2000-01-01T00:00:00Z".to_string();
+        let text = serde_json::to_string_pretty(&info).expect("serialize");
+        std::fs::write(&manifest, text).expect("write");
+        touch_updated(&dir);
+        let reread = read_manifest(&manifest).expect("reread");
+        assert_eq!(reread.id, created.id);
+        assert_eq!(reread.name, "雾镇");
+        assert_eq!(reread.created_at, created.created_at);
+        assert!(reread.updated_at.as_str() > "2000-01-01T00:00:00Z");
+        // 清单损坏时静默跳过，不抛错。
+        std::fs::write(&manifest, b"{broken").expect("corrupt");
+        touch_updated(&dir);
         let _ = std::fs::remove_dir_all(&root);
     }
 
