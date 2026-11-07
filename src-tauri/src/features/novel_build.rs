@@ -448,12 +448,7 @@ pub fn build_in(
         let lines = metadata
             .description
             .iter()
-            .map(|line| {
-                format!(
-                    "        <span class=\"desc-line\">{}</span>",
-                    xml_escape(line)
-                )
-            })
+            .map(|line| format!("        <p class=\"desc-line\">{}</p>", xml_escape(line)))
             .collect::<Vec<_>>()
             .join("\n");
         format!("      <div class=\"book-description\">\n{lines}\n      </div>")

@@ -1,5 +1,6 @@
 @namespace epub "http://www.idpf.org/2007/ops";
 
+/* 基础重置：清默认边距，正文居中、字号跟随阅读器设置。 */
 html,
 body {
   margin: 0;
@@ -11,6 +12,7 @@ body {
   font-size: 1rem;
 }
 
+/* 封面：图片顶格居中，老内核先按宽度自适应，支持的再按视口 contain。 */
 body.cover {
   margin: 0;
   padding: 0;
@@ -43,6 +45,7 @@ body.cover {
   text-align: center;
 }
 
+/* 扉页：整体居中窄块，书名/作者/简介纵向排布，块间固定 0.75rem。 */
 body.titlepage {
   margin: 0 auto;
 }
@@ -56,24 +59,49 @@ body.titlepage {
   margin-top: 0.75rem;
 }
 
+.titlepage-frame .book-title {
+  font-size: 2em;
+  page-break-after: avoid;
+}
+
+.titlepage-frame .book-author {
+  font-size: 1.25em;
+}
+
+/* 扉页简介：窄块左对齐，段落样式与正文看齐（缩进/段距/行高一致），走正文排版通道。 */
 .titlepage-frame .book-description {
   display: inline-block;
   text-align: left;
+  line-height: 1.75;
 }
 
 .book-description .desc-line {
-  display: block;
+  margin: 0.5em 0;
+  text-indent: 2em;
 }
 
+/* 卷页：整页居中标题，卷首语左对齐、首行缩进，与正文一致。 */
 body.volume-page {
   margin: 0 auto;
 }
 
-.volume {
+.volume-page .volume {
   margin: 15% auto 0;
   text-align: center;
 }
 
+.volume .volume-title {
+  font-size: 1.5em;
+  page-break-after: avoid;
+}
+
+.volume .volume-intro {
+  margin: 0.5em 0;
+  text-align: left;
+  text-indent: 2em;
+}
+
+/* 正文：1.75 倍行高，段落首行缩进两字、段间半行空，标题居中且不孤立分页。 */
 .chapter {
   line-height: 1.75;
 }
@@ -90,24 +118,4 @@ body.volume-page {
   font-size: 1.25em;
   text-align: center;
   page-break-after: avoid;
-}
-
-.book-title {
-  font-size: 2em;
-  page-break-after: avoid;
-}
-
-.book-author {
-  font-size: 1.25em;
-}
-
-.volume-title {
-  font-size: 1.5em;
-  page-break-after: avoid;
-}
-
-.volume-intro {
-  margin: 0.5em 0;
-  text-align: left;
-  text-indent: 2em;
 }
