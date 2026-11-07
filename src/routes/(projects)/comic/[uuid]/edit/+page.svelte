@@ -705,7 +705,9 @@
       }
       return;
     }
-    previewUrl = convertFileSrc(image.data.path);
+    // 同路径原地重编码（压缩）后 URL 字符串不变，WebView 会命中缓存：
+    // 拼版本戳强制重取，`asset` 协议忽略 query 只按路径取文件。
+    previewUrl = `${convertFileSrc(image.data.path)}?v=${image.data.size_bytes}-${Date.now()}`;
     previewSize = image.data.size_bytes;
   }
 
