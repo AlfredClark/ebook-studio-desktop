@@ -4,6 +4,9 @@ use crate::cores::types::CommandResult;
 use crate::features::comic_files::{
     self, ComicImageInfo, ComicImagesStatus, ComicOutline, ComicVolumeInput,
 };
+use crate::features::comic_images::{
+    self, ComicConvertStatus, ConvertOptions, ConvertPreview, ImageTargetFormat,
+};
 
 /// 查询漫画原稿状态；缺目录回落空态，不建文件。
 #[tauri::command]
@@ -69,4 +72,39 @@ pub fn update_comic_volumes(
     volumes: Vec<ComicVolumeInput>,
 ) -> CommandResult<ComicOutline> {
     Ok(comic_files::update_volumes(&app, &id, volumes)?)
+}
+
+/// 预览图片格式转换：按源格式分组计数，供确认弹窗逐行展示（图片二进制不出 IPC）。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_comic_image_conversion(
+    app: tauri::AppHandle,
+    id: String,
+    target: ImageTargetFormat,
+    force: bool,
+) -> CommandResult<ConvertPreview> {
+    Ok(comic_images::preview_conversion(&app, &id, target, force)?)
+}
+
+/// 查询图片转换进度：切回页面时回填用；从未开始返回空闲零值。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_comic_convert_status(id: String) -> CommandResult<ComicConvertStatus> {
+    Ok(comic_images::convert_status_of(&id))
+}
+
+/// 转换全量图片格式：事务性两阶段（暂存区编码→批量替换），成功后更新 `content.json`
+/// 并清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度，前端据此渲染进度。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn convert_comic_images(
+    app: tauri::AppHandle,
+    id: String,
+    target: ImageTargetFormat,
+    options: ConvertOptions,
+) -> CommandResult<ComicOutline> {
+    Ok(comic_images::convert_images(&app, &id, target, &options).await?)
 }

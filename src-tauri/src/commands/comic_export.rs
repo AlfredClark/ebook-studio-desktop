@@ -1,7 +1,9 @@
 //! 漫画导出命令：状态探针、改名落盘与原图文件夹 / 压缩包导出的薄封装，具体逻辑在 `features::comic_export`。
 
 use crate::cores::types::CommandResult;
-use crate::features::comic_export::{self, ComicExportItems, ComicExportStatus, ComicImagesMode};
+use crate::features::comic_export::{
+    self, ComicExportItems, ComicExportState, ComicExportStatus, ComicImagesMode,
+};
 use crate::features::novel_export::{BuildTitleOptions, ExportNaming, ExportOutcome};
 
 /// 查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。
@@ -13,6 +15,14 @@ pub fn get_comic_export_status(
     id: String,
 ) -> CommandResult<ComicExportStatus> {
     Ok(comic_export::export_status(&app, &id)?)
+}
+
+/// 查询导出作业状态：切回页面时回填进度；从未开始返回空闲零值。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_comic_export_progress(id: String) -> CommandResult<ComicExportState> {
+    Ok(comic_export::export_progress_status(&id))
 }
 
 /// 导出漫画：改名拷贝 EPUB / 封面、原图按话建目录拷贝或打成压缩包，落到自选目录的 `<命名>/` 下；

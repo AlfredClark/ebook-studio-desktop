@@ -31,6 +31,12 @@
     TxtTitleKind,
   } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
+  import {
+    ensureExportListener,
+    exportJobOf,
+    refreshExportStatus,
+    setExportRunning,
+  } from "#libs/hooks/export-progress.svelte";
   import { toast } from "#libs/utils/toast";
   import {
     COMIC_PAGE_TITLE_KINDS,
@@ -44,6 +50,16 @@
 
   const uuid = $derived(page.params.uuid ?? "");
 
+  /** 跨页面导出作业：切页不丢进度，以 Rust 侧注册表为准回填。 */
+  const exportJob = $derived(exportJobOf(uuid));
+  const exporting = $derived(exportJob.running);
+  /** 导出进度：确定性百分比；`null` 表无可显示进度。 */
+  const progress = $derived(
+    !exportJob.running || exportJob.total_files === 0
+      ? null
+      : Math.round((exportJob.done_files / exportJob.total_files) * 100),
+  );
+
   let status = $state<ComicExportStatus | null>(null);
   let loading = $state(true);
   let loadFailed = $state(false);
@@ -53,10 +69,7 @@
   let checkCover = $state(false);
   let naming = $state<ExportNaming>("project");
   let customName = $state("");
-  let exporting = $state(false);
   let outcome = $state<ExportOutcome | null>(null);
-  /** 导出进度：确定性百分比；`null` 表无可显示进度。 */
-  let progress = $state<number | null>(null);
   /** 打开导出目录进行中：按钮禁用态。 */
   let openingDir = $state(false);
   /** 话页标题格式与自定义模板：与构建页同一套逻辑。 */
@@ -257,12 +270,9 @@
     }
   }
 
-  /** 导出进度事件名（见 Rust 侧 `features::comic_export::EXPORT_PROGRESS_EVENT`）。 */
-  const PROGRESS_EVENT = "comic-export-progress";
-
-  /** 导出：目录框选定后直接落盘，取消静默返回；落盘进度经事件推送。 */
+  /** 导出：目录框选定后直接落盘，取消静默返回；进度经全局监听推送，切页不丢。 */
   async function runExport(): Promise<void> {
-    if (!ready || status == null) {
+    if (!ready || status == null || exportJob.running) {
       return;
     }
     let picked: string | string[] | null;
@@ -279,25 +289,7 @@
     if (dest == null) {
       return;
     }
-    exporting = true;
-    progress = null;
-    // 进度订阅：非 Tauri 环境（纯浏览器预览）无事件可订，按钮文案即反馈。
-    let unlisten: (() => void) | null = null;
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{ id: string; done_files: number; total_files: number }>(
-        PROGRESS_EVENT,
-        (event) => {
-          if (event.payload.id !== uuid) {
-            return;
-          }
-          const total = event.payload.total_files;
-          progress = total === 0 ? 0 : Math.round((event.payload.done_files / total) * 100);
-        },
-      );
-    } catch {
-      progress = null;
-    }
+    setExportRunning(uuid, true);
     const result = await commands
       .exportComicContent(
         uuid,
@@ -319,9 +311,7 @@
         imagesMode,
       )
       .result();
-    exporting = false;
-    progress = null;
-    unlisten?.();
+    setExportRunning(uuid, false);
     if (result.status === "error") {
       toast.error(m.export_failed());
       return;
@@ -344,6 +334,11 @@
   }
 
   onMount(() => {
+    ensureExportListener("comic-export-progress");
+    void refreshExportStatus(uuid, async () => {
+      const status = await commands.getComicExportProgress(uuid).result();
+      return status.status === "ok" ? status.data : null;
+    });
     void loadStatus();
   });
 </script>

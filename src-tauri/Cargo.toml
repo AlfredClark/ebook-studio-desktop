@@ -55,6 +55,12 @@ zip = "9"
 # 打包校验：纯 Rust 的 epubcheck 平替（`features/novel_package.rs`，报告沿用 `RSC-*` / `OPF-*` 标准 ID）；
 # AGPL-3.0-only，本仓已整体转 AGPL-3.0-only 后引入，升级需人工评审 API 变更
 epubveri = "0.37"
+# 漫画图片格式转换（`features/comic_images.rs`）：`image` 纯 Rust 解码 JPEG/PNG/WebP
+# 并编码 JPEG/PNG（WebP 仅无损），零外部进程；仅开所需三个格式特性，避免全特性拖慢编译
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# WebP 有损编码：`image` 不支持，用 libwebp 官方绑定补有损 + 质量；
+# C 源码随 cargo 一起编译（无需系统预装），BSD-3-Clause 与 AGPL-3.0-only 兼容
+webp = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"

@@ -21,6 +21,8 @@ export interface ComicDropOrder {
 export interface SortableCallbacks {
   onDragStart: (item: HTMLElement) => void;
   onDropEnd: (event: SortableEvent) => void;
+  /** 禁用拖拽（转换进行中等锁定态）：悬停不搬移，松手即收尾。 */
+  disabled: boolean;
 }
 
 /** 共享配置：fallback 阈值 6px（点击照常），150ms 位移动画，自带边缘滚动。 */
@@ -44,6 +46,7 @@ function baseOptions(
     fallbackClass: "comic-sortable-fallback",
     dataIdAttr: "data-id",
     ...extra,
+    disabled: get().disabled,
     onStart: (event) => get().onDragStart(event.item as HTMLElement),
     onEnd: (event) => get().onDropEnd(event),
   };
@@ -63,6 +66,7 @@ export function pageList(node: HTMLElement, params: SortableCallbacks) {
   return {
     update: (next: SortableCallbacks) => {
       current = next;
+      sortable.option("disabled", next.disabled);
     },
     destroy: () => {
       sortable.destroy();
@@ -85,6 +89,7 @@ export function volumeList(node: HTMLElement, params: SortableCallbacks) {
   return {
     update: (next: SortableCallbacks) => {
       current = next;
+      sortable.option("disabled", next.disabled);
     },
     destroy: () => {
       sortable.destroy();

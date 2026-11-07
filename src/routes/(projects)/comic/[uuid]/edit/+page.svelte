@@ -12,6 +12,12 @@
   import ConfirmDialog from "#components/common/confirm-dialog.svelte";
   import commands from "#libs/commands";
   import type { ComicOutline } from "#libs/commands/types";
+  import {
+    convertJobOf,
+    ensureConvertListener,
+    refreshConvertStatus,
+    setConvertRunning,
+  } from "#libs/hooks/comic-convert.svelte";
   import { m } from "#libs/i18n/paraglide/messages";
   import { toast } from "#libs/utils/toast";
   import ComicStepGuide from "../../_components/comic-step-guide.svelte";
@@ -39,6 +45,7 @@
   } from "./_components/comic-navigate";
   import ComicToolPanel, { type ComicTool } from "./_components/comic-tool-panel.svelte";
   import type { ComicDropOrder } from "./_components/comic-sortable";
+  import type { ConvertPreview, ImageTargetFormat } from "#libs/commands/types";
   import { formatBytes, pageFileName } from "../files/_components/comic-files";
 
   const uuid = $derived(page.params.uuid ?? "");
@@ -143,8 +150,11 @@
     void loadPreview(path);
   }
 
-  /** 拖拽/键盘提交移动：只改本地工作话，选中按 path 跟随。 */
+  /** 拖拽/键盘提交移动：只改本地工作话，选中按 path 跟随；转换中锁定。 */
   function handleMove(from: PageRef, to: DropTarget): void {
+    if (convertLocked) {
+      return;
+    }
     working = movePage(working, from, to);
   }
 
@@ -153,18 +163,145 @@
     working = applyDomOrder(working, order.volumeIds, order.pages);
   }
 
-  /** 右栏工具：当前所选工具；执行与重置为占位回调，后续接入具体实现。 */
+  /** 右栏格式转换：参数与执行态；确认弹窗按预览分组逐行展示。 */
+  let convertTarget: ImageTargetFormat = $state("jpeg");
+  let convertQuality = $state(85);
+  let convertWebpLossless = $state(false);
+  let convertPngLevel = $state(6);
+  let convertForce = $state(false);
+  let convertPreview = $state<ConvertPreview | null>(null);
+  let convertPreviewToken = 0;
+  let convertConfirmOpen = $state(false);
+  /** 跨页面转换作业：切页不丢进度，以 Rust 侧注册表为准回填。 */
+  const convertJob = $derived(convertJobOf(uuid));
+  const convertProgress = $derived(
+    convertJob.total === 0 ? null : Math.round((convertJob.done / convertJob.total) * 100),
+  );
+  /** 转换中锁定编辑：除预览翻页外，禁止一切改 content.json 的操作。 */
+  const convertLocked = $derived(convertJob.running);
+
+  /** 右栏工具：当前所选工具。 */
   let tool: ComicTool = $state("convert");
-  function handleToolRun(): void {
-    // 占位：后续接入格式转换 / 图片压缩执行逻辑。
-  }
-  function handleToolReset(): void {
-    // 占位：后续接入参数重置逻辑。
+
+  /** 格式转换参数是否偏离默认值：重置按钮门禁。 */
+  const convertModified = $derived(
+    convertTarget !== "jpeg" ||
+      convertQuality !== 85 ||
+      convertWebpLossless !== false ||
+      convertPngLevel !== 6 ||
+      convertForce !== false,
+  );
+
+  /** 开始按钮门禁：脏态、保存中、运行中、无可转页时禁用。 */
+  const convertRunnable = $derived(
+    tool === "convert" &&
+      outline != null &&
+      !dirty &&
+      !saving &&
+      !convertJob.running &&
+      (convertPreview?.total ?? 0) > 0,
+  );
+
+  /** 转换预览跟随：工具 / 目标格式 / 强制开关 / 大纲变化时刷新分组。 */
+  $effect(() => {
+    const currentTool = tool;
+    const target = convertTarget;
+    const force = convertForce;
+    const hasOutline = outline != null;
+    if (currentTool !== "convert" || !hasOutline) {
+      convertPreview = null;
+      return;
+    }
+    const token = (convertPreviewToken += 1);
+    void (async () => {
+      const result = await commands.previewComicImageConversion(uuid, target, force).result();
+      if (token !== convertPreviewToken) {
+        return;
+      }
+      convertPreview = result.status === "ok" ? result.data : null;
+    })();
+  });
+
+  /** 确认弹窗行：源格式按列对齐，`→` 后统一为目标格式大写。 */
+  function convertConfirmLines(preview: ConvertPreview, targetLabel: string): string[] {
+    const fromWidth = Math.max(...preview.items.map((item) => item.from.length));
+    const digitWidth = Math.max(...preview.items.map((item) => String(item.count).length));
+    const unit = m.comic_edit_convert_count_unit();
+    return preview.items.map((item) => {
+      const count = `${String(item.count).padStart(digitWidth)} ${unit}`;
+      return `${item.from.toUpperCase().padEnd(fromWidth)}  ${count}  →  ${targetLabel}`;
+    });
   }
 
-  /** 键盘话重排：选中页所在话整体上移 / 下移一位。 */
+  /** 工具执行：刷新预览后弹确认框（无可转页直接提示）。 */
+  async function handleToolRun(): Promise<void> {
+    if (tool !== "convert" || convertJob.running) {
+      return;
+    }
+    const preview = await commands
+      .previewComicImageConversion(uuid, convertTarget, convertForce)
+      .result();
+    if (preview.status === "error") {
+      toast.error(m.comic_edit_convert_failed());
+      return;
+    }
+    convertPreview = preview.data;
+    if (convertPreview.total === 0) {
+      toast.info(m.comic_edit_convert_nothing());
+      return;
+    }
+    convertConfirmOpen = true;
+  }
+
+  /** 工具重置：格式转换参数回到默认值。 */
+  function handleToolReset(): void {
+    convertTarget = "jpeg";
+    convertQuality = 85;
+    convertWebpLossless = false;
+    convertPngLevel = 6;
+    convertForce = false;
+  }
+
+  /** 确认转换：全局进度监听在 hook 侧常驻，成功后按原全局序号跟随选中。 */
+  async function handleToolConfirm(): Promise<void> {
+    if (convertJob.running) {
+      return;
+    }
+    setConvertRunning(uuid, true);
+    const result = await commands
+      .convertComicImages(uuid, convertTarget, {
+        quality: convertQuality,
+        webp_lossless: convertWebpLossless,
+        png_level: convertPngLevel,
+        force: convertForce,
+      })
+      .result();
+    setConvertRunning(uuid, false);
+    if (result.status === "error") {
+      toast.error(m.comic_edit_convert_failed());
+      return;
+    }
+    const prevIndex = location?.index ?? 1;
+    outline = result.data;
+    working = toWorking(result.data.volumes);
+    saved = toWorking(result.data.volumes);
+    const flat = flattenPages(working);
+    selectedPath = flat[Math.min(prevIndex - 1, flat.length - 1)] ?? null;
+    if (selectedPath != null) {
+      void loadPreview(selectedPath);
+    } else {
+      previewUrl = null;
+      previewSize = null;
+      previewDims = null;
+      previewLoading = false;
+      previewFailed = false;
+    }
+    toast.success(m.comic_edit_convert_success());
+  }
+
+  /** 键盘话重排：选中页所在话整体上移 / 下移一位；转换中锁定。 */
   function keyboardMoveVolume(delta: 1 | -1): void {
-    if (selectedPath == null) {
+    if (convertLocked || selectedPath == null) {
       return;
     }
     const ref = findPage(working, selectedPath);
@@ -183,6 +320,9 @@
 
   /** 改名提交：标题已由树组件校验，直接落本地工作话。 */
   function handleRename(volume: number, title: string): void {
+    if (convertLocked) {
+      return;
+    }
     if (working[volume] == null) {
       return;
     }
@@ -197,11 +337,17 @@
   );
 
   function handleDeleteRequest(volume: number): void {
+    if (convertLocked) {
+      return;
+    }
     pendingDelete = volume;
     deleteConfirmOpen = true;
   }
 
   function handleDeleteConfirm(): void {
+    if (convertLocked) {
+      return;
+    }
     const target = pendingDelete == null ? null : working[pendingDelete];
     pendingDelete = null;
     if (target == null || target.pages.length > 0) {
@@ -230,6 +376,9 @@
   }
 
   function handleCreateVolume(): void {
+    if (convertLocked) {
+      return;
+    }
     const error = titleErrorOf(newTitle);
     if (error === "empty") {
       toast.error(m.comic_edit_episode_title_empty());
@@ -250,6 +399,9 @@
 
   /** 保存：全量分话结构覆写落盘，成功后快照同步、失败保留本地可再保存。 */
   async function handleSave(): Promise<void> {
+    if (convertLocked) {
+      return;
+    }
     if (!dirty || saving) {
       return;
     }
@@ -273,6 +425,9 @@
 
   /** 删除页记录：只从工作话移除顺序记录，sources/images 中的图片文件保留； 未保存前可在左栏放弃更改找回。 */
   function handleDeletePage(): void {
+    if (convertLocked) {
+      return;
+    }
     if (selectedPath == null) {
       return;
     }
@@ -322,9 +477,9 @@
     }
   }
 
-  /** 键盘重排：在话内换位，到边界自动跨入相邻话首 / 末。 */
+  /** 键盘重排：在话内换位，到边界自动跨入相邻话首 / 末；转换中锁定。 */
   function keyboardMove(delta: 1 | -1): void {
-    if (selectedPath == null) {
+    if (convertLocked || selectedPath == null) {
       return;
     }
     const ref = findPage(working, selectedPath);
@@ -450,6 +605,8 @@
 
   onMount(() => {
     void loadOutline();
+    ensureConvertListener();
+    void refreshConvertStatus(uuid);
   });
 </script>
 
@@ -501,6 +658,7 @@
               {selectedPath}
               sizes={pageSizes}
               locateRequest={locateNonce}
+              locked={convertLocked}
               onSelect={handleSelect}
               onDropOrder={handleDropOrder}
               onRename={handleRename}
@@ -512,6 +670,7 @@
               <input
                 bind:this={newVolumeInput}
                 bind:value={newTitle}
+                disabled={convertLocked}
                 aria-label={m.comic_edit_episode_new()}
                 placeholder={m.comic_edit_episode_name_placeholder()}
                 onkeydown={(event) => {
@@ -527,7 +686,12 @@
                 class="w-full rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:border-ring"
               />
               <div class="flex gap-2">
-                <Button class="flex-1" size="sm" disabled={saving} onclick={handleCreateVolume}>
+                <Button
+                  class="flex-1"
+                  size="sm"
+                  disabled={saving || convertLocked}
+                  onclick={handleCreateVolume}
+                >
                   {m.comic_edit_episode_create()}
                 </Button>
                 <Button
@@ -546,7 +710,7 @@
               <Button
                 variant="outline"
                 class="w-full"
-                disabled={saving}
+                disabled={saving || convertLocked}
                 onclick={() => {
                   creatingVolume = true;
                   newTitle = "";
@@ -558,13 +722,17 @@
           </div>
           {#if dirty}
             <div class="flex shrink-0 flex-col gap-2 border-t border-border p-3">
-              <Button class="w-full" disabled={saving} onclick={() => void handleSave()}>
+              <Button
+                class="w-full"
+                disabled={saving || convertLocked}
+                onclick={() => void handleSave()}
+              >
                 {saving ? m.comic_edit_saving() : m.comic_edit_save()}
               </Button>
               <Button
                 variant="outline"
                 class="w-full"
-                disabled={saving}
+                disabled={saving || convertLocked}
                 onclick={() => (confirmOpen = true)}
               >
                 {m.comic_edit_discard()}
@@ -602,7 +770,7 @@
               size="icon"
               aria-label={m.comic_edit_delete_page()}
               title={m.comic_edit_delete_page_hint()}
-              disabled={saving || location == null}
+              disabled={saving || location == null || convertLocked}
               onclick={handleDeletePage}
             >
               <TrashIcon class="size-4" />
@@ -673,10 +841,16 @@
           <div class="min-h-0 flex-1">
             <ComicToolPanel
               bind:tool
-              running={false}
-              canRun={false}
-              hasOutcome={false}
-              onRun={handleToolRun}
+              bind:target={convertTarget}
+              bind:quality={convertQuality}
+              bind:webpLossless={convertWebpLossless}
+              bind:pngLevel={convertPngLevel}
+              bind:forceConvert={convertForce}
+              running={convertJob.running}
+              canRun={convertRunnable}
+              hasOutcome={convertModified}
+              progress={convertProgress}
+              onRun={() => void handleToolRun()}
               onClear={handleToolReset}
             />
           </div>
@@ -702,4 +876,17 @@
   cancelLabel={m.projects_create_cancel()}
   confirmLabel={m.comic_edit_episode_delete_ok()}
   onConfirm={handleDeleteConfirm}
+/>
+<ConfirmDialog
+  bind:open={convertConfirmOpen}
+  title={m.comic_edit_convert_confirm_title()}
+  description={m.comic_edit_convert_confirm_description({
+    target: convertTarget.toUpperCase(),
+  })}
+  details={convertPreview == null
+    ? []
+    : convertConfirmLines(convertPreview, convertTarget.toUpperCase())}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_edit_tool_run()}
+  onConfirm={() => void handleToolConfirm()}
 />

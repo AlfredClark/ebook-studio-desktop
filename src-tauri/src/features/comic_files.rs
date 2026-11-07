@@ -11,15 +11,15 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 /// 原文落盘目录：与封面共用 `<uuid>/sources/`。
-const SOURCES_DIR: &str = "sources";
+pub const SOURCES_DIR: &str = "sources";
 /// 漫画图片落盘子目录：导入目录整体复制到此处。
-const IMAGES_DIR: &str = "images";
+pub const IMAGES_DIR: &str = "images";
 /// 解析产物文件名：落盘项目根目录，与 `metadata.json` 同级。
-const CONTENT_NAME: &str = "content.json";
-/// 下游构建目录：与 `features::novel_build::BUILD_DIR` 同值，重选原稿时连带清空。
-const BUILD_DIR: &str = "build";
-/// 下游打包目录：与 `features::novel_package::DIST_DIR` 同值，重选原稿时连带清空。
-const DIST_DIR: &str = "dist";
+pub const CONTENT_NAME: &str = "content.json";
+/// 下游构建目录：与 `features::novel_build::BUILD_DIR` 同值，格式转换时连带清空。
+pub const BUILD_DIR: &str = "build";
+/// 下游打包目录：与 `features::novel_package::DIST_DIR` 同值，格式转换时连带清空。
+pub const DIST_DIR: &str = "dist";
 /// `content.json` 的结构版本：初始开发阶段固定 `1`，不做跨版本迁移。
 const CONTENT_SCHEMA_VERSION: u32 = 1;
 /// 混合形态下顶层散图的收纳目录名：固定排首，展示标题为“额外”。
@@ -618,7 +618,7 @@ pub fn import_dir_in(project_dir: &Path, source: &Path) -> anyhow::Result<ComicI
 }
 
 /// 拼接 `images/` 下的相对路径：仅允许 `Normal` 成分，防路径穿越。
-fn join_images_path(images: &Path, rel: &str) -> anyhow::Result<PathBuf> {
+pub fn join_images_path(images: &Path, rel: &str) -> anyhow::Result<PathBuf> {
     if rel.is_empty() {
         anyhow::bail!("image path must not be empty");
     }
@@ -663,12 +663,15 @@ pub fn images_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicIm
     status_in(&dir)
 }
 
-/// 导入漫画目录（`AppHandle` 入口）。
+/// 导入漫画目录（`AppHandle` 入口）：转换进行中拒绝，避免与批量替换互斥。
 pub fn import_images(
     app: &tauri::AppHandle,
     id: &str,
     source_path: &str,
 ) -> anyhow::Result<ComicImagesStatus> {
+    if super::comic_images::is_converting(id) {
+        anyhow::bail!("image conversion in progress for project {id}, try again later");
+    }
     let dir = super::projects::resolve_project_dir(app, id)?;
     import_dir_in(&dir, Path::new(source_path))
 }
@@ -875,8 +878,11 @@ pub fn outline_in(project_dir: &Path) -> anyhow::Result<Option<ComicOutline>> {
     Ok(Some(outline_of(project_dir, &content, 0)?))
 }
 
-/// 解析图片顺序（`AppHandle` 入口）。
+/// 解析图片顺序（`AppHandle` 入口）：转换进行中拒绝，避免与批量替换互斥。
 pub fn parse_images(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
+    if super::comic_images::is_converting(id) {
+        anyhow::bail!("image conversion in progress for project {id}, try again later");
+    }
     let dir = super::projects::resolve_project_dir(app, id)?;
     parse_images_in(&dir)
 }

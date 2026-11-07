@@ -23,6 +23,12 @@
   import commands from "#libs/commands";
   import type { PackageInfo, ValidationOutcome } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
+  import {
+    ensurePackagingListener,
+    packagingJobOf,
+    refreshPackagingStatus,
+    setPackagingRunning,
+  } from "#libs/hooks/package-progress.svelte";
   import { toast } from "#libs/utils/toast";
   import {
     countValidation,
@@ -34,8 +40,26 @@
 
   const uuid = $derived(page.params.uuid ?? "");
 
-  /** 打包进度事件名（见 Rust 侧 `features::comic_package::PACKAGE_PROGRESS_EVENT`）。 */
-  const PROGRESS_EVENT = "comic-package-progress";
+  /** 打包作业：跨页面共享，切页不丢进度；以 Rust 侧注册表为准回填。 */
+  const packagingJob = $derived(packagingJobOf(uuid));
+  const packaging = $derived(packagingJob.running);
+  /** 打包进度：`zip` 确定性百分比 / `validate` 不确定态；`null` 表无可显示进度。 */
+  const progress = $derived.by(() => {
+    if (!packagingJob.running) {
+      return null;
+    }
+    if (packagingJob.stage === "validate") {
+      return { stage: "validate" as const, percent: 100 };
+    }
+    if (packagingJob.stage == null) {
+      return null;
+    }
+    const total = packagingJob.total_files;
+    return {
+      stage: "zip" as const,
+      percent: total === 0 ? 0 : Math.round((packagingJob.done_files / total) * 100),
+    };
+  });
 
   let pkg = $state<PackageInfo | null>(null);
   let hasBuild = $state(false);
@@ -43,9 +67,6 @@
   let hasContent = $state(true);
   let loading = $state(true);
   let statusFailed = $state(false);
-  let packaging = $state(false);
-  /** 打包进度：`zip` 确定性百分比 / `validate` 不确定态；`null` 表无可显示进度。 */
-  let progress = $state<{ stage: "zip" | "validate"; percent: number } | null>(null);
   let validation = $state<ValidationOutcome | null>(null);
   let validating = $state(false);
   let validateFailed = $state(false);
@@ -91,6 +112,14 @@
       return;
     }
     loading = false;
+    // 运行中切回：进度条即解释，跳过自动校验（落盘产物不完整，校验必误报）。
+    await refreshPackagingStatus(uuid, async () => {
+      const status = await commands.getComicPackageProgress(uuid).result();
+      return status.status === "ok" ? status.data : null;
+    });
+    if (packagingJob.running) {
+      return;
+    }
     // 会话缓存命中直接展示，仅未命中才走后端校验。
     const cached = readCachedValidation(uuid, pkg);
     if (cached != null) {
@@ -101,43 +130,14 @@
     await runValidate();
   }
 
-  /** 打包：进度经事件推送，落盘后后端已附带一次校验，直接落态展示。 */
+  /** 打包：进度由全局监听推送，落盘后后端已附带一次校验，直接落态展示。 */
   async function runPackage(): Promise<void> {
-    if (packaging) {
+    if (packagingJob.running) {
       return;
     }
-    packaging = true;
-    progress = null;
-    // 进度订阅：非 Tauri 环境（纯浏览器预览）无事件可订，按钮文案即反馈。
-    let unlisten: (() => void) | null = null;
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{
-        id: string;
-        stage: "zip" | "validate";
-        done_files: number;
-        total_files: number;
-      }>(PROGRESS_EVENT, (event) => {
-        if (event.payload.id !== uuid) {
-          return;
-        }
-        if (event.payload.stage === "zip") {
-          const total = event.payload.total_files;
-          progress = {
-            stage: "zip",
-            percent: total === 0 ? 0 : Math.round((event.payload.done_files / total) * 100),
-          };
-        } else {
-          progress = { stage: "validate", percent: 100 };
-        }
-      });
-    } catch {
-      progress = null;
-    }
+    setPackagingRunning(uuid, true);
     const result = await commands.packageComicContent(uuid).result();
-    packaging = false;
-    progress = null;
-    unlisten?.();
+    setPackagingRunning(uuid, false);
     if (result.status === "error") {
       toast.error(m.package_failed());
       return;
@@ -149,9 +149,9 @@
     toast.success(m.package_success());
   }
 
-  /** 手动校验：恒走后端（用户显式动作，不读缓存），成功后刷新缓存。 */
+  /** 手动校验：恒走后端（用户显式动作，不读缓存），成功后刷新缓存；打包中禁用。 */
   async function runValidate(): Promise<void> {
-    if (validating) {
+    if (validating || packagingJob.running) {
       return;
     }
     validating = true;
@@ -170,6 +170,7 @@
   }
 
   onMount(() => {
+    ensurePackagingListener("comic-package-progress");
     void loadStatus();
   });
 </script>
@@ -257,7 +258,12 @@
       >
         {packaging ? m.package_running() : m.package_repackage()}
       </Button>
-      <Button variant="outline" size="sm" disabled={validating} onclick={() => void runValidate()}>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={validating || packaging}
+        onclick={() => void runValidate()}
+      >
         {validating ? m.package_validating() : m.package_revalidate()}
       </Button>
       <div class="ml-auto">
@@ -277,7 +283,7 @@
     {:else if validateFailed}
       <div class="flex flex-col items-start gap-2">
         <p class="text-sm text-muted-foreground">{m.package_validate_failed()}</p>
-        <Button variant="outline" size="sm" onclick={() => void runValidate()}>
+        <Button variant="outline" size="sm" disabled={packaging} onclick={() => void runValidate()}>
           {m.files_retry()}
         </Button>
       </div>

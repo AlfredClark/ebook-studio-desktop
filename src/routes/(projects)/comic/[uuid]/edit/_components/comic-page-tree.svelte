@@ -29,6 +29,7 @@
     selectedPath = null,
     sizes = new Map<string, number>(),
     locateRequest = 0,
+    locked = false,
     onSelect,
     onDropOrder,
     onRename,
@@ -40,6 +41,8 @@
     sizes?: Map<string, number>;
     /** 定位请求序号：递增即展开并滚动到当前选中页。 */
     locateRequest?: number;
+    /** 锁定：转换进行中时禁用拖拽与改名 / 删话入口。 */
+    locked?: boolean;
     onSelect: (path: string) => void;
     /** 落点提交：Sortable onEnd 后按 DOM 顺序一次性提交。 */
     onDropOrder: (order: ComicDropOrder) => void;
@@ -333,8 +336,9 @@
             data-no-drag
             aria-label={m.comic_edit_episode_rename()}
             title={m.comic_edit_episode_rename()}
+            disabled={locked}
             onclick={() => startRename(volume)}
-            class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
           >
             <PencilIcon class="size-4" />
           </button>
@@ -344,8 +348,9 @@
               data-no-drag
               aria-label={m.comic_edit_episode_delete()}
               title={m.comic_edit_episode_delete()}
+              disabled={locked}
               onclick={() => onDeleteRequest(volume)}
-              class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+              class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-40"
             >
               <TrashIcon class="size-4" />
             </button>
@@ -367,7 +372,7 @@
         role="group"
         aria-label={title ?? m.comic_untitled_episode()}
         data-volume-list={volumes[volume]?.id}
-        use:pageList={{ onDragStart: handleDragStart, onDropEnd: handleDropEnd }}
+        use:pageList={{ onDragStart: handleDragStart, onDropEnd: handleDropEnd, disabled: locked }}
         class={cn(
           "flex flex-col gap-0.5 px-3 pb-1",
           hinted && "rounded-md bg-accent/60 ring-1 ring-primary/60 ring-inset",
@@ -396,7 +401,7 @@
   {#if grouped}
     <div
       class="flex w-full flex-col"
-      use:volumeList={{ onDragStart: handleDragStart, onDropEnd: handleDropEnd }}
+      use:volumeList={{ onDragStart: handleDragStart, onDropEnd: handleDropEnd, disabled: locked }}
     >
       {#each volumes as entry, i (entry.id)}
         {@render volumeSection(i, entry.title, entry.pages)}
@@ -407,7 +412,7 @@
       role="group"
       aria-label={volumes[0]?.title ?? m.comic_untitled_episode()}
       data-volume-list={volumes[0]?.id}
-      use:pageList={{ onDragStart: handleDragStart, onDropEnd: handleDropEnd }}
+      use:pageList={{ onDragStart: handleDragStart, onDropEnd: handleDropEnd, disabled: locked }}
       class="flex flex-col gap-0.5 px-3"
     >
       {#each volumes[0]?.pages ?? [] as path, index (path)}

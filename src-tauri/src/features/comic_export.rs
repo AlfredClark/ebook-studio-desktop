@@ -56,6 +56,69 @@ pub struct ComicExportProgress {
     pub total_files: u32,
 }
 
+/// 导出作业状态：供切回页面时回填进度；从未开始返回空闲零值。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ComicExportState {
+    pub running: bool,
+    pub done_files: u32,
+    pub total_files: u32,
+}
+
+/// 进行中的导出作业：uuid → (已写, 总数)。单进程内互斥与状态查询共用；
+/// 崩溃重启即清空（导出落盘在用户自选目录，无暂存区残留问题）。
+static EXPORTING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// 登记作业：同项目已有在跑导出时整单拒绝（目标目录按项目独占，不可并发）。
+fn register_export(id: &str) -> anyhow::Result<()> {
+    let mut jobs = EXPORTING
+        .lock()
+        .map_err(|_| anyhow::anyhow!("export registry poisoned"))?;
+    if jobs.contains_key(id) {
+        anyhow::bail!("export already in progress for project {id}");
+    }
+    jobs.insert(id.to_string(), (0, 0));
+    drop(jobs);
+    Ok(())
+}
+
+/// 更新作业进度：注册表缺失时静默跳过，只写不读，不影响主流程。
+fn update_export_progress(id: &str, done: u32, total: u32) {
+    if let Ok(mut jobs) = EXPORTING.lock()
+        && let Some(entry) = jobs.get_mut(id)
+    {
+        *entry = (done, total);
+    }
+}
+
+/// 注销作业：成功失败都走，锁中毒也尽力清理。
+fn finish_export(id: &str) {
+    if let Ok(mut jobs) = EXPORTING.lock() {
+        jobs.remove(id);
+    }
+}
+
+/// 查询导出作业状态（`AppHandle` 入口仅作透传；注册表是进程级，无需解析项目）。
+pub fn export_progress_status(id: &str) -> ComicExportState {
+    EXPORTING
+        .lock()
+        .ok()
+        .and_then(|jobs| jobs.get(id).copied())
+        .map_or_else(
+            || ComicExportState {
+                running: false,
+                done_files: 0,
+                total_files: 0,
+            },
+            |(done_files, total_files)| ComicExportState {
+                running: true,
+                done_files,
+                total_files,
+            },
+        )
+}
+
 /// 漫画导出状态：进页一次查全，前端据此渲染表单与禁用态。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ComicExportStatus {
@@ -429,14 +492,17 @@ pub async fn export_comic(
     use tauri::Emitter;
 
     let dir = super::projects::resolve_project_dir(app, id)?;
+    register_export(id)?;
     let dest = dest_dir.to_string();
     let name = custom_name.to_string();
     let items = items.clone();
     let titles = titles.clone();
     let handle = app.clone();
     let report_id = id.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
+    let progress_id = id.to_string();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let on_progress = move |done: u32, total: u32| {
+            update_export_progress(&progress_id, done, total);
             let _ = handle.emit(
                 EXPORT_PROGRESS_EVENT,
                 ComicExportProgress {
@@ -457,8 +523,9 @@ pub async fn export_comic(
             Some(&on_progress),
         )
     })
-    .await
-    .context("export task panicked")?
+    .await;
+    finish_export(id);
+    outcome.context("export task panicked")?
 }
 
 #[cfg(test)]
@@ -868,5 +935,39 @@ mod tests {
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"))
         }));
         cleanup(&root);
+    }
+
+    #[test]
+    fn export_registry_lifecycle() {
+        let id = "export-registry-lifecycle";
+        assert!(!is_registered_for_test(id));
+        register_export(id).expect("register");
+        assert!(is_registered_for_test(id));
+        update_export_progress(id, 3, 10);
+        let status = export_progress_status(id);
+        assert!(status.running);
+        assert_eq!((status.done_files, status.total_files), (3, 10));
+        finish_export(id);
+        assert!(!is_registered_for_test(id));
+        let idle = export_progress_status(id);
+        assert!(!idle.running);
+        assert_eq!((idle.done_files, idle.total_files), (0, 0));
+    }
+
+    #[test]
+    fn export_registry_rejects_reentrant_run() {
+        let id = "export-registry-reentrant";
+        register_export(id).expect("register");
+        assert!(register_export(id).is_err());
+        finish_export(id);
+        register_export(id).expect("register after finish");
+        finish_export(id);
+    }
+
+    /// 测试探针：注册表内部状态只读暴露（生产代码走 `export_progress_status`）。
+    fn is_registered_for_test(id: &str) -> bool {
+        super::EXPORTING
+            .lock()
+            .is_ok_and(|jobs| jobs.contains_key(id))
     }
 }

@@ -16,6 +16,7 @@
     open = $bindable(false),
     title,
     description,
+    details = null,
     cancelLabel,
     confirmLabel,
     variant = "default",
@@ -24,6 +25,8 @@
     open: boolean;
     title: string;
     description: string;
+    /** 可选等宽明细行（如逐行对齐的确认清单），无则不渲染。 */
+    details?: string[] | null;
     cancelLabel: string;
     confirmLabel: string;
     /** 确认按钮的语义变体；破坏性操作（重置 / 删除）必须传 `destructive`，否则会与例行确认长得一样 */
@@ -44,6 +47,12 @@
       <AlertDialogTitle>{title}</AlertDialogTitle>
       <AlertDialogDescription>{description}</AlertDialogDescription>
     </AlertDialogHeader>
+    {#if details != null && details.length > 0}
+      <pre
+        class="max-h-48 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre">{details.join(
+          "\n",
+        )}</pre>
+    {/if}
     <AlertDialogFooter>
       <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>
       <AlertDialogAction {variant} onclick={handleConfirm}>

@@ -38,6 +38,15 @@ export const commands = {
 	getComicImagePath: (id: string, path: string) => typedError<ComicImageInfo, CommandError>(__TAURI_INVOKE("get_comic_image_path", { id, path })),
 	/**  全量更新漫画分话结构：标题可改、话可增删排序，页须全量覆盖，落盘后返回新大纲。 */
 	updateComicVolumes: (id: string, volumes: ComicVolumeInput[]) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("update_comic_volumes", { id, volumes })),
+	/**  查询图片转换进度：切回页面时回填用；从未开始返回空闲零值。 */
+	getComicConvertStatus: (id: string) => typedError<ComicConvertStatus, CommandError>(__TAURI_INVOKE("get_comic_convert_status", { id })),
+	/**  预览图片格式转换：按源格式分组计数，供确认弹窗逐行展示（图片二进制不出 IPC）。 */
+	previewComicImageConversion: (id: string, target: ImageTargetFormat, force: boolean) => typedError<ConvertPreview, CommandError>(__TAURI_INVOKE("preview_comic_image_conversion", { id, target, force })),
+	/**
+	 *  转换全量图片格式：事务性两阶段（暂存区编码→批量替换），成功后更新 `content.json`
+	 *  并清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度，前端据此渲染进度。
+	 */
+	convertComicImages: (id: string, target: ImageTargetFormat, options: ConvertOptions) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("convert_comic_images", { id, target, options })),
 	/**  构建漫画：清空构建目录后全量重生成，返回文件树。 */
 	buildComicContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_comic_content", { id, titles })),
 	/**  预览标题格式：按话取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
@@ -78,10 +87,14 @@ export const commands = {
 	/**  打包时间（UTC `RFC3339`）。 */
 	updated_at: string,
 } | null, CommandError>(__TAURI_INVOKE("get_comic_package_status", { id })),
+	/**  查询打包作业状态：切回页面时回填进度；从未开始返回空闲零值。 */
+	getComicPackageProgress: (id: string) => typedError<PackagingStatus, CommandError>(__TAURI_INVOKE("get_comic_package_progress", { id })),
 	/**  校验已有产物：无包直接报错，前端引导先打包。 */
 	validateComicPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_comic_package", { id })),
 	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
 	getComicExportStatus: (id: string) => typedError<ComicExportStatus, CommandError>(__TAURI_INVOKE("get_comic_export_status", { id })),
+	/**  查询导出作业状态：切回页面时回填进度；从未开始返回空闲零值。 */
+	getComicExportProgress: (id: string) => typedError<ComicExportState, CommandError>(__TAURI_INVOKE("get_comic_export_progress", { id })),
 	/**
 	 *  导出漫画：改名拷贝 EPUB / 封面、原图按话建目录拷贝或打成压缩包，落到自选目录的 `<命名>/` 下；
 	 *  阻塞池执行并推送原图落盘进度，前端据此渲染进度条。
@@ -182,6 +195,8 @@ export const commands = {
 	/**  打包时间（UTC `RFC3339`）。 */
 	updated_at: string,
 } | null, CommandError>(__TAURI_INVOKE("get_novel_package_status", { id })),
+	/**  查询打包作业状态：切回页面时回填进度；从未开始返回空闲零值。 */
+	getNovelPackageProgress: (id: string) => typedError<PackagingStatus, CommandError>(__TAURI_INVOKE("get_novel_package_progress", { id })),
 	/**  校验已有产物：无包直接报错，前端引导先打包。 */
 	validateNovelPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_novel_package", { id })),
 	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
@@ -333,6 +348,13 @@ export type CleanupPreset =
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
 
+/**  转换状态探针：供切回页面时回填进度；从未开始返回空闲零值。 */
+export type ComicConvertStatus = {
+	running: boolean,
+	done_files: number,
+	total_files: number,
+};
+
 /**  漫画导出勾选：EPUB / 原图 / 封面。 */
 export type ComicExportItems = {
 	/**  EPUB 电子书。 */
@@ -341,6 +363,13 @@ export type ComicExportItems = {
 	images: boolean,
 	/**  封面图片。 */
 	cover: boolean,
+};
+
+/**  导出作业状态：供切回页面时回填进度；从未开始返回空闲零值。 */
+export type ComicExportState = {
+	running: boolean,
+	done_files: number,
+	total_files: number,
 };
 
 /**  漫画导出状态：进页一次查全，前端据此渲染表单与禁用态。 */
@@ -580,6 +609,31 @@ export type ContentSummary = {
 	char_count: number,
 };
 
+/**  转换参数：随目标格式生效其余忽略（前端按格式切换控件）。 */
+export type ConvertOptions = {
+	/**  JPEG/WebP 有损质量，1-100。 */
+	quality: number,
+	/**  WebP 无损开关（开则忽略质量）。 */
+	webp_lossless: boolean,
+	/**  PNG 压缩级别，0-9。 */
+	png_level: number,
+	/**  同格式也重编码（默认关 = 跳过，幂等）。 */
+	force: boolean,
+};
+
+/**  转换预览：落点确认弹窗按行展示。 */
+export type ConvertPreview = {
+	items: ConvertPreviewItem[],
+	total: number,
+};
+
+/**  预览行：某源格式的待转张数。 */
+export type ConvertPreviewItem = {
+	/**  小写源扩展名（`jpeg` 归一为 `jpg`）。 */
+	from: string,
+	count: number,
+};
+
 /**  导出勾选项：全假直接报错，至少选一项。 */
 export type ExportItems = {
 	/**  导出 EPUB。 */
@@ -644,6 +698,9 @@ export type FormatOutcome = {
 	/**  格式化失败的文件。 */
 	failed: string[],
 };
+
+/**  目标格式：与源格式集合（jpg/jpeg/png/webp）对齐，前端下拉直接用。 */
+export type ImageTargetFormat = "jpeg" | "png" | "webp";
 
 /**  问题种类：解析结果的警告项，只做展示，不阻塞解析。 */
 export type IssueKind = 
@@ -749,6 +806,21 @@ export type PackageOutcome = {
 	package: PackageInfo,
 	/**  自动校验结果。 */
 	validation: ValidationOutcome,
+};
+
+/**  打包阶段：`zip` 打包中（带确定性进度）/ `validate` 校验中（整块调用，无细分）。 */
+export type PackageStage = 
+/**  打包中。 */
+"zip" | 
+/**  校验中。 */
+"validate";
+
+/**  打包作业状态：供切回页面时回填进度；从未开始返回空闲零值。 */
+export type PackagingStatus = {
+	running: boolean,
+	stage: PackageStage | null,
+	done_files: number,
+	total_files: number,
 };
 
 /**  成对标点种类：只读扫描用的闭合检测模式；ASCII 与全角收进同一叶子，按"对"开关。 */

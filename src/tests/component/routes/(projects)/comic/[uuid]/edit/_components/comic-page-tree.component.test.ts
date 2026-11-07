@@ -10,17 +10,33 @@ import ComicPageTree from "../../../../../../../../routes/(projects)/comic/[uuid
 // 模拟手势，落点 DOM 顺序走真实 jsdom 读出（挪节点 + 调 onEnd）。
 vi.mock("sortablejs", () => {
   class FakeSortable {
-    static instances: { el: HTMLElement; options: SortableFullOptions }[] = [];
+    static instances: FakeSortable[] = [];
+    el: HTMLElement;
+    options: SortableFullOptions;
+    disabledValues: boolean[] = [];
     constructor(el: HTMLElement, options: SortableFullOptions) {
-      FakeSortable.instances.push({ el, options });
+      this.el = el;
+      this.options = options;
+      FakeSortable.instances.push(this);
+    }
+    option(name: string, value?: unknown): unknown {
+      if (name === "disabled" && typeof value === "boolean") {
+        this.disabledValues.push(value);
+      }
+      return undefined;
     }
     destroy(): void {}
   }
   return { default: FakeSortable };
 });
 
-type FakeSortable = { instances: { el: HTMLElement; options: SortableFullOptions }[] };
-const sortableInstances = () => (Sortable as unknown as FakeSortable).instances;
+type FakeSortable = {
+  el: HTMLElement;
+  options: SortableFullOptions;
+  disabledValues: boolean[];
+  instances?: never;
+};
+const sortableInstances = () => (Sortable as unknown as { instances: FakeSortable[] }).instances;
 
 // 页序树拖拽接线：落点提交按 DOM 顺序，折叠悬停展开，拖后点击屏蔽。
 const selectMock = vi.hoisted(() => vi.fn());
@@ -40,6 +56,7 @@ function renderTree(
   sizes: Map<string, number> = new Map(),
   selectedPath: string | null = null,
   locateRequest = 0,
+  locked = false,
 ) {
   return render(ComicPageTree, {
     props: {
@@ -47,6 +64,7 @@ function renderTree(
       selectedPath,
       sizes,
       locateRequest,
+      locked,
       onSelect: selectMock,
       onDropOrder: dropOrderMock,
       onRename: renameMock,
@@ -253,6 +271,31 @@ describe("页序树拖拽", () => {
     renderTree(volumes(), new Map(), "第1话/01.jpg", 1);
     await tick();
     expect(screen.getByRole("button", { name: /01\.jpg/ })).not.toBeNull();
+  });
+
+  it("锁定时禁用拖拽与改名删话入口", () => {
+    renderTree(
+      [
+        { id: "empty", title: "空话", pages: [] },
+        { id: "body", title: "正文", pages: ["b.jpg"] },
+      ],
+      new Map(),
+      null,
+      0,
+      true,
+    );
+    // Sortable 实例创建即禁用。
+    expect(sortableInstances().length).toBeGreaterThan(0);
+    expect(
+      sortableInstances().every(
+        (instance) => (instance.options as { disabled?: boolean }).disabled === true,
+      ),
+    ).toBe(true);
+    // 改名与删空话按钮禁用。
+    for (const button of screen.getAllByRole("button", { name: "Rename episode" })) {
+      expect(button).toHaveProperty("disabled", true);
+    }
+    expect(screen.getByRole("button", { name: "Delete episode" })).toHaveProperty("disabled", true);
   });
 
   it("行尾展示图片大小，缺失不展示", async () => {

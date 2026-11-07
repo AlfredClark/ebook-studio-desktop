@@ -81,6 +81,79 @@ pub enum PackageStage {
     Validate,
 }
 
+/// 打包作业状态：供切回页面时回填进度；从未开始返回空闲零值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct PackagingStatus {
+    pub running: bool,
+    pub stage: Option<PackageStage>,
+    pub done_files: u32,
+    pub total_files: u32,
+}
+
+/// 进行中的打包作业表：uuid → (阶段, 已写, 总数)。
+type PackagingJobs = std::collections::HashMap<String, (PackageStage, u32, u32)>;
+
+/// 进行中的打包作业：单进程内互斥与状态查询共用；
+/// 小说与漫画共用同一份注册表（同走 `package_with_progress`），崩溃重启即清空。
+static PACKAGING: std::sync::LazyLock<std::sync::Mutex<PackagingJobs>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(PackagingJobs::new()));
+
+/// 是否有打包在跑（校验 / 重复打包互斥用）。
+pub fn is_packaging(id: &str) -> bool {
+    PACKAGING.lock().is_ok_and(|jobs| jobs.contains_key(id))
+}
+
+/// 查询作业状态：未跑回空闲零值。
+pub fn packaging_status(id: &str) -> PackagingStatus {
+    PACKAGING
+        .lock()
+        .ok()
+        .and_then(|jobs| jobs.get(id).copied())
+        .map_or_else(
+            || PackagingStatus {
+                running: false,
+                stage: None,
+                done_files: 0,
+                total_files: 0,
+            },
+            |(stage, done_files, total_files)| PackagingStatus {
+                running: true,
+                stage: Some(stage),
+                done_files,
+                total_files,
+            },
+        )
+}
+
+/// 登记作业：同项目已有在跑任务时整单拒绝（`dist/` 按项目独占，不可并发）。
+fn register_packaging(id: &str) -> anyhow::Result<()> {
+    let mut jobs = PACKAGING
+        .lock()
+        .map_err(|_| anyhow::anyhow!("package registry poisoned"))?;
+    if jobs.contains_key(id) {
+        anyhow::bail!("packaging already in progress for project {id}");
+    }
+    jobs.insert(id.to_string(), (PackageStage::Zip, 0, 0));
+    drop(jobs);
+    Ok(())
+}
+
+/// 更新作业进度：注册表缺失时静默跳过，只写不读，不影响主流程。
+fn update_packaging(id: &str, stage: PackageStage, done: u32, total: u32) {
+    if let Ok(mut jobs) = PACKAGING.lock()
+        && let Some(entry) = jobs.get_mut(id)
+    {
+        *entry = (stage, done, total);
+    }
+}
+
+/// 注销作业：成功失败都走，锁中毒也尽力清理。
+fn finish_packaging(id: &str) {
+    if let Ok(mut jobs) = PACKAGING.lock() {
+        jobs.remove(id);
+    }
+}
+
 /// 打包进度载荷：`id` 供前端多窗口过滤。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct PackageProgress {
@@ -380,7 +453,19 @@ pub fn validate_in(project_dir: &Path) -> anyhow::Result<ValidationOutcome> {
 
 /// 打包通用核心：落盘后自动校验一次；CPU 密集段进阻塞池并按事件名推送进度。
 /// 小说与漫画共用，事件名由调用方传入（前端按类型订阅）。
+/// 同项目并发打包整单拒绝（`dist/` 按项目独占），进度同步写入注册表供查询。
 pub async fn package_with_progress(
+    app: &tauri::AppHandle,
+    id: &str,
+    progress_event: &str,
+) -> anyhow::Result<PackageOutcome> {
+    register_packaging(id)?;
+    let outcome = package_with_progress_inner(app, id, progress_event).await;
+    finish_packaging(id);
+    outcome
+}
+
+async fn package_with_progress_inner(
     app: &tauri::AppHandle,
     id: &str,
     progress_event: &str,
@@ -391,10 +476,12 @@ pub async fn package_with_progress(
     let write_dir = dir.clone();
     let handle = app.clone();
     let report_id = id.to_string();
+    let progress_id = id.to_string();
     let event_name = progress_event.to_string();
     let emit_name = progress_event.to_string();
     let package = tauri::async_runtime::spawn_blocking(move || {
         let on_progress = move |done: u32, total: u32| {
+            update_packaging(&progress_id, PackageStage::Zip, done, total);
             let _ = handle.emit(
                 event_name.as_str(),
                 PackageProgress {
@@ -409,6 +496,7 @@ pub async fn package_with_progress(
     })
     .await
     .context("package task panicked")??;
+    update_packaging(id, PackageStage::Validate, 0, 0);
     if let Err(error) = app.emit(
         emit_name.as_str(),
         PackageProgress {
@@ -459,11 +547,15 @@ pub fn clear_dist(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
     clear_dist_in(&dir)
 }
 
-/// 校验产物（`AppHandle` 入口）：无包直接报错；阻塞池执行，不占运行时。
+/// 校验产物（`AppHandle` 入口）：无包直接报错；打包进行中拒绝，避免读到半成品。
+/// 阻塞池执行，不占运行时。
 pub async fn validate_package(
     app: &tauri::AppHandle,
     id: &str,
 ) -> anyhow::Result<ValidationOutcome> {
+    if is_packaging(id) {
+        anyhow::bail!("packaging in progress for project {id}, try again later");
+    }
     let dir = super::projects::resolve_project_dir(app, id)?;
     tauri::async_runtime::spawn_blocking(move || validate_in(&dir))
         .await
@@ -669,5 +761,33 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 1);
         cleanup(&root);
+    }
+
+    #[test]
+    fn packaging_registry_lifecycle() {
+        let id = "packaging-registry-lifecycle";
+        assert!(!is_packaging(id));
+        let idle = packaging_status(id);
+        assert!(!idle.running);
+        assert_eq!((idle.done_files, idle.total_files), (0, 0));
+        register_packaging(id).expect("register");
+        assert!(is_packaging(id));
+        update_packaging(id, PackageStage::Zip, 3, 10);
+        let status = packaging_status(id);
+        assert!(status.running);
+        assert_eq!(status.stage, Some(PackageStage::Zip));
+        assert_eq!((status.done_files, status.total_files), (3, 10));
+        finish_packaging(id);
+        assert!(!is_packaging(id));
+    }
+
+    #[test]
+    fn packaging_registry_rejects_reentrant_run() {
+        let id = "packaging-registry-reentrant";
+        register_packaging(id).expect("register");
+        assert!(register_packaging(id).is_err());
+        finish_packaging(id);
+        register_packaging(id).expect("register after finish");
+        finish_packaging(id);
     }
 }
