@@ -6,8 +6,9 @@
 use rust_i18n::t;
 use tauri::{AppHandle, Manager};
 
-/// 托盘图标 id：动态显隐与文案重建经此查找，禁止多处各起一名
-const TRAY_ID: &str = "main-tray";
+/// 托盘图标 id：动态显隐与文案重建经此查找，禁止多处各起一名；
+/// 多应用同机共存时 D-Bus `StatusNotifier` 按此 `Id` 区分，必须每应用唯一。
+const TRAY_ID: &str = "ebook-studio-tray";
 /// 显示/隐藏菜单项 id
 const MENU_TOGGLE: &str = "tray-toggle";
 /// 退出菜单项 id
