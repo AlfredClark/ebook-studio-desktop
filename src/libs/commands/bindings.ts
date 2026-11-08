@@ -65,6 +65,10 @@ export const commands = {
 	restoreComicCompressBackup: (id: string) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("restore_comic_compress_backup", { id })),
 	/**  清除压缩备份：只删备份目录，当前图片不动；无备份返回假。 */
 	clearComicCompressBackup: (id: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("clear_comic_compress_backup", { id })),
+	/**  扫描孤儿图片：`content.json` 未引用的落盘图片，删页残留从这里清理。 */
+	scanComicOrphans: (id: string) => typedError<ComicOrphans, CommandError>(__TAURI_INVOKE("scan_comic_orphans", { id })),
+	/**  删除孤儿图片：只删扫描命中的无引用图片，返回刷新后的识别大纲。 */
+	deleteComicOrphans: (id: string) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("delete_comic_orphans", { id })),
 	/**  构建漫画：清空构建目录后全量重生成，返回文件树。 */
 	buildComicContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_comic_content", { id, titles })),
 	/**  预览标题格式：按话取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
@@ -471,6 +475,17 @@ export type ComicImagesStatus = {
 
 /**  漫画组织形态：平铺单话，或按子目录分话。 */
 export type ComicMode = "flat" | "volumes";
+
+/**
+ *  孤儿图片扫描结果：`content.json` 未引用、但落在 `sources/images/` 下的图片；
+ *  封面在 `sources/` 根目录天然排除，隐藏文件与导入元信息不计入。
+ */
+export type ComicOrphans = {
+	/**  孤儿相对路径（POSIX），自然排序。 */
+	paths: string[],
+	/**  孤儿总字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
+	total_bytes: number,
+};
 
 /**  解析大纲：右栏识别结果的只读展示，图片二进制不出 IPC，只出清单。 */
 export type ComicOutline = {

@@ -2,7 +2,7 @@
 
 use crate::cores::types::CommandResult;
 use crate::features::comic_files::{
-    self, ComicImageInfo, ComicImagesStatus, ComicOutline, ComicVolumeInput,
+    self, ComicImageInfo, ComicImagesStatus, ComicOrphans, ComicOutline, ComicVolumeInput,
 };
 use crate::features::comic_images::{
     self, ComicCompressStatus, ComicConvertStatus, CompressOptions, CompressOutcome,
@@ -172,4 +172,20 @@ pub fn restore_comic_compress_backup(
 #[allow(clippy::needless_pass_by_value)]
 pub fn clear_comic_compress_backup(app: tauri::AppHandle, id: String) -> CommandResult<bool> {
     Ok(comic_images::clear_backup(&app, &id)?)
+}
+
+/// 扫描孤儿图片：`content.json` 未引用的落盘图片，删页残留从这里清理。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn scan_comic_orphans(app: tauri::AppHandle, id: String) -> CommandResult<ComicOrphans> {
+    Ok(comic_files::scan_orphans(&app, &id)?)
+}
+
+/// 删除孤儿图片：只删扫描命中的无引用图片，返回刷新后的识别大纲。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn delete_comic_orphans(app: tauri::AppHandle, id: String) -> CommandResult<ComicOutline> {
+    Ok(comic_files::delete_orphans(&app, &id)?)
 }

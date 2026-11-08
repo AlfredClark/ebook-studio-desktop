@@ -679,6 +679,111 @@ pub fn import_images(
     import_dir_in(&dir, Path::new(source_path))
 }
 
+/// 孤儿图片扫描结果：`content.json` 未引用、但落在 `sources/images/` 下的图片；
+/// 封面在 `sources/` 根目录天然排除，隐藏文件与导入元信息不计入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ComicOrphans {
+    /// 孤儿相对路径（POSIX），自然排序。
+    pub paths: Vec<String>,
+    /// 孤儿总字节数（`u32` 以满足 specta 导出约束，上限内足够）。
+    pub total_bytes: u32,
+}
+
+/// 扫描孤儿图片：删页只删顺序记录，源文件永久残留，攒多了从这里一次性清理。
+pub fn scan_orphans_in(project_dir: &Path) -> anyhow::Result<ComicOrphans> {
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    if !images.is_dir() {
+        return Ok(ComicOrphans {
+            paths: Vec::new(),
+            total_bytes: 0,
+        });
+    }
+    let mut referenced = std::collections::HashSet::new();
+    // 无解析产物时没有“引用”基线：此时一切落盘图都可能是待解析的，直接回空，
+    // 避免刚导入（尚未解析）就提示清理。
+    let Ok(content) = read_content(project_dir) else {
+        return Ok(ComicOrphans {
+            paths: Vec::new(),
+            total_bytes: 0,
+        });
+    };
+    for volume in &content.volumes {
+        for page in &volume.pages {
+            referenced.insert(page.path.clone());
+        }
+    }
+    let mut orphans: Vec<(String, u64)> = Vec::new();
+    let mut stack = vec![images.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .with_context(|| format!("failed to read images dir {}", dir.display()))?;
+        for entry in entries {
+            let entry =
+                entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("failed to stat {}", entry.path().display()))?;
+            if file_type.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let name = file_name_utf8(&entry.path())?;
+            if is_hidden(&name) || is_import_meta(&name) {
+                continue;
+            }
+            // 只认图片：其它遗留文件不在清理范围内，避免误删用户手放的东西。
+            if !is_supported_image(&entry.path()) {
+                continue;
+            }
+            let abs = entry.path();
+            let rel = abs
+                .strip_prefix(&images)
+                .with_context(|| format!("bad image path {}", abs.display()))?;
+            let rel = to_posix(rel);
+            if referenced.contains(&rel) {
+                continue;
+            }
+            let size = std::fs::metadata(entry.path()).map_or(0, |meta| meta.len());
+            orphans.push((rel, size));
+        }
+    }
+    orphans.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+    let total_bytes = orphans.iter().map(|(_, size)| *size).sum::<u64>();
+    Ok(ComicOrphans {
+        paths: orphans.into_iter().map(|(rel, _)| rel).collect(),
+        total_bytes: u32::try_from(total_bytes).unwrap_or(u32::MAX),
+    })
+}
+
+/// 删除孤儿图片：只删扫描命中的无引用图片，`content.json` 不动；
+/// 构建产物只含引用页，无需失效；返回刷新后的识别大纲。
+pub fn delete_orphans_in(project_dir: &Path) -> anyhow::Result<ComicOutline> {
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let orphans = scan_orphans_in(project_dir)?;
+    for rel in &orphans.paths {
+        let abs = join_images_path(&images, rel)?;
+        let _ = std::fs::remove_file(&abs);
+    }
+    super::projects::touch_updated(project_dir);
+    outline_in(project_dir)?
+        .with_context(|| "content.json missing, parse the images first".to_string())
+}
+
+/// 扫描孤儿图片（`AppHandle` 入口）。
+pub fn scan_orphans(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOrphans> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    scan_orphans_in(&dir)
+}
+
+/// 删除孤儿图片（`AppHandle` 入口）。
+pub fn delete_orphans(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    delete_orphans_in(&dir)
+}
+
 /// 解析图片顺序：扫描 `sources/images` 后落盘 `content.json`，返回识别大纲。
 ///
 /// 话口径：无子目录为平铺单话；否则每子目录一话（`extra` 固定排首，标题“额外”，
@@ -1104,6 +1209,44 @@ mod tests {
         assert!(!status.exists);
         assert_eq!(status.page_count, 0);
         assert!(outline_in(&dir).expect("outline").is_none());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn orphan_scan_and_delete_round_trip() {
+        let (root, dir) = test_project("orphans");
+        let source = source_dir(&root, "orphan-src", &["第1话/01.jpg", "02.jpg"]);
+        import_dir_in(&dir, &source).expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 模拟删页残留 + 手工杂物：孤儿图、非图片、隐藏文件。
+        let images = dir.join(SOURCES_DIR).join(IMAGES_DIR);
+        write_source_image(&images, "loose.jpg", b"fake-image");
+        write_source_image(&images, "note.txt", b"note");
+        write_source_image(&images, ".hidden.jpg", b"fake-image");
+        let orphans = scan_orphans_in(&dir).expect("scan");
+        assert_eq!(orphans.paths, vec!["loose.jpg".to_string()]);
+        assert!(orphans.total_bytes > 0);
+        let outline = delete_orphans_in(&dir).expect("delete");
+        assert_eq!(outline.page_count, 2);
+        assert!(!images.join("loose.jpg").exists());
+        // 非图片与隐藏文件不在清理范围。
+        assert!(images.join("note.txt").is_file());
+        assert!(images.join(".hidden.jpg").is_file());
+        // 无孤儿时扫描为空，删除仍成功（幂等）。
+        let orphans = scan_orphans_in(&dir).expect("rescan");
+        assert!(orphans.paths.is_empty(), "unexpected orphans: {orphans:?}");
+        delete_orphans_in(&dir).expect("delete empty");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn orphan_scan_empty_without_parse_baseline() {
+        let (root, dir) = test_project("orphans-nobaseline");
+        let source = source_dir(&root, "orphan-src", &["01.jpg"]);
+        import_dir_in(&dir, &source).expect("import");
+        // 尚未解析：落盘图都可能是待解析的，不提示清理。
+        let orphans = scan_orphans_in(&dir).expect("scan");
+        assert!(orphans.paths.is_empty(), "unexpected orphans: {orphans:?}");
         cleanup(&root);
     }
 

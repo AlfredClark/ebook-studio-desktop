@@ -7,6 +7,7 @@
   import ImageIcon from "@lucide/svelte/icons/image";
   import { Button } from "#components/shadcn-svelte/button";
   import * as Resizable from "#components/shadcn-svelte/resizable";
+  import ConfirmDialog from "#components/common/confirm-dialog.svelte";
   import commands from "#libs/commands";
   import type { ComicImagesStatus, ComicOutline } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
@@ -25,6 +26,11 @@
   let parsing = $state(false);
   /** 预览选中：相对 images/ 的 POSIX 路径，与大纲数组同源。 */
   let selectedPath = $state<string | null>(null);
+  /** 孤儿图片：删页残留的无引用落盘图，左栏展示清理入口；失败静默（不挡主流程）。 */
+  let orphans = $state<{ paths: string[]; total_bytes: number } | null>(null);
+  /** 清理确认框：纯 UI 态，执行走确认回调。 */
+  let orphanConfirmOpen = $state(false);
+  let orphanCleaning = $state(false);
   /** 预览图：asset URL 与字节大小，迟到结果按 token 丢弃。 */
   let previewUrl = $state<string | null>(null);
   let previewSize = $state<number | null>(null);
@@ -59,6 +65,7 @@
       return;
     }
     outline = outlineResult.data;
+    void refreshOrphans();
     selectFirstPage();
   }
 
@@ -93,13 +100,14 @@
       return;
     }
     status = result.data;
-    // 新原稿使旧大纲失效，待重新解析。
+    // 新原稿使旧大纲失效，待重新解析；孤儿基线（content.json）已清空，同步刷新。
     outline = null;
     selectedPath = null;
     previewUrl = null;
     previewSize = null;
     previewDims = null;
     previewFailed = false;
+    void refreshOrphans();
     if (wasReselect) {
       toast.success(m.comic_files_source_reselect_cleared());
     }
@@ -118,7 +126,30 @@
       return;
     }
     outline = result.data;
+    void refreshOrphans();
     selectFirstPage();
+  }
+
+  /** 孤儿扫描：只读 walk，失败静默（不挡大纲与预览主流程）。 */
+  async function refreshOrphans(): Promise<void> {
+    const result = await commands.scanComicOrphans(uuid).result();
+    orphans = result.status === "ok" ? result.data : null;
+  }
+
+  /** 确认清理孤儿：只删无引用图片，成功后整页刷新（状态字节数跟上）。 */
+  async function handleOrphanClean(): Promise<void> {
+    if (orphanCleaning) {
+      return;
+    }
+    orphanCleaning = true;
+    const result = await commands.deleteComicOrphans(uuid).result();
+    orphanCleaning = false;
+    if (result.status === "error") {
+      toast.error(m.comic_files_orphan_clean_failed());
+      return;
+    }
+    toast.success(m.comic_files_orphan_clean_success());
+    await loadStatus();
   }
 
   /** 点选页面：切换选中并加载预览。 */
@@ -180,6 +211,25 @@
           </div>
         {:else}
           <ComicSourceCard {status} {importing} onChoose={() => void handleChoose()} />
+          {#if orphans != null && orphans.paths.length > 0}
+            <div class="flex flex-col gap-2 py-3">
+              <p class="text-sm text-muted-foreground">
+                {m.comic_files_orphan_hint({
+                  count: orphans.paths.length,
+                  size: formatBytes(orphans.total_bytes),
+                })}
+              </p>
+              <Button
+                variant="outline"
+                class="w-full"
+                size="sm"
+                disabled={orphanCleaning}
+                onclick={() => (orphanConfirmOpen = true)}
+              >
+                {m.comic_files_orphan_clean()}
+              </Button>
+            </div>
+          {/if}
           <div class="mt-auto flex flex-col gap-2 pt-2">
             {#if !status.exists}
               <p class="text-xs text-muted-foreground">{m.comic_files_parse_empty()}</p>
@@ -253,3 +303,17 @@
     </Resizable.Pane>
   </Resizable.PaneGroup>
 </div>
+<ConfirmDialog
+  bind:open={orphanConfirmOpen}
+  title={m.comic_files_orphan_confirm_title()}
+  description={orphans == null
+    ? ""
+    : m.comic_files_orphan_confirm_description({
+        count: orphans.paths.length,
+        size: formatBytes(orphans.total_bytes),
+      })}
+  details={orphans == null ? [] : orphans.paths.slice(0, 10)}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_files_orphan_clean()}
+  onConfirm={() => void handleOrphanClean()}
+/>
