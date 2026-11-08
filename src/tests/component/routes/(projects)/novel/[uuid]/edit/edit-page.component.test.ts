@@ -118,6 +118,10 @@ const outline: ParseOutline = {
   numbers_missing: false,
   titles_missing: false,
   issues: [],
+  backup_exists: false,
+  scanned_lines: 0,
+  unmatched_samples: [],
+  unmatched_total: 0,
   volumes: [
     {
       title: null,
@@ -146,6 +150,7 @@ function mockLoaded(): void {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 describe("编辑页", () => {
@@ -508,5 +513,59 @@ describe("编辑页", () => {
     await fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     expect(updateMock).toHaveBeenCalledOnce();
     expect(updateMock).toHaveBeenCalledWith("abc-uuid", 0, 0, ["新正文"]);
+  });
+
+  it("自动保存开关可切换并持久化，默认关闭", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(EditPage);
+    await screen.findByRole("heading", { name: "第一章 引子" });
+
+    const toggle = screen.getByRole("button", { name: "Auto-save: off" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await user.click(toggle);
+
+    expect(screen.getByRole("button", { name: "Auto-save: on" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(localStorage.getItem("app.novel-edit-autosave")).toBe("1");
+  });
+
+  it("自动保存开启时脏态切章先落盘后打开，不弹确认框", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    render(EditPage);
+    await screen.findByRole("heading", { name: "第一章 引子" });
+
+    await user.click(screen.getByRole("button", { name: "Auto-save: off" }));
+    const editor = await screen.findByLabelText("Chapter text editor");
+    await user.clear(editor.querySelector(".cm-content") as Element);
+    await user.type(editor.querySelector(".cm-content") as Element, "新正文");
+    await user.click(screen.getByText("第二章 发展"));
+
+    expect(updateMock).toHaveBeenCalledOnce();
+    expect(updateMock).toHaveBeenCalledWith("abc-uuid", 0, 0, ["新正文"]);
+    expect(await screen.findByRole("heading", { name: "第二章 发展" })).not.toBeNull();
+    expect(screen.queryByText("Discard unsaved changes?")).toBeNull();
+  });
+
+  it("自动保存失败时停留当前章", async () => {
+    const user = userEvent.setup();
+    mockLoaded();
+    updateMock.mockReturnValueOnce(
+      fakeCommand({ status: "error", error: { kind: "Internal", message: "no" } }),
+    );
+    render(EditPage);
+    await screen.findByRole("heading", { name: "第一章 引子" });
+
+    await user.click(screen.getByRole("button", { name: "Auto-save: off" }));
+    const editor = await screen.findByLabelText("Chapter text editor");
+    await user.clear(editor.querySelector(".cm-content") as Element);
+    await user.type(editor.querySelector(".cm-content") as Element, "新正文");
+    await user.click(screen.getByText("第二章 发展"));
+
+    expect(updateMock).toHaveBeenCalledOnce();
+    expect(chapterMock).not.toHaveBeenCalledWith("abc-uuid", 0, 1);
+    expect(await screen.findByRole("heading", { name: "第一章 引子" })).not.toBeNull();
   });
 });

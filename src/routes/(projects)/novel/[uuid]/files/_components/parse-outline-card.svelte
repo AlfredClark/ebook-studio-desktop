@@ -18,11 +18,15 @@
   let {
     outline,
     renumbering = false,
+    undoing = false,
     onRenumber,
+    onUndo,
   }: {
     outline: ParseOutline;
     renumbering?: boolean;
+    undoing?: boolean;
     onRenumber: () => void;
+    onUndo: () => void;
   } = $props();
 
   /** 强制重排确认框开关：纯 UI 态，执行走父组件回调。 */
@@ -176,6 +180,17 @@
           <p class="text-sm break-words text-muted-foreground">{m.files_issues_empty()}</p>
         {/if}
       {/each}
+      {#if outline.unmatched_total > 0}
+        <div class="flex items-start gap-2">
+          <TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-destructive" />
+          <p class="text-sm break-words text-muted-foreground">
+            {m.files_unmatched_hint({ count: outline.unmatched_total })}
+          </p>
+        </div>
+        {#each outline.unmatched_samples as sample (sample)}
+          <p class="pl-6 text-sm break-words text-muted-foreground">「{sample}」</p>
+        {/each}
+      {/if}
     </div>
     {#if issueCount > 0}
       <div class="mt-auto shrink-0">
@@ -187,6 +202,13 @@
           onclick={() => (confirmOpen = true)}
         >
           {m.files_renumber_button()}
+        </Button>
+      </div>
+    {/if}
+    {#if outline.backup_exists}
+      <div class="mt-auto shrink-0 pt-2">
+        <Button class="w-full" variant="outline" size="sm" disabled={undoing} onclick={onUndo}>
+          {m.files_renumber_undo_button()}
         </Button>
       </div>
     {/if}

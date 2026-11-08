@@ -32,6 +32,8 @@
   let parsing = $state(false);
   /** 强制重排进行中：按钮禁用态。 */
   let renumbering = $state(false);
+  /** 撤销重排进行中：按钮禁用态。 */
+  let undoing = $state(false);
 
   /** 解析参数是否合法：按钮可用性的唯一门禁。 */
   const patternsValid = $derived(isValidPattern(volumePattern) && isValidPattern(chapterPattern));
@@ -83,10 +85,12 @@
       toast.error(m.files_source_failed());
       return;
     }
-    status = result.data;
-    // 新原文使旧大纲失效，待重新解析。
+    status = result.data.status;
+    // 新原文使旧大纲失效，待重新解析；非 UTF-8 来源已自动转码，明确告知用户。
     outline = null;
-    if (wasReselect) {
+    if (result.data.encoding !== "UTF-8") {
+      toast.info(m.files_import_transcoded({ encoding: result.data.encoding }));
+    } else if (wasReselect) {
       toast.success(m.files_source_reselect_cleared());
     }
   }
@@ -107,6 +111,22 @@
     if (result.data.numbers_missing) {
       toast.warning(m.files_numbers_missing());
     }
+  }
+
+  /** 撤销重排：用备份恢复重排前的内容，一次性有效；失败 toast，不动本地态。 */
+  async function handleUndo(): Promise<void> {
+    if (undoing) {
+      return;
+    }
+    undoing = true;
+    const result = await commands.restoreNovelContentBackup(uuid).result();
+    undoing = false;
+    if (result.status === "error") {
+      toast.error(m.files_renumber_undo_failed());
+      return;
+    }
+    outline = result.data;
+    toast.success(m.files_renumber_undo_success());
   }
 
   /** 强制重排：确认后按文档顺序重写卷章编号，大纲刷新，失败 toast。 */
@@ -166,7 +186,13 @@
           <p class="text-sm text-muted-foreground" aria-busy="true">{m.files_parsing()}</p>
         {:else if outline !== null}
           <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <ParseOutlineCard {outline} {renumbering} onRenumber={() => void handleRenumber()} />
+            <ParseOutlineCard
+              {outline}
+              {renumbering}
+              {undoing}
+              onRenumber={() => void handleRenumber()}
+              onUndo={() => void handleUndo()}
+            />
           </div>
         {:else}
           <div

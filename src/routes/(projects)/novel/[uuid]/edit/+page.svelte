@@ -44,6 +44,19 @@
 
   /** 脏态：编辑器文本与落盘快照不一致时保存可用。 */
   const dirty = $derived(draft !== savedContent);
+  /** 自动保存开关本地键：新增键统一 `app.` 前缀，默认关闭，需用户显式开启。 */
+  const AUTO_SAVE_KEY = "app.novel-edit-autosave";
+  /** 自动保存开关：读本地偏好，失败回落关闭。 */
+  function readAutoSave(): boolean {
+    try {
+      return typeof localStorage === "undefined"
+        ? false
+        : localStorage.getItem(AUTO_SAVE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  let autoSave = $state(readAutoSave());
   /** 章节唯一键：驱动编辑器切章重建。 */
   const docKey = $derived(selected == null ? "" : `${selected.volume}:${selected.chapter}`);
   /** 切章确认框：脏态下点选他章先弹框，默认停留。 */
@@ -248,23 +261,41 @@
     draft = savedContent;
   }
 
-  /** 点选章节：同章直接返回，脏态先弹确认框，否则直接打开。 */
+  /** 自动保存开关：即时落本地偏好，刷新不丢失。 */
+  function toggleAutoSave(): void {
+    autoSave = !autoSave;
+    try {
+      localStorage.setItem(AUTO_SAVE_KEY, autoSave ? "1" : "0");
+    } catch {
+      // 本地偏好写失败不影响开关本次生效，下次进页回落默认。
+    }
+  }
+
+  /** 点选章节：同章直接返回；脏且自动保存关时弹确认框，其余走存后开。 */
   function requestSelect(volume: number, chapter: number): void {
     if (selected?.volume === volume && selected?.chapter === chapter) {
       return;
     }
-    if (dirty) {
+    if (dirty && !autoSave) {
       pendingSelect = { volume, chapter };
       confirmOpen = true;
       return;
     }
-    void openChapter(volume, chapter);
+    void openChapterWithAutoSave(volume, chapter);
   }
 
-  /** 保存：切分归一化后落盘，成功刷新大纲字数并清脏态；筛选激活时自动重跑。 */
-  async function handleSave(): Promise<void> {
-    if (selected == null || !dirty || saving) {
+  /** 切章入口：脏且自动保存开时先落盘，成功才打开，失败停留；其余直接打开。 */
+  async function openChapterWithAutoSave(volume: number, chapter: number): Promise<void> {
+    if (dirty && autoSave && !(await handleSave(true))) {
       return;
+    }
+    await openChapter(volume, chapter);
+  }
+
+  /** 保存：切分归一化后落盘，成功刷新大纲字数并清脏态；筛选激活时自动重跑。 自动保存成功用专属提示，手动保存沿用原提示；返回是否成功供切章守卫分支。 */
+  async function handleSave(auto = false): Promise<boolean> {
+    if (selected == null || !dirty || saving) {
+      return false;
     }
     saving = true;
     const result = await commands
@@ -273,14 +304,15 @@
     saving = false;
     if (result.status === "error") {
       toast.error(m.edit_save_failed());
-      return;
+      return false;
     }
     outline = result.data;
     savedContent = draft;
-    toast.success(m.edit_save_success());
+    toast.success(auto ? m.edit_autosave_saved() : m.edit_save_success());
     if (appliedSpec != null) {
       await runFilter();
     }
+    return true;
   }
 
   /** 全局保存快捷键：Ctrl/Cmd+S 与保存按钮同等效果，门禁由 handleSave 统一把守。 */
@@ -328,7 +360,7 @@
         visibleSet == null ||
         !visibleSet.has(`${selected.volume}:${selected.chapter}`))
     ) {
-      await openChapter(first.volume_index, first.chapter_index);
+      await openChapterWithAutoSave(first.volume_index, first.chapter_index);
     }
   }
 
@@ -414,11 +446,13 @@
               content={savedContent}
               {dirty}
               {saving}
+              {autoSave}
               matches={selectedMatches}
               {stale}
               {jumpTo}
               onEdit={(text) => (draft = text)}
               onSave={() => void handleSave()}
+              onToggleAutoSave={toggleAutoSave}
               onJump={(line) => (jumpTo = { line, nonce: Date.now() })}
             />
           {/if}

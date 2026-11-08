@@ -2,7 +2,8 @@
 
 use crate::cores::types::CommandResult;
 use crate::features::novel_files::{
-    self, ChapterContent, FilterOutcome, NovelFilter, NovelTextStatus, ParseOutline,
+    self, ChapterContent, FilterOutcome, NovelFilter, NovelImportOutcome, NovelTextStatus,
+    ParseOutline,
 };
 
 /// 查询小说原文状态；缺文件回落空态，不建文件。
@@ -13,7 +14,7 @@ pub fn get_novel_text_status(app: tauri::AppHandle, id: String) -> CommandResult
     Ok(novel_files::text_status(&app, &id)?)
 }
 
-/// 导入小说原文：把用户选取的 TXT 覆盖拷贝为 `sources/content.txt`，返回最新状态。
+/// 导入小说原文：把用户选取的 TXT 解码后覆盖为 `sources/content.txt`，返回最新状态与来源编码。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
@@ -21,7 +22,7 @@ pub fn import_novel_text(
     app: tauri::AppHandle,
     id: String,
     source_path: String,
-) -> CommandResult<NovelTextStatus> {
+) -> CommandResult<NovelImportOutcome> {
     Ok(novel_files::import_text(&app, &id, &source_path)?)
 }
 
@@ -60,6 +61,17 @@ pub fn get_novel_content_outline(
 #[allow(clippy::needless_pass_by_value)]
 pub fn renumber_novel_content(app: tauri::AppHandle, id: String) -> CommandResult<ParseOutline> {
     Ok(novel_files::renumber_content(&app, &id)?)
+}
+
+/// 撤销重排：用备份恢复 `content.json`，一次性有效，无备份直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn restore_novel_content_backup(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<ParseOutline> {
+    Ok(novel_files::restore_backup(&app, &id)?)
 }
 
 /// 读取单章正文：按卷章下标寻址，标题只读、正文按行返回，越界或产物异常直接报错。

@@ -13,6 +13,10 @@ const outline: ParseOutline = {
   numbers_missing: false,
   titles_missing: false,
   issues: [],
+  backup_exists: false,
+  scanned_lines: 0,
+  unmatched_samples: [],
+  unmatched_total: 0,
   volumes: [
     {
       title: null,
@@ -34,6 +38,10 @@ const flat: ParseOutline = {
   numbers_missing: false,
   titles_missing: false,
   issues: [],
+  backup_exists: false,
+  scanned_lines: 0,
+  unmatched_samples: [],
+  unmatched_total: 0,
   volumes: [
     {
       title: null,

@@ -135,8 +135,8 @@ export const commands = {
 	getProjectOverview: (id: string) => typedError<ProjectOverview, CommandError>(__TAURI_INVOKE("get_project_overview", { id })),
 	/**  查询小说原文状态；缺文件回落空态，不建文件。 */
 	getNovelTextStatus: (id: string) => typedError<NovelTextStatus, CommandError>(__TAURI_INVOKE("get_novel_text_status", { id })),
-	/**  导入小说原文：把用户选取的 TXT 覆盖拷贝为 `sources/content.txt`，返回最新状态。 */
-	importNovelText: (id: string, sourcePath: string) => typedError<NovelTextStatus, CommandError>(__TAURI_INVOKE("import_novel_text", { id, sourcePath })),
+	/**  导入小说原文：把用户选取的 TXT 解码后覆盖为 `sources/content.txt`，返回最新状态与来源编码。 */
+	importNovelText: (id: string, sourcePath: string) => typedError<NovelImportOutcome, CommandError>(__TAURI_INVOKE("import_novel_text", { id, sourcePath })),
 	/**  解析小说原文：按卷章正则逐行切分后落盘 `content.json`，返回识别大纲（正文行不出 IPC）。 */
 	parseNovelText: (id: string, volumePattern: string, chapterPattern: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("parse_novel_text", { id, volumePattern, chapterPattern })),
 	/**  读取已落盘的识别大纲：缺失、损坏或版本不符回落空，不建文件。 */
@@ -162,9 +162,22 @@ export const commands = {
 	titles_missing: boolean,
 	/**  解析问题：文档顺序收集，展示用。 */
 	issues: ContentIssue[],
+	/**
+	 *  重排备份是否存在：存在时前端展示“撤销重排”，用完即删；
+	 *  重新解析或编辑正文后失效（后端落盘时删备份）。
+	 */
+	backup_exists: boolean,
+	/**  扫描的非空行数：诊断展示用（命中 + 未命中）。 */
+	scanned_lines: number,
+	/**  疑似标题但两套正则都没命中的行（前 N 个原文）：诊断展示用，正文误伤可接受。 */
+	unmatched_samples: string[],
+	/**  疑似标题行的全量计数（采样只存前 N 个）。 */
+	unmatched_total: number,
 } | null, CommandError>(__TAURI_INVOKE("get_novel_content_outline", { id })),
 	/**  强制重排编号：按文档顺序重写卷号与章号后落盘，返回新大纲。 */
 	renumberNovelContent: (id: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("renumber_novel_content", { id })),
+	/**  撤销重排：用备份恢复 `content.json`，一次性有效，无备份直接报错。 */
+	restoreNovelContentBackup: (id: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("restore_novel_content_backup", { id })),
 	/**  读取单章正文：按卷章下标寻址，标题只读、正文按行返回，越界或产物异常直接报错。 */
 	getNovelChapter: (id: string, volumeIndex: number, chapterIndex: number) => typedError<ChapterContent, CommandError>(__TAURI_INVOKE("get_novel_chapter", { id, volumeIndex, chapterIndex })),
 	/**  保存单章正文：归一化落盘后返回新大纲（左栏字数即时刷新）。 */
@@ -825,6 +838,17 @@ pairs: PairKind[];
 /**  检测范围：按行独立，或跨行延续。 */
 scope: PairScope };
 
+/**
+ *  导入结果：落盘状态 + 来源编码标签（`UTF-8` / `UTF-16LE` / `UTF-16BE` / `GB18030`），
+ *  前端据此提示自动转码，非 UTF-8 来源统一转存为 UTF-8。
+ */
+export type NovelImportOutcome = {
+	/**  导入后的原文状态。 */
+	status: NovelTextStatus,
+	/**  解码来源原文时实际使用的编码。 */
+	encoding: string,
+};
+
 /**  小说原文状态：左栏文件卡片的只读展示；缺文件时 `exists` 为假。 */
 export type NovelTextStatus = {
 	/**  `sources/content.txt` 是否存在。 */
@@ -929,6 +953,17 @@ export type ParseOutline = {
 	titles_missing: boolean,
 	/**  解析问题：文档顺序收集，展示用。 */
 	issues: ContentIssue[],
+	/**
+	 *  重排备份是否存在：存在时前端展示“撤销重排”，用完即删；
+	 *  重新解析或编辑正文后失效（后端落盘时删备份）。
+	 */
+	backup_exists: boolean,
+	/**  扫描的非空行数：诊断展示用（命中 + 未命中）。 */
+	scanned_lines: number,
+	/**  疑似标题但两套正则都没命中的行（前 N 个原文）：诊断展示用，正文误伤可接受。 */
+	unmatched_samples: string[],
+	/**  疑似标题行的全量计数（采样只存前 N 个）。 */
+	unmatched_total: number,
 };
 
 /**  项目基本信息：`project.json` 的落盘格式即前端契约，时间全链路 UTC。 */

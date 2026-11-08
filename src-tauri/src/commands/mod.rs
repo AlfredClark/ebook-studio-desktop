@@ -74,6 +74,7 @@ macro_rules! collect_commands {
             $crate::commands::novel_files::parse_novel_text,
             $crate::commands::novel_files::get_novel_content_outline,
             $crate::commands::novel_files::renumber_novel_content,
+            $crate::commands::novel_files::restore_novel_content_backup,
             $crate::commands::novel_files::get_novel_chapter,
             $crate::commands::novel_files::update_novel_chapter,
             $crate::commands::novel_files::filter_novel_content,

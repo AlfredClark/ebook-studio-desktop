@@ -13,6 +13,10 @@ const outline: ParseOutline = {
   numbers_missing: false,
   titles_missing: false,
   issues: [],
+  backup_exists: false,
+  scanned_lines: 0,
+  unmatched_samples: [],
+  unmatched_total: 0,
   volumes: [
     {
       title: null,
@@ -34,6 +38,10 @@ const flat: ParseOutline = {
   numbers_missing: false,
   titles_missing: false,
   issues: [],
+  backup_exists: false,
+  scanned_lines: 0,
+  unmatched_samples: [],
+  unmatched_total: 0,
   volumes: [
     {
       title: null,
@@ -46,6 +54,7 @@ const flat: ParseOutline = {
 };
 
 const renumberMock = vi.hoisted(() => vi.fn());
+const undoMock = vi.hoisted(() => vi.fn());
 
 afterEach(() => {
   cleanup();
@@ -54,7 +63,7 @@ afterEach(() => {
 
 describe("解析结果卡", () => {
   it("两行展示计数，无标题卷回落未分卷", () => {
-    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock } });
+    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock, onUndo: undoMock } });
 
     expect(screen.getByText("Volumes")).not.toBeNull();
     expect(screen.getByText("Chapters")).not.toBeNull();
@@ -69,7 +78,7 @@ describe("解析结果卡", () => {
 
   it("分卷书默认折叠，展开后查看章节与字数", async () => {
     const user = userEvent.setup();
-    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock } });
+    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock, onUndo: undoMock } });
 
     // 卷头右侧显示本卷章节数，章节默认收起。
     expect(screen.getByText("2 chapters")).not.toBeNull();
@@ -90,7 +99,9 @@ describe("解析结果卡", () => {
   });
 
   it("纯章节单卷平铺展示", () => {
-    render(ParseOutlineCard, { props: { outline: flat, onRenumber: renumberMock } });
+    render(ParseOutlineCard, {
+      props: { outline: flat, onRenumber: renumberMock, onUndo: undoMock },
+    });
 
     expect(screen.getByText("第一章 引子")).not.toBeNull();
     expect(screen.getByText("80 chars")).not.toBeNull();
@@ -107,6 +118,10 @@ describe("解析结果卡", () => {
       numbers_missing: false,
       titles_missing: false,
       issues: [],
+      backup_exists: false,
+      scanned_lines: 0,
+      unmatched_samples: [],
+      unmatched_total: 0,
       volumes: [
         {
           title: "第一卷 长卷",
@@ -117,7 +132,9 @@ describe("解析结果卡", () => {
         },
       ],
     };
-    render(ParseOutlineCard, { props: { outline: long, onRenumber: renumberMock } });
+    render(ParseOutlineCard, {
+      props: { outline: long, onRenumber: renumberMock, onUndo: undoMock },
+    });
 
     expect(screen.getByText("205 chapters")).not.toBeNull();
     const trigger = screen.getByText("第一卷 长卷").closest("button");
@@ -142,6 +159,10 @@ describe("解析结果卡", () => {
       numbers_missing: false,
       titles_missing: false,
       issues: [],
+      backup_exists: false,
+      scanned_lines: 0,
+      unmatched_samples: [],
+      unmatched_total: 0,
       volumes: [
         {
           title: null,
@@ -152,7 +173,9 @@ describe("解析结果卡", () => {
         },
       ],
     };
-    render(ParseOutlineCard, { props: { outline: flat, onRenumber: renumberMock } });
+    render(ParseOutlineCard, {
+      props: { outline: flat, onRenumber: renumberMock, onUndo: undoMock },
+    });
 
     expect(screen.getByText("Chapters 001–100")).not.toBeNull();
     expect(screen.getByText("Chapters 101–200")).not.toBeNull();
@@ -180,6 +203,7 @@ describe("解析结果卡", () => {
           ],
         },
         onRenumber: renumberMock,
+        onUndo: undoMock,
       },
     });
 
@@ -195,6 +219,7 @@ describe("解析结果卡", () => {
       props: {
         outline: { ...outline, numbers_missing: true, titles_missing: true },
         onRenumber: renumberMock,
+        onUndo: undoMock,
       },
     });
 
@@ -222,6 +247,7 @@ describe("解析结果卡", () => {
           ],
         },
         onRenumber: renumberMock,
+        onUndo: undoMock,
       },
     });
 
@@ -233,9 +259,42 @@ describe("解析结果卡", () => {
     expect(renumberMock).toHaveBeenCalledOnce();
   });
 
-  it("无问题时不显示强制重排按钮", () => {
-    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock } });
+  it("无备份时不显示撤销重排按钮", () => {
+    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock, onUndo: undoMock } });
 
-    expect(screen.queryByRole("button", { name: "Force renumber" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo renumber" })).toBeNull();
+  });
+
+  it("有备份时显示撤销重排按钮，点击走回调", async () => {
+    const user = userEvent.setup();
+    render(ParseOutlineCard, {
+      props: {
+        outline: { ...outline, backup_exists: true },
+        onRenumber: renumberMock,
+        onUndo: undoMock,
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Undo renumber" }));
+
+    expect(undoMock).toHaveBeenCalledOnce();
+  });
+
+  it("疑似标题行展示采样与总数", () => {
+    render(ParseOutlineCard, {
+      props: {
+        outline: {
+          ...outline,
+          unmatched_total: 3,
+          unmatched_samples: ["楔子", "番外：小剧场"],
+        },
+        onRenumber: renumberMock,
+        onUndo: undoMock,
+      },
+    });
+
+    expect(screen.getByText(/3 title-like lines were not matched/)).not.toBeNull();
+    expect(screen.getByText("「楔子」")).not.toBeNull();
+    expect(screen.getByText("「番外：小剧场」")).not.toBeNull();
   });
 });

@@ -27,6 +27,14 @@ const BUILD_DIR: &str = "build";
 const DIST_DIR: &str = "dist";
 /// `content.json` 的结构版本：初始开发阶段固定 `1`，不做跨版本迁移。
 const CONTENT_SCHEMA_VERSION: u32 = 1;
+/// 重排备份：`renumber` 前把当时的 `content.json` 拷一份，撤销用完即删；
+/// 重新解析或编辑正文后备份失效，避免用旧快照覆盖新改动。
+const CONTENT_BACKUP: &str = "content.json.bak";
+/// 解析诊断落盘：扫描行数与疑似标题采样，重进文件页也能回显；
+/// 重新解析时覆盖，编辑正文或换源时删除（行文已变）。
+const DIAGNOSTICS_NAME: &str = "parse-diagnostics.json";
+/// 疑似标题采样上限：只存前 N 行，全量计数另记，避免长文打爆 IPC。
+const MAX_UNMATCHED_SAMPLES: usize = 8;
 /// 解析上限：超限报错而非截断，避免静默丢文。
 const MAX_VOLUMES: usize = 2000;
 /// 解析上限：全书章节总数，跨卷连续计数与卷内重计数都不影响切分。
@@ -72,19 +80,56 @@ pub fn status_in(project_dir: &Path) -> anyhow::Result<NovelTextStatus> {
     })
 }
 
-/// 导入原文：校验通过后覆盖拷贝为 `sources/content.txt`，返回最新状态。
+/// 导入结果：落盘状态 + 来源编码标签（`UTF-8` / `UTF-16LE` / `UTF-16BE` / `GB18030`），
+/// 前端据此提示自动转码，非 UTF-8 来源统一转存为 UTF-8。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct NovelImportOutcome {
+    /// 导入后的原文状态。
+    pub status: NovelTextStatus,
+    /// 解码来源原文时实际使用的编码。
+    pub encoding: String,
+}
+
+/// 原文解码：BOM 优先（UTF-16 含 NUL 也可能是合法 UTF-8 文本，不能先试 UTF-8），
+/// 再试 UTF-8（含 BOM 则去 BOM，顺带修首章匹配不到的老坑），最后 GB18030 回落；
+/// 全失败直接报错，不留坏文件。
+fn decode_source_text(bytes: &[u8]) -> anyhow::Result<(String, &'static str)> {
+    if let Some(stripped) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let (text, _, malformed) = encoding_rs::UTF_16LE.decode(stripped);
+        if malformed {
+            anyhow::bail!("text source is not valid UTF-16LE");
+        }
+        return Ok((text.into_owned(), "UTF-16LE"));
+    }
+    if let Some(stripped) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        let (text, _, malformed) = encoding_rs::UTF_16BE.decode(stripped);
+        if malformed {
+            anyhow::bail!("text source is not valid UTF-16BE");
+        }
+        return Ok((text.into_owned(), "UTF-16BE"));
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Ok((text.to_string(), "UTF-8"));
+    }
+    let (text, _, malformed) = encoding_rs::GB18030.decode(bytes);
+    if malformed {
+        anyhow::bail!("text source encoding is not supported (expected UTF-8, UTF-16 or GB18030)");
+    }
+    Ok((text.into_owned(), "GB18030"))
+}
+
+/// 导入原文：校验通过后解码并覆盖为 `sources/content.txt`（统一 UTF-8），返回最新状态。
 ///
 /// 重选即换源：成功后清空下游产物（`content.json`、`build/`、`dist/`），失败不删，
 /// 前端据此整页引导重新解析、构建与打包。
-pub fn import_txt_in(project_dir: &Path, source: &Path) -> anyhow::Result<NovelTextStatus> {
+pub fn import_txt_in(project_dir: &Path, source: &Path) -> anyhow::Result<NovelImportOutcome> {
     if !source.is_file() {
         anyhow::bail!("text source is not a file: {}", source.display());
     }
-    let bytes = source
-        .metadata()
-        .with_context(|| format!("failed to stat text source: {}", source.display()))?
-        .len();
-    if bytes == 0 || bytes > MAX_TEXT_BYTES {
+    let bytes = std::fs::read(source)
+        .with_context(|| format!("failed to read text source: {}", source.display()))?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_TEXT_BYTES {
         anyhow::bail!("text size out of range (max 100MB): {}", source.display());
     }
     let is_txt = source
@@ -97,16 +142,23 @@ pub fn import_txt_in(project_dir: &Path, source: &Path) -> anyhow::Result<NovelT
             source.display()
         );
     }
-    // 先读后拷：非 UTF-8 直接拒绝，不留下坏文件。
-    std::fs::read_to_string(source)
-        .with_context(|| format!("text source is not valid UTF-8: {}", source.display()))?;
+    // 先解码再落盘：非 UTF-8 自动转码，不留坏文件。
+    let (text, encoding) = decode_source_text(&bytes).with_context(|| {
+        format!(
+            "unsupported text encoding (expected UTF-8, UTF-16 or GB18030): {}",
+            source.display()
+        )
+    })?;
     let sources = project_dir.join(SOURCES_DIR);
     std::fs::create_dir_all(&sources)
         .with_context(|| format!("failed to create {}", sources.display()))?;
-    std::fs::copy(source, sources.join(CONTENT_FILE)).context("failed to copy text")?;
+    std::fs::write(sources.join(CONTENT_FILE), text).context("failed to write content.txt")?;
     clear_downstream(project_dir);
     super::projects::touch_updated(project_dir);
-    status_in(project_dir)
+    Ok(NovelImportOutcome {
+        status: status_in(project_dir)?,
+        encoding: encoding.to_string(),
+    })
 }
 
 /// 清空下游产物：解析、构建与打包结果全部过期，忽略删除失败（缺失即一致）。
@@ -114,6 +166,9 @@ fn clear_downstream(project_dir: &Path) {
     let _ = std::fs::remove_file(project_dir.join(CONTENT_NAME));
     let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
     let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    // 换源后旧解析的备份与诊断全部失效。
+    clear_backup(project_dir);
+    clear_diagnostics(project_dir);
 }
 
 /// 查询原文状态（`AppHandle` 入口）：项目目录不存在视为目标缺失。
@@ -127,7 +182,7 @@ pub fn import_text(
     app: &tauri::AppHandle,
     id: &str,
     source_path: &str,
-) -> anyhow::Result<NovelTextStatus> {
+) -> anyhow::Result<NovelImportOutcome> {
     let dir = super::projects::resolve_project_dir(app, id)?;
     import_txt_in(&dir, Path::new(source_path))
 }
@@ -407,6 +462,15 @@ pub struct ParseOutline {
     pub titles_missing: bool,
     /// 解析问题：文档顺序收集，展示用。
     pub issues: Vec<ContentIssue>,
+    /// 重排备份是否存在：存在时前端展示“撤销重排”，用完即删；
+    /// 重新解析或编辑正文后失效（后端落盘时删备份）。
+    pub backup_exists: bool,
+    /// 扫描的非空行数：诊断展示用（命中 + 未命中）。
+    pub scanned_lines: u32,
+    /// 疑似标题但两套正则都没命中的行（前 N 个原文）：诊断展示用，正文误伤可接受。
+    pub unmatched_samples: Vec<String>,
+    /// 疑似标题行的全量计数（采样只存前 N 个）。
+    pub unmatched_total: u32,
 }
 
 /// 宽松转 `u32`：大纲计数上溢时钳制，不报错。
@@ -415,7 +479,8 @@ fn saturating_u32(value: usize) -> u32 {
 }
 
 /// 由完整内容派生识别大纲（落盘与返回共用同一口径）。
-fn outline_of(content: &NovelContent) -> ParseOutline {
+/// 诊断字段（扫描行数、疑似标题采样）只在解析时回填，其余入口置零/置空。
+fn outline_of(content: &NovelContent, project_dir: &Path) -> ParseOutline {
     let numbers_missing =
         lacks_number_group(&content.volume_pattern) && lacks_number_group(&content.chapter_pattern);
     let titles_missing =
@@ -436,6 +501,10 @@ fn outline_of(content: &NovelContent) -> ParseOutline {
         numbers_missing,
         titles_missing,
         issues: collect_issues(content, numbers_missing, titles_missing),
+        backup_exists: project_dir.join(CONTENT_BACKUP).is_file(),
+        scanned_lines: 0,
+        unmatched_samples: Vec::new(),
+        unmatched_total: 0,
         volumes: content
             .volumes
             .iter()
@@ -673,6 +742,68 @@ fn pure_title(caps: &regex::Captures<'_>, line: &str) -> String {
         .to_string()
 }
 
+/// 疑似标题行判定：短行（40 字内）且带标题关键词、非纯数字；正文误伤可接受，只做诊断展示。
+fn is_title_like(line: &str) -> bool {
+    const KEYWORDS: &[char] = &['章', '节', '回', '集', '话', '篇', '卷', '楔', '序', '终'];
+    const WORDS: &[&str] = &["前言", "后记", "番外", "尾声", "引子"];
+    if line.is_empty() || line.chars().count() > 40 {
+        return false;
+    }
+    if line.chars().all(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+    line.chars().any(|ch| KEYWORDS.contains(&ch)) || WORDS.iter().any(|w| line.contains(w))
+}
+
+/// 疑似标题采样：短行关键词命中即记数，只存前 N 个原文。
+fn sample_unmatched(samples: &mut Vec<String>, total: &mut u32, line: &str) {
+    if !is_title_like(line) {
+        return;
+    }
+    *total += 1;
+    if samples.len() < MAX_UNMATCHED_SAMPLES {
+        samples.push(line.to_string());
+    }
+}
+
+/// 解析诊断落盘体：只在解析时写入，重进文件页回显用；内部流转不进 IPC。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ParseDiagnostics {
+    scanned_lines: u32,
+    unmatched_samples: Vec<String>,
+    unmatched_total: u32,
+}
+
+/// 诊断落盘：解析成功后与 `content.json` 同步写，重进文件页回显不断档。
+fn write_diagnostics(project_dir: &Path, diagnostics: &ParseDiagnostics) -> anyhow::Result<()> {
+    let text =
+        serde_json::to_string_pretty(diagnostics).context("failed to serialize diagnostics")?;
+    std::fs::write(project_dir.join(DIAGNOSTICS_NAME), text).context("failed to write diagnostics")
+}
+
+/// 诊断读取：缺失或损坏回落空（旧项目无此文件直接当无诊断）。
+fn read_diagnostics(project_dir: &Path) -> ParseDiagnostics {
+    let empty = ParseDiagnostics {
+        scanned_lines: 0,
+        unmatched_samples: Vec::new(),
+        unmatched_total: 0,
+    };
+    let Ok(text) = std::fs::read_to_string(project_dir.join(DIAGNOSTICS_NAME)) else {
+        return empty;
+    };
+    serde_json::from_str(&text).unwrap_or(empty)
+}
+
+/// 重排备份失效：重新解析或编辑正文后旧快照不再能安全还原，直接删除。
+fn clear_backup(project_dir: &Path) {
+    let _ = std::fs::remove_file(project_dir.join(CONTENT_BACKUP));
+}
+
+/// 诊断失效：行文已变（换源/重解析覆盖写，编辑正文删），旧采样不再回显。
+fn clear_diagnostics(project_dir: &Path) {
+    let _ = std::fs::remove_file(project_dir.join(DIAGNOSTICS_NAME));
+}
+
 /// 数字组缺失判定：正则连第一捕获组都没有；编译失败也视为缺失。
 fn lacks_number_group(pattern: &str) -> bool {
     Regex::new(pattern)
@@ -691,8 +822,11 @@ pub fn parse_txt_in(
 ) -> anyhow::Result<ParseOutline> {
     let volume_re = Regex::new(volume_pattern).context("invalid volume pattern")?;
     let chapter_re = Regex::new(chapter_pattern).context("invalid chapter pattern")?;
-    let text = std::fs::read_to_string(project_dir.join(SOURCES_DIR).join(CONTENT_FILE))
+    let raw = std::fs::read(project_dir.join(SOURCES_DIR).join(CONTENT_FILE))
         .context("failed to read content.txt, import text first")?;
+    // 存量非 UTF-8 原文同样可解析；坏到无法解码则提示重导。
+    let (text, _) =
+        decode_source_text(&raw).context("failed to decode content.txt, re-import the text")?;
     let mut content = NovelContent {
         schema_version: CONTENT_SCHEMA_VERSION,
         volume_pattern: volume_pattern.to_string(),
@@ -702,11 +836,15 @@ pub fn parse_txt_in(
         volumes: Vec::new(),
     };
     let mut chapter_total = 0usize;
+    let mut scanned_lines = 0usize;
+    let mut unmatched_samples = Vec::new();
+    let mut unmatched_total = 0u32;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
         }
+        scanned_lines += 1;
         if let Some(caps) = volume_re.captures(line) {
             if content.volumes.len() >= MAX_VOLUMES {
                 anyhow::bail!("too many volumes (max {MAX_VOLUMES})");
@@ -737,16 +875,20 @@ pub fn parse_txt_in(
                 lines: Vec::new(),
             });
         } else if content.volumes.is_empty() {
+            sample_unmatched(&mut unmatched_samples, &mut unmatched_total, line);
             content.preface.push(line.to_string());
         } else {
             let volume = content.volumes.last_mut().expect("volume exists");
             if volume.chapters.is_empty() {
+                sample_unmatched(&mut unmatched_samples, &mut unmatched_total, line);
                 volume.intro.push(line.to_string());
             } else {
                 let chapter = volume.chapters.last_mut().expect("chapter exists");
                 if chapter.lines.len() >= MAX_CHAPTER_LINES {
                     anyhow::bail!("chapter is too long (max {MAX_CHAPTER_LINES} lines)");
                 }
+                // 漏命中的章标题会藏进上一章正文：同样采样，正文误伤可接受。
+                sample_unmatched(&mut unmatched_samples, &mut unmatched_total, line);
                 chapter.lines.push(line.to_string());
             }
         }
@@ -754,7 +896,19 @@ pub fn parse_txt_in(
     if chapter_total == 0 {
         anyhow::bail!("no chapters recognized, check title patterns against the text");
     }
-    let outline = outline_of(&content);
+    clear_backup(project_dir);
+    let mut outline = outline_of(&content, project_dir);
+    outline.scanned_lines = saturating_u32(scanned_lines);
+    outline.unmatched_samples.clone_from(&unmatched_samples);
+    outline.unmatched_total = unmatched_total;
+    write_diagnostics(
+        project_dir,
+        &ParseDiagnostics {
+            scanned_lines: outline.scanned_lines,
+            unmatched_samples,
+            unmatched_total,
+        },
+    )?;
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     super::projects::touch_updated(project_dir);
@@ -763,6 +917,7 @@ pub fn parse_txt_in(
 
 /// 强制重排编号：按文档顺序重写卷号 1..N、章号每卷内 1..M，落盘并返回新大纲。
 /// 标题与正文不动；重排后编号类问题自然消除，标题类问题保留。
+/// 落盘前把旧产物拷一份备份，可撤销一次；此前残留的旧备份直接覆盖。
 pub fn renumber_in(project_dir: &Path) -> anyhow::Result<ParseOutline> {
     let path = project_dir.join(CONTENT_NAME);
     let text = std::fs::read_to_string(&path)
@@ -776,10 +931,36 @@ pub fn renumber_in(project_dir: &Path) -> anyhow::Result<ParseOutline> {
         }
     }
     content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    std::fs::copy(&path, project_dir.join(CONTENT_BACKUP))
+        .context("failed to back up content.json")?;
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     super::projects::touch_updated(project_dir);
-    Ok(outline_of(&content))
+    Ok(outline_of(&content, project_dir))
+}
+
+/// 撤销重排：用备份恢复 `content.json`，一次性有效（恢复后删备份）。
+/// 重新解析或编辑正文后备份已失效，此时直接报错，前端据 `backup_exists` 决定是否展示入口。
+pub fn restore_backup_in(project_dir: &Path) -> anyhow::Result<ParseOutline> {
+    let backup = project_dir.join(CONTENT_BACKUP);
+    if !backup.is_file() {
+        anyhow::bail!("no renumber backup to restore");
+    }
+    let text = std::fs::read_to_string(&backup).context("failed to read renumber backup")?;
+    // 先校验后落盘：坏备份不覆盖当前内容。
+    let content: NovelContent =
+        serde_json::from_str(&text).context("renumber backup is corrupted")?;
+    if content.schema_version != CONTENT_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported backup schema version: {}",
+            content.schema_version
+        );
+    }
+    std::fs::write(project_dir.join(CONTENT_NAME), text)
+        .context("failed to restore content.json")?;
+    let _ = std::fs::remove_file(&backup);
+    super::projects::touch_updated(project_dir);
+    Ok(outline_of(&content, project_dir))
 }
 /// 读取已落盘的识别大纲：缺失或损坏回落空，不建文件（初始开发阶段不做版本门）。
 pub fn outline_in(project_dir: &Path) -> Option<ParseOutline> {
@@ -801,13 +982,25 @@ pub fn outline_in(project_dir: &Path) -> Option<ParseOutline> {
             return None;
         }
     };
-    Some(outline_of(&content))
+    let mut outline = outline_of(&content, project_dir);
+    // 诊断随解析落盘：重进文件页回显不断档，缺失（旧项目）即无诊断。
+    let diagnostics = read_diagnostics(project_dir);
+    outline.scanned_lines = diagnostics.scanned_lines;
+    outline.unmatched_samples = diagnostics.unmatched_samples;
+    outline.unmatched_total = diagnostics.unmatched_total;
+    Some(outline)
 }
 
 /// 强制重排编号（`AppHandle` 入口）。
 pub fn renumber_content(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ParseOutline> {
     let dir = super::projects::resolve_project_dir(app, id)?;
     renumber_in(&dir)
+}
+
+/// 撤销重排（`AppHandle` 入口）：用备份恢复 `content.json`，一次性有效。
+pub fn restore_backup(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ParseOutline> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    restore_backup_in(&dir)
 }
 
 /// 解析原文（`AppHandle` 入口）。
@@ -889,9 +1082,12 @@ pub fn update_chapter_in(
     chapter.lines = normalized;
     content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
+    // 正文已变：旧重排备份与旧诊断采样不再能安全还原/回显，直接失效。
+    clear_backup(project_dir);
+    clear_diagnostics(project_dir);
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     super::projects::touch_updated(project_dir);
-    Ok(outline_of(&content))
+    Ok(outline_of(&content, project_dir))
 }
 
 /// 读单章正文（`AppHandle` 入口）：下标寻址，越界直接报错。
@@ -1309,7 +1505,9 @@ mod tests {
     fn imports_txt_and_overwrites_on_reimport() {
         let (root, dir) = test_project("import");
         let first = write_source(&root, "first.TXT", "第一卷\n第一章 引子\n正文".as_bytes());
-        let status = import_txt_in(&dir, &first).expect("import");
+        let outcome = import_txt_in(&dir, &first).expect("import");
+        assert_eq!(outcome.encoding, "UTF-8");
+        let status = outcome.status;
         assert!(status.exists);
         assert_eq!(
             u64::from(status.size_bytes),
@@ -1323,11 +1521,59 @@ mod tests {
             "第一卷\n第一章 引子\n正文"
         );
         let second = write_source(&root, "second.txt", "第二卷\n".as_bytes());
-        let status = import_txt_in(&dir, &second).expect("reimport");
-        assert!(status.exists);
+        let outcome = import_txt_in(&dir, &second).expect("reimport");
+        assert_eq!(outcome.encoding, "UTF-8");
+        assert!(outcome.status.exists);
         assert_eq!(
             std::fs::read_to_string(&stored).expect("read stored"),
             "第二卷\n"
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn imports_gbk_and_utf16_sources_with_transcoding() {
+        let (root, dir) = test_project("import-encoding");
+        // GB18030（“第1章 引子” GBK 编码）：自动转 UTF-8。
+        let (gbk_bytes, _, _) = encoding_rs::GB18030.encode("第1章 引子\n正文");
+        let gbk = write_source(&root, "gbk.txt", &gbk_bytes);
+        let outcome = import_txt_in(&dir, &gbk).expect("import gbk");
+        assert_eq!(outcome.encoding, "GB18030");
+        assert!(outcome.status.exists);
+        let stored = dir.join(SOURCES_DIR).join(CONTENT_FILE);
+        assert_eq!(
+            std::fs::read_to_string(&stored).expect("read stored"),
+            "第1章 引子\n正文"
+        );
+        // UTF-16LE 含 BOM：去 BOM 后转码。
+        let mut utf16: Vec<u8> = vec![0xFF, 0xFE];
+        for unit in "第1章 引子\n正文".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        let source = write_source(&root, "utf16.txt", &utf16);
+        let outcome = import_txt_in(&dir, &source).expect("import utf16");
+        assert_eq!(outcome.encoding, "UTF-16LE");
+        assert_eq!(
+            std::fs::read_to_string(&stored).expect("read stored"),
+            "第1章 引子\n正文"
+        );
+        // UTF-8 含 BOM：去 BOM 后原文落盘（顺带修首章匹配不到的老坑）。
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend_from_slice("第一章 引子\n正文".as_bytes());
+        let source = write_source(&root, "bom.txt", &bom);
+        let outcome = import_txt_in(&dir, &source).expect("import bom");
+        assert_eq!(outcome.encoding, "UTF-8");
+        assert_eq!(
+            std::fs::read_to_string(&stored).expect("read stored"),
+            "第一章 引子\n正文"
+        );
+        // 全坏字节：三种编码都解不出，直接报错且不留坏文件。
+        let before = std::fs::read_to_string(&stored).expect("read stored");
+        let bad = write_source(&root, "bad.txt", &[0xFF, 0xFE, 0x00, 0x28, 0xFF]);
+        assert!(import_txt_in(&dir, &bad).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&stored).expect("read stored"),
+            before
         );
         cleanup(&root);
     }
@@ -2089,6 +2335,65 @@ mod tests {
         assert_eq!(stored.volumes[0].number, None);
         assert_eq!(stored.volumes[0].title.as_deref(), Some("序卷 开篇"));
         assert_eq!(stored.volumes[0].chapters[0].number, Some(1));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn renumber_backup_supports_single_undo_and_invalidates_on_edit() {
+        let (root, dir) = test_project("renumber-undo");
+        write_content(&dir, "第一卷 开篇\n第一章 起\n甲\n第三章 跳号\n乙\n");
+        let before = parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        assert!(!before.backup_exists);
+        // 重排改编号：备份落盘，大纲带可撤销标记。
+        let renumbered = renumber_in(&dir).expect("renumber");
+        assert!(renumbered.backup_exists);
+        assert!(dir.join(CONTENT_BACKUP).is_file());
+        let stored: NovelContent = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(CONTENT_NAME)).expect("read content"),
+        )
+        .expect("parse content");
+        assert_eq!(stored.volumes[0].chapters[1].number, Some(2));
+        // 撤销恢复旧编号：一次性有效，用完删备份。
+        let restored = restore_backup_in(&dir).expect("restore");
+        assert!(!restored.backup_exists);
+        assert!(!dir.join(CONTENT_BACKUP).exists());
+        let stored: NovelContent = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(CONTENT_NAME)).expect("read content"),
+        )
+        .expect("parse content");
+        assert_eq!(stored.volumes[0].chapters[1].number, Some(3));
+        // 无备份再撤直接报错，不动文件。
+        assert!(restore_backup_in(&dir).is_err());
+        // 重排后编辑正文：备份失效，前端不再展示撤销入口。
+        renumber_in(&dir).expect("renumber again");
+        assert!(dir.join(CONTENT_BACKUP).is_file());
+        update_chapter_in(&dir, 0, 0, vec!["改".to_string()]).expect("update");
+        assert!(!dir.join(CONTENT_BACKUP).exists());
+        let outline = outline_in(&dir).expect("outline");
+        assert!(!outline.backup_exists);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn parse_collects_unmatched_title_like_lines() {
+        let (root, dir) = test_project("parse-diagnostics");
+        write_content(
+            &dir,
+            "前言一句\n第一卷 开篇\n楔子\n引文\n第一章 起\n甲\n番外：小剧场\n乙\n",
+        );
+        let outline = parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        assert_eq!(outline.scanned_lines, 8);
+        // “楔子”命中卷简介前的采样，“番外：小剧场”藏进上一章正文同样采样。
+        assert!(outline.unmatched_total >= 2);
+        assert!(outline.unmatched_samples.contains(&"楔子".to_string()));
+        assert!(
+            outline
+                .unmatched_samples
+                .contains(&"番外：小剧场".to_string())
+        );
+        assert!(outline.unmatched_samples.len() <= MAX_UNMATCHED_SAMPLES);
+        // 正文行不计入采样。
+        assert!(!outline.unmatched_samples.contains(&"甲".to_string()));
         cleanup(&root);
     }
 
