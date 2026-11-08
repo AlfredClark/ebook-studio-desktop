@@ -308,7 +308,7 @@
     }
     outline = result.data;
     savedContent = draft;
-    toast.success(auto ? m.edit_autosave_saved() : m.edit_save_success());
+    toast.success(auto ? m.edit_autosave_saved({ title: chapterTitle }) : m.edit_save_success());
     if (appliedSpec != null) {
       await runFilter();
     }

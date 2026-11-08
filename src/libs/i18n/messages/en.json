@@ -338,7 +338,7 @@
   "edit_save_success": "Chapter saved",
   "edit_autosave_on": "Auto-save: on",
   "edit_autosave_off": "Auto-save: off",
-  "edit_autosave_saved": "Auto-saved",
+  "edit_autosave_saved": "Auto-saved: {title}",
   "edit_save_failed": "Failed to save chapter",
   "edit_unsaved_title": "Discard unsaved changes?",
   "edit_unsaved_description": "Switching chapters will discard the current unsaved edits. This cannot be undone.",
