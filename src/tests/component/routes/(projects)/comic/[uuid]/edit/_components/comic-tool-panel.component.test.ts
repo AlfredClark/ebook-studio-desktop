@@ -20,10 +20,12 @@ if (typeof ResizeObserver === "undefined") {
 // 右栏图片工具：工具切换走回调，参数区按工具切换，按钮门禁透传。
 const runMock = vi.hoisted(() => vi.fn());
 const clearMock = vi.hoisted(() => vi.fn());
+const cancelMock = vi.hoisted(() => vi.fn());
 
 function renderPanel(
   tool: "convert" | "compress" = "convert",
   target: "jpeg" | "png" | "webp" = "jpeg",
+  running = false,
 ) {
   return render(ComicToolPanel, {
     props: {
@@ -38,12 +40,13 @@ function renderPanel(
       compressQuality: 85,
       compressWebpLossless: false,
       compressPngLevel: 6,
-      running: false,
+      running,
       canRun: false,
       hasOutcome: false,
       progress: null,
       onRun: runMock,
       onClear: clearMock,
+      onCancel: cancelMock,
     },
   });
 }
@@ -103,5 +106,16 @@ describe("图片工具面板", () => {
     await user.click(document.querySelector('[data-value="compress"]') as HTMLElement);
     expect(screen.getByText("Scale")).not.toBeNull();
     expect(screen.queryByText("Target format")).toBeNull();
+  });
+
+  it("运行时主按钮切取消并可用，点击走取消回调", async () => {
+    const user = userEvent.setup();
+    renderPanel("convert", "jpeg", true);
+
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toHaveProperty("disabled", false);
+    await user.click(cancel);
+    expect(cancelMock).toHaveBeenCalledOnce();
+    expect(runMock).not.toHaveBeenCalled();
   });
 });

@@ -38,6 +38,7 @@ macro_rules! collect_commands {
             $crate::commands::comic_files::get_comic_convert_status,
             $crate::commands::comic_files::preview_comic_image_conversion,
             $crate::commands::comic_files::convert_comic_images,
+            $crate::commands::comic_files::cancel_comic_images,
             $crate::commands::comic_files::preview_comic_image_compression,
             $crate::commands::comic_files::get_comic_compress_status,
             $crate::commands::comic_files::compress_comic_images,

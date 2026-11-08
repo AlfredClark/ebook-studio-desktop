@@ -47,6 +47,11 @@ export const commands = {
 	 *  并清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度，前端据此渲染进度。
 	 */
 	convertComicImages: (id: string, target: ImageTargetFormat, options: ConvertOptions) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("convert_comic_images", { id, target, options })),
+	/**
+	 *  取消图片作业：转换/压缩互斥，任一在跑即置旗，编码循环在文件边界处中断；
+	 *  返回是否有在跑作业，无作业时不做任何事。
+	 */
+	cancelComicImages: (id: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("cancel_comic_images", { id })),
 	/**  预览图片压缩：只读 `content.json` + 文件大小，不解码图片。 */
 	previewComicImageCompression: (id: string) => typedError<CompressPreview, CommandError>(__TAURI_INVOKE("preview_comic_image_compression", { id })),
 	/**  查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值。 */
@@ -506,7 +511,9 @@ export type ComicVolumeOutline = {
  */
 export type CommandError = 
 /**  内部错误（`anyhow` 的链式上下文会展开成可读文本） */
-{ kind: "Internal"; message: string };
+{ kind: "Internal"; message: string } | 
+/**  用户取消：长时间作业在文件边界处中断，非失败，前端据此静默或轻提示。 */
+{ kind: "Cancelled"; message: string };
 
 /**  压缩参数：原地重编码，保持源格式与路径不变。 */
 export type CompressOptions = {

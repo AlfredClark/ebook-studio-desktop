@@ -36,6 +36,7 @@
     progress = null,
     onRun,
     onClear,
+    onCancel,
   }: {
     tool: ComicTool;
     target: ImageTargetFormat;
@@ -54,6 +55,7 @@
     progress: number | null;
     onRun: () => void;
     onClear: () => void;
+    onCancel: () => void;
   } = $props();
 
   /** 工具下拉候选项：触发器关闭时靠 `items` 解析展示文案。 */
@@ -253,8 +255,13 @@
     {/if}
   </div>
   <div class="flex shrink-0 gap-2 border-t pt-3">
-    <Button class="min-w-0 flex-1" size="sm" disabled={!canRun} onclick={onRun}>
-      {running ? m.comic_edit_tool_running() : m.comic_edit_tool_run()}
+    <Button
+      class="min-w-0 flex-1"
+      size="sm"
+      disabled={!running && !canRun}
+      onclick={running ? onCancel : onRun}
+    >
+      {running ? m.comic_edit_tool_cancel() : m.comic_edit_tool_run()}
     </Button>
     <Button variant="outline" size="sm" disabled={!hasOutcome} onclick={onClear}>
       {m.comic_edit_tool_reset()}

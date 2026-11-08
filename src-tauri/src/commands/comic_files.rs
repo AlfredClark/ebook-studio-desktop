@@ -107,7 +107,16 @@ pub async fn convert_comic_images(
     target: ImageTargetFormat,
     options: ConvertOptions,
 ) -> CommandResult<ComicOutline> {
-    Ok(comic_images::convert_images(&app, &id, target, &options).await?)
+    comic_images::convert_images(&app, &id, target, &options).await
+}
+
+/// 取消图片作业：转换/压缩互斥，任一在跑即置旗，编码循环在文件边界处中断；
+/// 返回是否有在跑作业，无作业时不做任何事。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn cancel_comic_images(app: tauri::AppHandle, id: String) -> CommandResult<bool> {
+    Ok(comic_images::cancel_images(&app, &id)?)
 }
 
 /// 预览图片压缩：只读 `content.json` + 文件大小，不解码图片。
@@ -139,5 +148,5 @@ pub async fn compress_comic_images(
     id: String,
     options: CompressOptions,
 ) -> CommandResult<CompressOutcome> {
-    Ok(comic_images::compress_images(&app, &id, &options).await?)
+    comic_images::compress_images(&app, &id, &options).await
 }

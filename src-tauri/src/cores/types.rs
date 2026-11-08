@@ -13,6 +13,9 @@ pub enum CommandError {
     /// 内部错误（`anyhow` 的链式上下文会展开成可读文本）
     #[error("Internal Error: {0}")]
     Internal(String),
+    /// 用户取消：长时间作业在文件边界处中断，非失败，前端据此静默或轻提示。
+    #[error("Cancelled: {0}")]
+    Cancelled(String),
 }
 
 /// 让命令内可以直接对 `anyhow::Result` 使用 `?`，错误自动转成 [`CommandError::Internal`]

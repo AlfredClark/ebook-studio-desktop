@@ -354,66 +354,95 @@
       return;
     }
     setConvertRunning(uuid, true);
-    const result = await commands
-      .convertComicImages(uuid, convertTarget, {
-        quality: convertQuality,
-        webp_lossless: convertWebpLossless,
-        png_level: convertPngLevel,
-        force: convertForce,
-      })
-      .result();
-    setConvertRunning(uuid, false);
-    if (result.status === "error") {
-      toast.error(m.comic_edit_convert_failed());
-      return;
+    try {
+      const result = await commands
+        .convertComicImages(uuid, convertTarget, {
+          quality: convertQuality,
+          webp_lossless: convertWebpLossless,
+          png_level: convertPngLevel,
+          force: convertForce,
+        })
+        .result();
+      if (result.status === "error") {
+        if (result.error.kind === "Cancelled") {
+          toast.info(m.comic_edit_tool_cancelled());
+          return;
+        }
+        toast.error(m.comic_edit_convert_failed());
+        return;
+      }
+      const prevIndex = location?.index ?? 1;
+      outline = result.data;
+      working = toWorking(result.data.volumes);
+      saved = toWorking(result.data.volumes);
+      const flat = flattenPages(working);
+      selectedPath = flat[Math.min(prevIndex - 1, flat.length - 1)] ?? null;
+      if (selectedPath != null) {
+        void loadPreview(selectedPath);
+      } else {
+        previewUrl = null;
+        previewSize = null;
+        previewDims = null;
+        previewLoading = false;
+        previewFailed = false;
+      }
+      toast.success(m.comic_edit_convert_success());
+    } finally {
+      setConvertRunning(uuid, false);
     }
-    const prevIndex = location?.index ?? 1;
-    outline = result.data;
-    working = toWorking(result.data.volumes);
-    saved = toWorking(result.data.volumes);
-    const flat = flattenPages(working);
-    selectedPath = flat[Math.min(prevIndex - 1, flat.length - 1)] ?? null;
-    if (selectedPath != null) {
-      void loadPreview(selectedPath);
-    } else {
-      previewUrl = null;
-      previewSize = null;
-      previewDims = null;
-      previewLoading = false;
-      previewFailed = false;
-    }
-    toast.success(m.comic_edit_convert_success());
   }
 
   /** 确认压缩：原地重编码，路径不变故选中无需跟随；成功提示处理/跳过数。 */
   async function handleCompressConfirm(): Promise<void> {
     setCompressRunning(uuid, true);
-    const result = await commands
-      .compressComicImages(uuid, {
-        scale_percent: compressScale,
-        grayscale: compressGrayscale,
-        quality: compressQuality,
-        webp_lossless: compressWebpLossless,
-        png_level: compressPngLevel,
-      })
-      .result();
-    setCompressRunning(uuid, false);
-    if (result.status === "error") {
-      toast.error(m.comic_edit_compress_failed());
+    try {
+      const result = await commands
+        .compressComicImages(uuid, {
+          scale_percent: compressScale,
+          grayscale: compressGrayscale,
+          quality: compressQuality,
+          webp_lossless: compressWebpLossless,
+          png_level: compressPngLevel,
+        })
+        .result();
+      if (result.status === "error") {
+        if (result.error.kind === "Cancelled") {
+          toast.info(m.comic_edit_tool_cancelled());
+          return;
+        }
+        toast.error(m.comic_edit_compress_failed());
+        return;
+      }
+      outline = result.data.outline;
+      working = toWorking(result.data.outline.volumes);
+      saved = toWorking(result.data.outline.volumes);
+      if (selectedPath != null) {
+        void loadPreview(selectedPath);
+      }
+      toast.success(
+        m.comic_edit_compress_success_detail({
+          processed: result.data.processed,
+          skipped: result.data.skipped,
+        }),
+      );
+    } finally {
+      setCompressRunning(uuid, false);
+    }
+  }
+
+  /** 取消图片作业：转换/压缩互斥，任一在跑即置旗；在跑的任务随后以取消结算并轻提示。 */
+  async function handleToolCancel(): Promise<void> {
+    if (!toolRunning) {
       return;
     }
-    outline = result.data.outline;
-    working = toWorking(result.data.outline.volumes);
-    saved = toWorking(result.data.outline.volumes);
-    if (selectedPath != null) {
-      void loadPreview(selectedPath);
+    const result = await commands.cancelComicImages(uuid).result();
+    if (result.status === "error") {
+      toast.error(m.comic_edit_tool_cancel_failed());
+      return;
     }
-    toast.success(
-      m.comic_edit_compress_success_detail({
-        processed: result.data.processed,
-        skipped: result.data.skipped,
-      }),
-    );
+    if (!result.data) {
+      toast.info(m.comic_edit_tool_cancel_none());
+    }
   }
 
   /** 键盘话重排：选中页所在话整体上移 / 下移一位；转换中锁定。 */
@@ -978,6 +1007,7 @@
               progress={toolProgress}
               onRun={() => void handleToolRun()}
               onClear={handleToolReset}
+              onCancel={() => void handleToolCancel()}
             />
           </div>
         </div>

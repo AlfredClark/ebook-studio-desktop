@@ -116,6 +116,35 @@ static COMPRESSING: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+/// 取消标记：`cancelComicImages` 置旗，编码循环在文件边界处检查；
+/// 进程重启即清空，与进行中注册表同一生命周期。
+static CANCEL_REQUESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// 取消信号：前后端约定的错误标记，入口处映射为 [`CommandError::Cancelled`]。
+pub const CANCELLED_MARKER: &str = "cancelled by user";
+
+/// 请求取消作业：在跑才置旗，调用方据返回值决定 toast 措辞。
+pub fn request_cancel_images(id: &str) -> bool {
+    let running = is_busy(id);
+    if running && let Ok(mut flags) = CANCEL_REQUESTS.lock() {
+        flags.insert(id.to_string());
+    }
+    running
+}
+
+/// 是否有取消请求：编码循环每文件检查一次，阶段二（快速改名）不检查。
+fn is_cancel_requested(id: &str) -> bool {
+    CANCEL_REQUESTS.lock().is_ok_and(|flags| flags.contains(id))
+}
+
+/// 清除取消标记：作业无论成功失败取消，结算时都清理，避免影响下次同项目作业。
+fn clear_cancel(id: &str) {
+    if let Ok(mut flags) = CANCEL_REQUESTS.lock() {
+        flags.remove(id);
+    }
+}
+
 /// 是否有转换在跑（解析 / 导入互斥用）。
 pub fn is_converting(id: &str) -> bool {
     CONVERTING.lock().is_ok_and(|jobs| jobs.contains_key(id))
@@ -176,11 +205,12 @@ fn update_convert_progress(id: &str, done: u32, total: u32) {
     }
 }
 
-/// 注销作业：成功失败都走，锁中毒也尽力清理。
+/// 注销作业：成功失败取消都走，锁中毒也尽力清理；同时清取消标记。
 fn finish_convert(id: &str) {
     if let Ok(mut jobs) = CONVERTING.lock() {
         jobs.remove(id);
     }
+    clear_cancel(id);
 }
 
 /// 压缩参数：原地重编码，保持源格式与路径不变。
@@ -295,11 +325,12 @@ fn update_compress_progress(id: &str, done: u32, total: u32) {
     }
 }
 
-/// 注销压缩作业：成功失败都走。
+/// 注销压缩作业：成功失败取消都走；同时清取消标记。
 fn finish_compress(id: &str) {
     if let Ok(mut jobs) = COMPRESSING.lock() {
         jobs.remove(id);
     }
+    clear_cancel(id);
 }
 
 /// 暂存目录：项目根下的隐藏目录，编码期中转，成功 / 失败后清理。
@@ -496,13 +527,30 @@ pub fn convert_status_of(id: &str) -> ComicConvertStatus {
     convert_status(id)
 }
 
+/// 取消映射：含取消标记的失败转 `Cancelled`，其余走 `Internal`。
+fn map_job_error(err: &anyhow::Error) -> crate::cores::types::CommandError {
+    let text = format!("{err:#}");
+    if text.contains(CANCELLED_MARKER) {
+        crate::cores::types::CommandError::Cancelled(text)
+    } else {
+        crate::cores::types::CommandError::Internal(text)
+    }
+}
+
+/// 请求取消图片作业（`AppHandle` 入口）：转换/压缩互斥，任一在跑即置旗；
+/// 返回是否有在跑作业供前端措辞，无作业时不做任何事。
+pub fn cancel_images(app: &tauri::AppHandle, id: &str) -> anyhow::Result<bool> {
+    let _dir = super::projects::resolve_project_dir(app, id)?;
+    Ok(request_cancel_images(id))
+}
+
 /// 格式转换（`AppHandle` 入口）：阻塞池执行并推送逐文件进度，前端据此渲染进度。
 pub async fn convert_images(
     app: &tauri::AppHandle,
     id: &str,
     target: ImageTargetFormat,
     options: &ConvertOptions,
-) -> anyhow::Result<ComicOutline> {
+) -> Result<ComicOutline, crate::cores::types::CommandError> {
     use tauri::Emitter;
 
     let dir = super::projects::resolve_project_dir(app, id)?;
@@ -511,6 +559,7 @@ pub async fn convert_images(
     let handle = app.clone();
     let report_id = id.to_string();
     let progress_id = id.to_string();
+    let cancel_id = id.to_string();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let on_progress = move |done: u32, total: u32| {
             update_convert_progress(&progress_id, done, total);
@@ -523,11 +572,21 @@ pub async fn convert_images(
                 },
             );
         };
-        convert_images_in(&dir, target, &options, Some(&on_progress))
+        let should_cancel = || is_cancel_requested(&cancel_id);
+        convert_images_in(
+            &dir,
+            target,
+            &options,
+            Some(&on_progress),
+            Some(&should_cancel),
+        )
     })
     .await;
     finish_convert(id);
-    outcome.context("convert task panicked")?
+    match outcome.map_err(|err| crate::cores::types::CommandError::Internal(format!("{err:#}"))) {
+        Ok(result) => result.map_err(|err| map_job_error(&err)),
+        Err(err) => Err(err),
+    }
 }
 
 /// 格式转换内核：事务性两阶段（暂存区编码→批量替换），成功后更新
@@ -537,6 +596,7 @@ fn convert_images_in(
     target: ImageTargetFormat,
     options: &ConvertOptions,
     progress: Option<&dyn Fn(u32, u32)>,
+    should_cancel: Option<&dyn Fn() -> bool>,
 ) -> anyhow::Result<ComicOutline> {
     options.validate()?;
     let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
@@ -551,10 +611,18 @@ fn convert_images_in(
     let staging = project_dir.join(STAGING_DIR);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).context("failed to create convert staging dir")?;
-    let staged =
-        stage_all(&images, &staging, &jobs, target, options, progress).inspect_err(|_| {
-            let _ = std::fs::remove_dir_all(&staging);
-        })?;
+    let staged = stage_all(
+        &images,
+        &staging,
+        &jobs,
+        target,
+        options,
+        progress,
+        should_cancel,
+    )
+    .inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&staging);
+    })?;
     // 阶段二：批量替换（rename 覆盖 + 删原文件），随后落盘 content.json。
     for (index, job) in jobs.iter().enumerate() {
         let dest = comic_files::join_images_path(&images, &job.dest_rel)?;
@@ -598,7 +666,7 @@ fn convert_images_in(
         .with_context(|| "content.json missing after convert".to_string())
 }
 
-/// 阶段一：逐张解码编码进暂存区并上报进度。
+/// 阶段一：逐张解码编码进暂存区并上报进度；取消标记在文件边界处检查。
 fn stage_all(
     images: &Path,
     staging: &Path,
@@ -606,10 +674,14 @@ fn stage_all(
     target: ImageTargetFormat,
     options: &ConvertOptions,
     progress: Option<&dyn Fn(u32, u32)>,
+    should_cancel: Option<&dyn Fn() -> bool>,
 ) -> anyhow::Result<Vec<PathBuf>> {
     let total = u32::try_from(jobs.len()).unwrap_or(u32::MAX);
     let mut staged = Vec::with_capacity(jobs.len());
     for (index, job) in jobs.iter().enumerate() {
+        if should_cancel.is_some_and(|cancelled| cancelled()) {
+            anyhow::bail!(CANCELLED_MARKER);
+        }
         let src = comic_files::join_images_path(images, &job.src_rel)?;
         let bytes =
             std::fs::read(&src).with_context(|| format!("failed to read {}", src.display()))?;
@@ -715,7 +787,7 @@ pub async fn compress_images(
     app: &tauri::AppHandle,
     id: &str,
     options: &CompressOptions,
-) -> anyhow::Result<CompressOutcome> {
+) -> Result<CompressOutcome, crate::cores::types::CommandError> {
     use tauri::Emitter;
 
     let dir = super::projects::resolve_project_dir(app, id)?;
@@ -724,6 +796,7 @@ pub async fn compress_images(
     let handle = app.clone();
     let report_id = id.to_string();
     let progress_id = id.to_string();
+    let cancel_id = id.to_string();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let on_progress = move |done: u32, total: u32| {
             update_compress_progress(&progress_id, done, total);
@@ -736,11 +809,15 @@ pub async fn compress_images(
                 },
             );
         };
-        compress_images_in(&dir, &options, Some(&on_progress))
+        let should_cancel = || is_cancel_requested(&cancel_id);
+        compress_images_in(&dir, &options, Some(&on_progress), Some(&should_cancel))
     })
     .await;
     finish_compress(id);
-    outcome.context("compress task panicked")?
+    match outcome.map_err(|err| crate::cores::types::CommandError::Internal(format!("{err:#}"))) {
+        Ok(result) => result.map_err(|err| map_job_error(&err)),
+        Err(err) => Err(err),
+    }
 }
 
 /// 压缩内核：事务性两阶段（暂存区编码→原地覆盖），路径不变故不写 `content.json`；
@@ -749,6 +826,7 @@ fn compress_images_in(
     project_dir: &Path,
     options: &CompressOptions,
     progress: Option<&dyn Fn(u32, u32)>,
+    should_cancel: Option<&dyn Fn() -> bool>,
 ) -> anyhow::Result<CompressOutcome> {
     options.validate()?;
     let content = comic_files::read_content(project_dir)?;
@@ -770,8 +848,8 @@ fn compress_images_in(
     let staging = project_dir.join(COMPRESS_STAGING_DIR);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).context("failed to create compress staging dir")?;
-    let outcome =
-        stage_compress_all(&images, &staging, &rels, options, progress).inspect_err(|_| {
+    let outcome = stage_compress_all(&images, &staging, &rels, options, progress, should_cancel)
+        .inspect_err(|_| {
             let _ = std::fs::remove_dir_all(&staging);
         })?;
     for (rel, staged) in rels.iter().zip(outcome.staged.iter()) {
@@ -803,13 +881,14 @@ struct CompressStageOutcome {
     skipped: u32,
 }
 
-/// 压缩阶段一：逐张解码→判灰跳过→变换→按源格式编码进暂存区。
+/// 压缩阶段一：逐张解码→判灰跳过→变换→按源格式编码进暂存区；取消标记在文件边界处检查。
 fn stage_compress_all(
     images: &Path,
     staging: &Path,
     rels: &[String],
     options: &CompressOptions,
     progress: Option<&dyn Fn(u32, u32)>,
+    should_cancel: Option<&dyn Fn() -> bool>,
 ) -> anyhow::Result<CompressStageOutcome> {
     let total = u32::try_from(rels.len()).unwrap_or(u32::MAX);
     // 质量参数复用转换编码器：按源格式分发，其余忽略。
@@ -823,6 +902,9 @@ fn stage_compress_all(
     let mut processed = 0u32;
     let mut skipped = 0u32;
     for (index, rel) in rels.iter().enumerate() {
+        if should_cancel.is_some_and(|cancelled| cancelled()) {
+            anyhow::bail!(CANCELLED_MARKER);
+        }
         let ext = normalized_ext(rel)?;
         let target = target_of_ext(&ext)?;
         let src = comic_files::join_images_path(images, rel)?;
@@ -979,6 +1061,73 @@ mod tests {
     }
 
     #[test]
+    fn cancel_flag_lifecycle() {
+        let id = "cancel-flag-lifecycle";
+        // 无在跑作业：不置旗，返回 false。
+        assert!(!request_cancel_images(id));
+        register_convert(id).expect("register");
+        assert!(request_cancel_images(id));
+        assert!(is_cancel_requested(id));
+        // 结算即清理：下次同项目作业不受影响。
+        finish_convert(id);
+        assert!(!is_cancel_requested(id));
+        assert!(!request_cancel_images(id));
+    }
+
+    #[test]
+    fn convert_aborts_on_cancel_before_touching_anything() {
+        let (root, dir) = test_project("cancel-convert");
+        seed_images(&dir, &["a.png", "b.png"]);
+        let result = convert_images_in(
+            &dir,
+            ImageTargetFormat::Jpeg,
+            &valid_options(),
+            None,
+            Some(&|| true),
+        );
+        let err = format!("{:#}", result.expect_err("cancelled convert"));
+        assert!(err.contains(CANCELLED_MARKER));
+        // 原子性：content.json 与源文件都未动，暂存区已清理。
+        assert_eq!(
+            read_paths(&dir),
+            vec!["a.png".to_string(), "b.png".to_string()]
+        );
+        assert!(!dir.join(".tmp-convert").exists());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn compress_aborts_on_cancel_before_touching_anything() {
+        let (root, dir) = test_project("cancel-compress");
+        seed_images(&dir, &["a.png", "b.png"]);
+        let before: Vec<u8> =
+            std::fs::read(dir.join("sources").join("images").join("a.png")).expect("read image");
+        let result = compress_images_in(&dir, &valid_compress_options(), None, Some(&|| true));
+        let err = format!("{:#}", result.expect_err("cancelled compress"));
+        assert!(err.contains(CANCELLED_MARKER));
+        // 原地覆盖未发生：字节一致，暂存区已清理。
+        let after: Vec<u8> =
+            std::fs::read(dir.join("sources").join("images").join("a.png")).expect("read image");
+        assert_eq!(before, after);
+        assert!(!dir.join(".tmp-compress").exists());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn cancel_marker_maps_to_cancelled_error() {
+        let err = map_job_error(&anyhow::anyhow!(CANCELLED_MARKER));
+        assert!(matches!(
+            err,
+            crate::cores::types::CommandError::Cancelled(_)
+        ));
+        let err = map_job_error(&anyhow::anyhow!("boom"));
+        assert!(matches!(
+            err,
+            crate::cores::types::CommandError::Internal(_)
+        ));
+    }
+
+    #[test]
     fn rejects_invalid_options() {
         let (root, dir) = test_project("options");
         seed_images(&dir, &["a.png"]);
@@ -986,12 +1135,14 @@ mod tests {
             quality: 0,
             ..valid_options()
         };
-        assert!(convert_images_in(&dir, ImageTargetFormat::Jpeg, &bad_quality, None).is_err());
+        assert!(
+            convert_images_in(&dir, ImageTargetFormat::Jpeg, &bad_quality, None, None).is_err()
+        );
         let bad_level = ConvertOptions {
             png_level: 10,
             ..valid_options()
         };
-        assert!(convert_images_in(&dir, ImageTargetFormat::Png, &bad_level, None).is_err());
+        assert!(convert_images_in(&dir, ImageTargetFormat::Png, &bad_level, None, None).is_err());
         cleanup(&root);
     }
 
@@ -1041,6 +1192,7 @@ mod tests {
             Some(&|_done: u32, _total: u32| {
                 progress_calls.set(progress_calls.get() + 1);
             }),
+            None,
         )
         .expect("convert");
         assert_eq!(progress_calls.get(), 2);
@@ -1066,7 +1218,7 @@ mod tests {
         let (root, dir) = test_project("conflict");
         seed_images(&dir, &["a.jpg", "a.png"]);
         let before = read_paths(&dir);
-        let result = convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None);
+        let result = convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None, None);
         assert!(result.is_err());
         assert_eq!(read_paths(&dir), before);
         let images = dir.join("sources").join("images");
@@ -1083,7 +1235,7 @@ mod tests {
         // bad.png 写入垃圾字节。
         let images = dir.join("sources").join("images");
         std::fs::write(images.join("bad.png"), b"not-an-image").expect("corrupt image");
-        let result = convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None);
+        let result = convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None, None);
         assert!(result.is_err());
         assert!(images.join("good.png").is_file());
         assert!(!images.join("good.jpg").exists());
@@ -1097,8 +1249,9 @@ mod tests {
     fn noop_when_everything_matches_and_no_force() {
         let (root, dir) = test_project("noop");
         seed_images(&dir, &["a.jpg", "b.jpg"]);
-        let outline = convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None)
-            .expect("noop convert");
+        let outline =
+            convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None, None)
+                .expect("noop convert");
         assert_eq!(outline.page_count, 2);
         assert_eq!(read_paths(&dir), vec!["a.jpg", "b.jpg"]);
         cleanup(&root);
@@ -1112,8 +1265,8 @@ mod tests {
             force: true,
             ..valid_options()
         };
-        let outline =
-            convert_images_in(&dir, ImageTargetFormat::Jpeg, &options, None).expect("convert");
+        let outline = convert_images_in(&dir, ImageTargetFormat::Jpeg, &options, None, None)
+            .expect("convert");
         assert_eq!(outline.page_count, 1);
         let images = dir.join("sources").join("images");
         assert!(images.join("a.jpg").is_file());
@@ -1164,17 +1317,17 @@ mod tests {
             scale_percent: 24,
             ..valid_compress_options()
         };
-        assert!(compress_images_in(&dir, &bad_scale, None).is_err());
+        assert!(compress_images_in(&dir, &bad_scale, None, None).is_err());
         let bad_scale_high = CompressOptions {
             scale_percent: 101,
             ..valid_compress_options()
         };
-        assert!(compress_images_in(&dir, &bad_scale_high, None).is_err());
+        assert!(compress_images_in(&dir, &bad_scale_high, None, None).is_err());
         let bad_quality = CompressOptions {
             quality: 0,
             ..valid_compress_options()
         };
-        assert!(compress_images_in(&dir, &bad_quality, None).is_err());
+        assert!(compress_images_in(&dir, &bad_quality, None, None).is_err());
         cleanup(&root);
     }
 
@@ -1231,7 +1384,7 @@ mod tests {
             scale_percent: 50,
             ..valid_compress_options()
         };
-        let outcome = compress_images_in(&dir, &options, None).expect("compress");
+        let outcome = compress_images_in(&dir, &options, None, None).expect("compress");
         assert_eq!(outcome.processed, 1);
         assert_eq!(outcome.skipped, 0);
         // 路径不变，尺寸减半。
@@ -1275,7 +1428,7 @@ mod tests {
             grayscale: true,
             ..valid_compress_options()
         };
-        let outcome = compress_images_in(&dir, &options, None).expect("compress");
+        let outcome = compress_images_in(&dir, &options, None, None).expect("compress");
         assert_eq!(outcome.processed, 1);
         assert_eq!(outcome.skipped, 1);
         // 已灰度原文件不动，彩色图被灰度化。
@@ -1310,7 +1463,7 @@ mod tests {
             grayscale: true,
             ..valid_compress_options()
         };
-        let outcome = compress_images_in(&dir, &options, None).expect("compress");
+        let outcome = compress_images_in(&dir, &options, None, None).expect("compress");
         assert_eq!((outcome.processed, outcome.skipped), (1, 0));
         cleanup(&root);
     }
@@ -1322,7 +1475,7 @@ mod tests {
         let images = dir.join("sources").join("images");
         std::fs::write(images.join("bad.png"), b"not-an-image").expect("corrupt image");
         let before = std::fs::read(images.join("good.png")).expect("read good");
-        let result = compress_images_in(&dir, &valid_compress_options(), None);
+        let result = compress_images_in(&dir, &valid_compress_options(), None, None);
         assert!(result.is_err());
         assert_eq!(
             std::fs::read(images.join("good.png")).expect("read good after"),
