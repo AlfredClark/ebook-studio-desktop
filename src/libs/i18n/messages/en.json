@@ -539,6 +539,8 @@
   "comic_files_source_description": "Chosen directory is copied as sources/images",
   "comic_files_source_choose": "Choose folder…",
   "comic_files_source_change": "Choose again…",
+  "comic_files_reselect_confirm_title": "Choose a different folder?",
+  "comic_files_reselect_confirm_description": "This will clear all imported images (including appended ones), page order, and episode titles. You will need to parse again.",
   "comic_files_append": "Add images",
   "comic_files_appending": "Adding…",
   "comic_files_append_success": "Added {added} images (skipped {skipped}); take effect after parsing",

@@ -80,6 +80,9 @@
     }
   }
 
+  /** 重新选择确认框：纯 UI 态，全量重建会清空图片与排好的顺序，确认后才选目录。 */
+  let reselectConfirmOpen = $state(false);
+
   /** 选目录并导入：对话框取消直接返回；成功刷新状态，失败 toast。 */
   async function handleChoose(): Promise<void> {
     let picked: string | string[] | null;
@@ -259,7 +262,13 @@
             {status}
             {importing}
             {appending}
-            onChoose={() => void handleChoose()}
+            onChoose={() => {
+              if (status?.exists === true) {
+                reselectConfirmOpen = true;
+              } else {
+                void handleChoose();
+              }
+            }}
             onAppend={() => void handleAppend()}
           />
           {#if orphans != null && orphans.paths.length > 0}
@@ -367,4 +376,12 @@
   cancelLabel={m.projects_create_cancel()}
   confirmLabel={m.comic_files_orphan_clean()}
   onConfirm={() => void handleOrphanClean()}
+/>
+<ConfirmDialog
+  bind:open={reselectConfirmOpen}
+  title={m.comic_files_reselect_confirm_title()}
+  description={m.comic_files_reselect_confirm_description()}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_files_source_change()}
+  onConfirm={() => void handleChoose()}
 />

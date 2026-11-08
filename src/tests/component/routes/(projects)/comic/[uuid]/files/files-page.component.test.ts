@@ -153,4 +153,23 @@ describe("漫画文件步骤页孤儿清理", () => {
     });
     expect(screen.getByText("第1话")).not.toBeNull();
   });
+
+  it("重新选择先确认，确认后才打开目录选择器", async () => {
+    const user = userEvent.setup();
+    openMock.mockReturnValue(Promise.resolve("/tmp/reselect-src"));
+    importMock.mockReturnValue(fakeCommand({ status: "ok", data: status }));
+    render(FilesPage);
+    await screen.findByText("第1话");
+
+    const buttons = screen.getAllByRole("button", { name: "Choose again…" });
+    await user.click(buttons[0]);
+
+    expect(await screen.findByText("Choose a different folder?")).not.toBeNull();
+    expect(openMock).not.toHaveBeenCalled();
+    const confirms = screen.getAllByRole("button", { name: "Choose again…" });
+    await user.click(confirms[confirms.length - 1]);
+
+    expect(openMock).toHaveBeenCalledOnce();
+    expect(importMock).toHaveBeenCalledWith("abc-uuid", "/tmp/reselect-src");
+  });
 });

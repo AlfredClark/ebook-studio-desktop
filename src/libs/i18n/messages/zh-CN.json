@@ -539,6 +539,8 @@
   "comic_files_source_description": "选择漫画目录后复制为 sources/images",
   "comic_files_source_choose": "选择目录…",
   "comic_files_source_change": "重新选择…",
+  "comic_files_reselect_confirm_title": "重新选择目录？",
+  "comic_files_reselect_confirm_description": "将清空当前已导入的全部图片（含追加的）、已排好的顺序与话标题，需重新解析。",
   "comic_files_append": "添加图片",
   "comic_files_appending": "添加中…",
   "comic_files_append_success": "已加入 {added} 张（跳过 {skipped} 张），去解析后生效",
