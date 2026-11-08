@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use zip::write::SimpleFileOptions;
 
-use super::comic_build::{comic_heading_page, page_number, page_title_width};
+use super::comic_build::{comic_heading_page, page_context_width, page_global_width, page_number};
 use super::comic_files::read_content;
 use super::novel_build::count_width;
 use super::novel_export::{
@@ -207,6 +207,7 @@ fn volume_dir_name(
         title,
         saturating_u32(volume_no),
         volume_width,
+        volume_width,
     );
     novel_package::sanitize_stem(&rendered)
 }
@@ -216,6 +217,7 @@ fn page_stem(
     volume_title: Option<&str>,
     number: u32,
     page_width: usize,
+    page_global: usize,
     titles: &BuildTitleOptions,
 ) -> String {
     let rendered = comic_heading_page(
@@ -224,6 +226,7 @@ fn page_stem(
         volume_title,
         number,
         page_width,
+        page_global,
     );
     novel_package::sanitize_stem(&rendered)
 }
@@ -302,7 +305,7 @@ pub fn export_in(
             image_entries.push((rel, PathBuf::from(absolute)));
         }
         let volume_width = count_width(content.volumes.len());
-        let page_width = page_title_width(&content, titles.chapter_numbering);
+        let page_global = page_global_width(&content);
         // 平铺（单个无标题卷）无子目录，其余按话建子目录。
         let grouped = content.volumes.len() > 1
             || content
@@ -323,7 +326,18 @@ pub fn export_in(
                 let local = page_index + 1;
                 let number =
                     page_number(global_seq, saturating_u32(local), titles.chapter_numbering);
-                let stem_name = page_stem(volume.title.as_deref(), number, page_width, titles);
+                let stem_name = page_stem(
+                    volume.title.as_deref(),
+                    number,
+                    page_context_width(
+                        &content,
+                        volume.pages.len(),
+                        grouped,
+                        titles.chapter_numbering,
+                    ),
+                    page_global,
+                    titles,
+                );
                 let source = project_dir
                     .join("sources")
                     .join("images")
@@ -596,9 +610,9 @@ mod tests {
 
     fn default_titles() -> BuildTitleOptions {
         BuildTitleOptions {
-            chapter_kind: TxtTitleKind::Arabic,
+            chapter_kind: TxtTitleKind::Padded,
             chapter_pattern: String::new(),
-            volume_kind: TxtTitleKind::Original,
+            volume_kind: TxtTitleKind::Arabic,
             volume_pattern: String::new(),
             chapter_numbering: ChapterNumbering::PerVolume,
         }
@@ -620,13 +634,13 @@ mod tests {
             None,
         )
         .expect("export");
-        // 混合源：顶层散图收进收纳话，页名按话内编号；清单记相对 dest 的路径。
+        // 混合源：顶层散图收进收纳话（extra 排首为第 1 话），页名按话内编号补零；清单记相对 dest 的路径。
         let target = dest.join("雾镇");
-        assert!(target.join("第1话").join("第1页.png").is_file());
-        assert!(target.join("第1话").join("第2页.png").is_file());
-        assert!(target.join("额外").join("第1页.png").is_file());
+        assert!(target.join("第2话").join("01.png").is_file());
+        assert!(target.join("第2话").join("02.png").is_file());
+        assert!(target.join("第1话").join("01.png").is_file());
         assert_eq!(outcome.dir, target.to_str().expect("utf8 dest"));
-        assert!(outcome.files.contains(&"雾镇/第1话/第1页.png".to_string()));
+        assert!(outcome.files.contains(&"雾镇/第2话/01.png".to_string()));
         cleanup(&root);
     }
 
@@ -651,7 +665,7 @@ mod tests {
         .expect("export");
         // 未勾选封面，原画目录仍必带封面。
         assert!(dest.join("雾镇").join("cover.png").is_file());
-        assert!(dest.join("雾镇").join("第1页.png").is_file());
+        assert!(dest.join("雾镇").join("01.png").is_file());
         cleanup(&root);
     }
 
@@ -688,7 +702,7 @@ mod tests {
         assert!(!dest.join("雾镇.epub").exists());
         assert!(dest.join("雾镇").join("雾镇.png").is_file());
         assert!(dest.join("雾镇").join("雾镇").join("cover.png").is_file());
-        assert!(dest.join("雾镇").join("雾镇").join("第1页.png").is_file());
+        assert!(dest.join("雾镇").join("雾镇").join("01.png").is_file());
         assert!(!dest.join("雾镇").join("雾镇").join("雾镇.epub").exists());
         assert!(outcome.files.contains(&"雾镇/雾镇.epub".to_string()));
         assert!(outcome.files.contains(&"雾镇/雾镇.png".to_string()));
@@ -815,7 +829,7 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            vec!["第1话/第1页.png".to_string(), "第1话/第2页.png".to_string(),]
+            vec!["第1话/01.png".to_string(), "第1话/02.png".to_string(),]
         );
         cleanup(&root);
     }
@@ -843,11 +857,11 @@ mod tests {
             None,
         )
         .expect("export");
-        // 自然排序下乙在前：乙为第1话（P01/P02），甲为第2话（P03）。
+        // 自然排序下乙在前：乙为第1话（P01/P02），甲为第2话（P03）；话目录仅编号不带原名。
         let target = dest.join("精选");
-        assert!(target.join("第1话 乙").join("P01.png").is_file());
-        assert!(target.join("第2话 甲").join("P03.png").is_file());
-        assert!(outcome.files.contains(&"精选/第2话 甲/P03.png".to_string()));
+        assert!(target.join("第1话").join("P01.png").is_file());
+        assert!(target.join("第2话").join("P03.png").is_file());
+        assert!(outcome.files.contains(&"精选/第2话/P03.png".to_string()));
         cleanup(&root);
     }
 

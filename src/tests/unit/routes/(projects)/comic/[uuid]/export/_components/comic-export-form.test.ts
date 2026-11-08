@@ -3,6 +3,8 @@ import {
   COMIC_IMAGES_MODES,
   COMIC_PAGE_TITLE_KINDS,
   COMIC_VOLUME_TITLE_KINDS,
+  DEFAULT_COMIC_PAGE_PATTERN,
+  DEFAULT_COMIC_VOLUME_PATTERN,
   canExport,
   isValidCustomName,
   isValidImageTitles,
@@ -54,12 +56,17 @@ describe("漫画导出表单", () => {
     expect(COMIC_PAGE_TITLE_KINDS).toContain("custom");
   });
 
+  it("自定义默认值与构建页一致：话不带原名、页为纯数字", () => {
+    expect(DEFAULT_COMIC_VOLUME_PATTERN).toBe("第#N话");
+    expect(DEFAULT_COMIC_PAGE_PATTERN).toBe("#N");
+  });
+
   it("原图标题合法：话页自定义模板各自非空", () => {
     expect(isValidTitlePattern("  ")).toBe(false);
     expect(isValidImageTitles("arabic", "", "original", "")).toBe(true);
     expect(isValidImageTitles("custom", "", "original", "")).toBe(false);
     expect(isValidImageTitles("arabic", "", "custom", "  ")).toBe(false);
-    expect(isValidImageTitles("custom", "第#N页", "custom", "第#N话 #T")).toBe(true);
+    expect(isValidImageTitles("custom", "#N", "custom", "第#N话")).toBe(true);
   });
 
   it("原图形态候选：文件夹优先", () => {

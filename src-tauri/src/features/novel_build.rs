@@ -276,7 +276,8 @@ pub fn build_in(
 ) -> anyhow::Result<BuildOutcome> {
     use super::epub_template::read_template_file_in;
     use super::novel_export::{
-        ChapterNumbering, TxtTitleKind, chapter_number, chapter_number_width, heading,
+        ChapterNumbering, TxtTitleKind, chapter_context_width, chapter_global_width,
+        chapter_number, heading,
     };
     use super::project_metadata::load_or_init_metadata_in;
 
@@ -345,7 +346,7 @@ pub fn build_in(
     // 标题模板数字补零宽度：与导出同口径（最低 2 位）。
     let volume_number_width =
         super::novel_export::number_width(content.volumes.iter().map(|volume| volume.number));
-    let chapter_number_width = chapter_number_width(&content, titles.chapter_numbering);
+    let chapter_global_width = chapter_global_width(&content);
     let mut global_seq = 0u32;
 
     for (volume_index, volume) in content.volumes.iter().enumerate() {
@@ -368,6 +369,7 @@ pub fn build_in(
                 full_title,
                 volume.title.as_deref().unwrap_or(""),
                 volume.number,
+                volume_number_width,
                 volume_number_width,
                 true,
             );
@@ -410,7 +412,8 @@ pub fn build_in(
                 &chapter.full_title,
                 &chapter.title,
                 chapter_number(global_seq, chapter.number, titles.chapter_numbering),
-                chapter_number_width,
+                chapter_context_width(&content, volume, titles.chapter_numbering),
+                chapter_global_width,
                 false,
             );
             let page = chapter_template

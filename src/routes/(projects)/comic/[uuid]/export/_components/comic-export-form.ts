@@ -56,6 +56,10 @@ export const COMIC_PAGE_TITLE_KINDS: TxtTitleKind[] = [
   "custom",
 ];
 
+/** 自定义模板默认值：切 custom 空模板时预填，话页各一（话不带原名、页为纯数字，与构建页一致）。 */
+export const DEFAULT_COMIC_VOLUME_PATTERN = "第#N话";
+export const DEFAULT_COMIC_PAGE_PATTERN = "#N";
+
 /** 自定义模板可用：去首尾空白后非空。 */
 export function isValidTitlePattern(pattern: string): boolean {
   return pattern.trim().length > 0;

@@ -28,14 +28,16 @@ fn saturating_u32(value: usize) -> u32 {
 }
 
 /// 话标题行：原文格式用标题原文（无标题回落“未分话”）；内置格式统一为
-/// `第<编号>话 <标题>`；自定义用其模板；无标题话 `#T` 按模板严格替换为空串，
-/// 模板渲染结果统一去首尾空格。
+/// `第<编号>话`（不带原目录名，`#T` 仅自定义模板可用）；自定义用其模板；
+/// 无标题话 `#T` 按模板严格替换为空串，模板渲染结果统一去首尾空格。
+/// 话标题只传单宽度（`#NN` 退化为 `#N`）。
 pub fn comic_heading_volume(
     kind: TxtTitleKind,
     pattern: &str,
     title: Option<&str>,
     number: u32,
     width: usize,
+    global_width: usize,
 ) -> String {
     if kind == TxtTitleKind::Original {
         return title.unwrap_or(UNTITLED_VOLUME).to_string();
@@ -43,55 +45,73 @@ pub fn comic_heading_volume(
     let pure = title.unwrap_or("");
     let rendered = match kind {
         TxtTitleKind::Original => pure.to_string(),
-        TxtTitleKind::Arabic => render_title("第#n话 #T", Some(number), width, pure),
-        TxtTitleKind::Padded => render_title("第#N话 #T", Some(number), width, pure),
-        TxtTitleKind::ChineseLower => render_title("第#c话 #T", Some(number), width, pure),
-        TxtTitleKind::ChineseUpper => render_title("第#C话 #T", Some(number), width, pure),
-        TxtTitleKind::Custom => render_title(pattern, Some(number), width, pure),
+        TxtTitleKind::Arabic => render_title("第#n话", Some(number), width, global_width, pure),
+        TxtTitleKind::Padded => render_title("第#N话", Some(number), width, global_width, pure),
+        TxtTitleKind::ChineseLower => {
+            render_title("第#c话", Some(number), width, global_width, pure)
+        }
+        TxtTitleKind::ChineseUpper => {
+            render_title("第#C话", Some(number), width, global_width, pure)
+        }
+        TxtTitleKind::Custom => render_title(pattern, Some(number), width, global_width, pure),
     };
     rendered.trim().to_string()
 }
 
-/// 页标题行：页无原文格式（`Original` 按阿拉伯数字处理）；内置统一为 `第<编号>页`；
-/// 自定义模板的 `#T` 为所属话标题（平铺无标题话为空串）；结果统一去首尾空格。
+/// 页标题行：页无原文格式（`Original` 按阿拉伯数字处理）；`#N` 取上下文宽度
+///（分话取所在话页数宽、不分话取全书总数宽，连续编号强制全局宽），`#NN` 恒取
+/// 全局宽；自定义模板的 `#T` 为所属话标题（平铺无标题话为空串）；
+/// 结果统一去首尾空格。
 pub fn comic_heading_page(
     kind: TxtTitleKind,
     pattern: &str,
     volume_title: Option<&str>,
     number: u32,
     width: usize,
+    global_width: usize,
 ) -> String {
     let owner = volume_title.unwrap_or("");
     let rendered = match kind {
         TxtTitleKind::Original | TxtTitleKind::Arabic => {
-            render_title("第#n页", Some(number), width, owner)
+            render_title("#n", Some(number), width, global_width, owner)
         }
-        TxtTitleKind::Padded => render_title("第#N页", Some(number), width, owner),
-        TxtTitleKind::ChineseLower => render_title("第#c页", Some(number), width, owner),
-        TxtTitleKind::ChineseUpper => render_title("第#C页", Some(number), width, owner),
-        TxtTitleKind::Custom => render_title(pattern, Some(number), width, owner),
+        TxtTitleKind::Padded => render_title("#N", Some(number), width, global_width, owner),
+        TxtTitleKind::ChineseLower => render_title("#c", Some(number), width, global_width, owner),
+        TxtTitleKind::ChineseUpper => render_title("#C", Some(number), width, global_width, owner),
+        TxtTitleKind::Custom => render_title(pattern, Some(number), width, global_width, owner),
     };
     rendered.trim().to_string()
 }
 
-/// 页标题编号宽度：连续模式取全书总页数位数，重置模式取各话最大页数位数（最低 2 位）。
-pub fn page_title_width(content: &ComicContent, numbering: ChapterNumbering) -> usize {
+/// 页标题全局宽度：全书总页数位数（最低 2 位），供 `#NN` 与连续编号的 `#N` 使用。
+pub fn page_global_width(content: &ComicContent) -> usize {
+    count_width(
+        content
+            .volumes
+            .iter()
+            .map(|volume| volume.pages.len())
+            .sum(),
+    )
+}
+
+/// 页标题上下文宽度：分话取所在话页数位数，不分话取全书总数位数；
+/// 连续编号强制全局宽（`#N` 与 `#NN` 同宽）。
+pub fn page_context_width(
+    content: &ComicContent,
+    volume_pages: usize,
+    grouped: bool,
+    numbering: ChapterNumbering,
+) -> usize {
+    let global = page_global_width(content);
     match numbering {
-        ChapterNumbering::Continuous => count_width(
-            content
-                .volumes
-                .iter()
-                .map(|volume| volume.pages.len())
-                .sum(),
-        ),
-        ChapterNumbering::PerVolume => count_width(
-            content
-                .volumes
-                .iter()
-                .map(|volume| volume.pages.len())
-                .max()
-                .unwrap_or(0),
-        ),
+        ChapterNumbering::Continuous => global,
+        ChapterNumbering::PerVolume => {
+            if grouped {
+                count_width(volume_pages)
+            } else {
+                global
+            }
+        }
     }
 }
 
@@ -127,6 +147,7 @@ pub fn preview_title_in(
             volume.title.as_deref(),
             saturating_u32(index + 1),
             width,
+            width,
         ));
     }
     let (volume_index, page_index) = content
@@ -141,13 +162,21 @@ pub fn preview_title_in(
             }
         })
         .context("no pages to preview")?;
-    let width = page_title_width(&content, numbering);
+    let grouped = content.volumes.len() > 1
+        || content
+            .volumes
+            .first()
+            .is_some_and(|volume| volume.title.is_some());
+    let volume_pages = content.volumes[volume_index].pages.len();
+    let width = page_context_width(&content, volume_pages, grouped, numbering);
+    let global = page_global_width(&content);
     Ok(comic_heading_page(
         kind,
         pattern,
         content.volumes[volume_index].title.as_deref(),
         page_number(1, saturating_u32(page_index + 1), numbering),
         width,
+        global,
     ))
 }
 
@@ -211,8 +240,8 @@ pub fn build_in(
             .first()
             .is_some_and(|volume| volume.title.is_some());
     let volume_width = count_width(content.volumes.len());
-    // 页标题补零宽度：连续按总数、重置按各话最大，与小说同口径。
-    let page_width = page_title_width(&content, titles.chapter_numbering);
+    // 页标题补零宽度：分话取所在话页数、不分话取总数，连续编号强制全局宽。
+    let page_global = page_global_width(&content);
     // 文件名宽度与标题选项解耦：固定按计数，保证同内容构建产物稳定。
     let file_page_width = count_width(
         content
@@ -246,6 +275,7 @@ pub fn build_in(
             volume.title.as_deref(),
             saturating_u32(volume_no),
             volume_width,
+            volume_width,
         );
         let title_escaped = xml_escape(&rendered_volume);
         let mut volume_href: Option<String> = None;
@@ -262,7 +292,13 @@ pub fn build_in(
                 &titles.chapter_pattern,
                 volume.title.as_deref(),
                 page_number(global_seq, saturating_u32(local), titles.chapter_numbering),
-                page_width,
+                page_context_width(
+                    &content,
+                    volume.pages.len(),
+                    grouped,
+                    titles.chapter_numbering,
+                ),
+                page_global,
             );
             // 图片拷贝：扩展名沿用源文件（小写），媒体类型由扩展名推导。
             let source = project_dir
@@ -503,10 +539,10 @@ mod tests {
         // 平铺目录仅首面入口，避免数百页条目拖慢墨水屏。
         let nav = read_built(&dir, "EPUB/nav.xhtml");
         assert!(nav.contains("正文"));
-        assert!(!nav.contains("第1页"));
+        assert!(!nav.contains(">1<"));
         let page = read_built(&dir, "EPUB/pages/page-001.xhtml");
         assert!(page.contains("../images/page-001.png"));
-        assert!(page.contains("第1页"));
+        assert!(page.contains("<title>1</title>"));
         // 假图片读不到尺寸，回落 800x1280 视口。
         assert!(page.contains("width=800,height=1280"));
         // 无封面回落书名块。
@@ -573,49 +609,61 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn renders_volume_and_page_headings() {
         use super::super::novel_export::{ChapterNumbering, TxtTitleKind};
-        use super::{comic_heading_page, comic_heading_volume, page_title_width};
+        use super::{
+            comic_heading_page, comic_heading_volume, page_context_width, page_global_width,
+        };
 
         // 话标题：原文回落未分话，模板渲染后去首尾空格。
         assert_eq!(
-            comic_heading_volume(TxtTitleKind::Original, "", None, 1, 2),
+            comic_heading_volume(TxtTitleKind::Original, "", None, 1, 2, 2),
             "未分话"
         );
         assert_eq!(
-            comic_heading_volume(TxtTitleKind::Arabic, "", Some("开篇"), 3, 2),
-            "第3话 开篇"
+            comic_heading_volume(TxtTitleKind::Arabic, "", Some("开篇"), 3, 2, 2),
+            "第3话"
         );
         assert_eq!(
-            comic_heading_volume(TxtTitleKind::Padded, "", Some("开篇"), 3, 2),
-            "第03话 开篇"
+            comic_heading_volume(TxtTitleKind::Padded, "", Some("开篇"), 3, 2, 2),
+            "第03话"
         );
         assert_eq!(
-            comic_heading_volume(TxtTitleKind::Custom, "话#n：#T", None, 2, 2),
+            comic_heading_volume(TxtTitleKind::Custom, "话#n：#T", None, 2, 2, 2),
             "话2："
         );
         assert_eq!(
-            comic_heading_volume(TxtTitleKind::Custom, "##n #T", Some("开篇"), 2, 2),
+            comic_heading_volume(TxtTitleKind::Custom, "##n #T", Some("开篇"), 2, 2, 2),
             "#n 开篇"
         );
-        // 页标题：原文按阿拉伯数字处理，`#T` 为所属话标题。
+        // 页标题：原文按阿拉伯数字处理，纯数字；`#T` 仅自定义模板可用。
         assert_eq!(
-            comic_heading_page(TxtTitleKind::Original, "", Some("开篇"), 5, 2),
-            "第5页"
+            comic_heading_page(TxtTitleKind::Original, "", Some("开篇"), 5, 2, 3),
+            "5"
         );
         assert_eq!(
-            comic_heading_page(TxtTitleKind::Arabic, "", Some("开篇"), 5, 2),
-            "第5页"
+            comic_heading_page(TxtTitleKind::Arabic, "", Some("开篇"), 5, 2, 3),
+            "5"
         );
         assert_eq!(
-            comic_heading_page(TxtTitleKind::Custom, "第#N页（#T）", Some("开篇"), 5, 2),
+            comic_heading_page(TxtTitleKind::Custom, "第#N页（#T）", Some("开篇"), 5, 2, 3),
             "第05页（开篇）"
         );
         assert_eq!(
-            comic_heading_page(TxtTitleKind::Custom, "P#n", None, 5, 2),
+            comic_heading_page(TxtTitleKind::Custom, "P#n", None, 5, 2, 3),
             "P5"
         );
-        // 补零宽度：连续按总数、重置按各话最大。
+        // `#NN` 全局补零：上下文宽与全局宽不一致时各按其宽。
+        assert_eq!(
+            comic_heading_page(TxtTitleKind::Custom, "#N-#NN", None, 5, 2, 3),
+            "05-005"
+        );
+        assert_eq!(
+            comic_heading_page(TxtTitleKind::Custom, "#NN", None, 5, 2, 3),
+            "005"
+        );
+        // 补零宽度：分话取所在话页数、不分话取总数，连续编号强制全局宽。
         let content = ComicContent {
             schema_version: 1,
             mode: ComicMode::Volumes,
@@ -639,8 +687,24 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(page_title_width(&content, ChapterNumbering::Continuous), 3);
-        assert_eq!(page_title_width(&content, ChapterNumbering::PerVolume), 3);
+        assert_eq!(page_global_width(&content), 3);
+        // 甲话 9 页宽 2、乙话 150 页宽 3；连续编号下 `#N` 强制全局宽 3。
+        assert_eq!(
+            page_context_width(&content, 9, true, ChapterNumbering::PerVolume),
+            2
+        );
+        assert_eq!(
+            page_context_width(&content, 150, true, ChapterNumbering::PerVolume),
+            3
+        );
+        assert_eq!(
+            page_context_width(&content, 9, true, ChapterNumbering::Continuous),
+            3
+        );
+        assert_eq!(
+            page_context_width(&content, 159, false, ChapterNumbering::PerVolume),
+            3
+        );
         // 页编号：连续取全局，重置取话内。
         assert_eq!(super::page_number(7, 2, ChapterNumbering::Continuous), 7);
         assert_eq!(super::page_number(7, 2, ChapterNumbering::PerVolume), 2);
@@ -658,7 +722,7 @@ mod tests {
             ChapterNumbering::PerVolume,
         )
         .expect("preview volume");
-        assert_eq!(volume, "第1话 第1话");
+        assert_eq!(volume, "第1话");
         let page = preview_title_in(
             &dir,
             TxtTitleKind::Arabic,
@@ -667,7 +731,7 @@ mod tests {
             ChapterNumbering::PerVolume,
         )
         .expect("preview page");
-        assert_eq!(page, "第1页");
+        assert_eq!(page, "1");
         cleanup(&root);
     }
 
@@ -687,10 +751,35 @@ mod tests {
         // 文件名与标题选项解耦：仍为计数命名；目录仅话级，页标题只进页面标题。
         assert!(dir.join("build/EPUB/pages/page-01-01.xhtml").is_file());
         let nav = read_built(&dir, "EPUB/nav.xhtml");
-        assert!(nav.contains(">第1话 第1话<"));
+        assert!(nav.contains(">第1话<"));
         assert!(!nav.contains(">P03<"));
         let page = read_built(&dir, "EPUB/pages/page-02-01.xhtml");
         assert!(page.contains("<title>P03</title>"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn builds_with_per_volume_widths_for_custom_titles() {
+        use super::super::novel_export::{BuildTitleOptions, ChapterNumbering, TxtTitleKind};
+        // 甲 9 页、乙 150 页：重置模式下 `#N` 各话独立补零，`#NN` 全局 3 位。
+        let nine: Vec<String> = (1..=9).map(|i| format!("甲/{i:02}.jpg")).collect();
+        let mut files: Vec<&str> = nine.iter().map(String::as_str).collect();
+        let many: Vec<String> = (1..=150).map(|i| format!("乙/{i:03}.jpg")).collect();
+        files.extend(many.iter().map(String::as_str));
+        let (root, dir) = fixture_project("per-volume-width", &files);
+        let titles = BuildTitleOptions {
+            chapter_kind: TxtTitleKind::Custom,
+            chapter_pattern: "#N/#NN".to_string(),
+            volume_kind: TxtTitleKind::Arabic,
+            volume_pattern: String::new(),
+            chapter_numbering: ChapterNumbering::PerVolume,
+        };
+        build_in(&dir, &template_base(), &titles).expect("build");
+        // 自然排序下乙在前：乙（150 页）为第 1 话，甲（9 页）为第 2 话。
+        let first_page = read_built(&dir, "EPUB/pages/page-01-009.xhtml");
+        assert!(first_page.contains("<title>009/009</title>"));
+        let second_page = read_built(&dir, "EPUB/pages/page-02-009.xhtml");
+        assert!(second_page.contains("<title>09/009</title>"));
         cleanup(&root);
     }
 }

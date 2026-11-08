@@ -27,22 +27,23 @@ describe("漫画构建标题格式", () => {
     ]);
   });
 
-  it("自定义模板默认值非空", () => {
+  it("自定义模板默认值非空且不带原名（话不带 #T、页为纯数字）", () => {
     expect(isValidComicTitlePattern(DEFAULT_COMIC_VOLUME_PATTERN)).toBe(true);
     expect(isValidComicTitlePattern(DEFAULT_COMIC_PAGE_PATTERN)).toBe(true);
-    expect(DEFAULT_COMIC_VOLUME_PATTERN).toContain("#T");
+    expect(DEFAULT_COMIC_VOLUME_PATTERN).not.toContain("#T");
+    expect(DEFAULT_COMIC_PAGE_PATTERN).toBe("#N");
   });
 
   it("模板正确性预检：空串无效", () => {
     expect(isValidComicTitlePattern("")).toBe(false);
     expect(isValidComicTitlePattern("   ")).toBe(false);
-    expect(isValidComicTitlePattern("第#N话 #T")).toBe(true);
+    expect(isValidComicTitlePattern("第#N话")).toBe(true);
   });
 
   it("标题合法：话页自定义模板各自非空", () => {
     expect(isValidComicTitles("arabic", "", "original", "")).toBe(true);
     expect(isValidComicTitles("custom", "", "original", "")).toBe(false);
     expect(isValidComicTitles("arabic", "", "custom", "")).toBe(false);
-    expect(isValidComicTitles("custom", "第#N页", "custom", "第#N话 #T")).toBe(true);
+    expect(isValidComicTitles("custom", "#N", "custom", "第#N话")).toBe(true);
   });
 });

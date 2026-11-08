@@ -11,7 +11,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::novel_files::NovelContent;
+use super::novel_files::{NovelContent, NovelVolume};
 
 /// TXT 标题格式：原文之外的五种全部由模板引擎渲染。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -301,12 +301,20 @@ fn format_chinese(value: u32, upper: bool) -> String {
     out
 }
 
-/// 自定义模板渲染：`#n` 阿拉伯数字、`#N` 补零、`#c` 中文小写、`#C` 中文大写、
-/// `#T` 纯标题；`##` 转义为字面 `#`，未知占位符与孤 `#` 原样保留；
-/// 编号缺失时数字占位符原文保留，不做任何回落。
-pub fn render_title(pattern: &str, number: Option<u32>, width: usize, title: &str) -> String {
+/// 自定义模板渲染：`#n` 阿拉伯数字、`#N` 上下文补零、`#NN` 全局补零、
+/// `#c` 中文小写、`#C` 中文大写、`#T` 纯标题；`##` 转义为字面 `#`，
+/// 未知占位符与孤 `#` 原样保留；编号缺失时数字占位符原文保留，不做任何回落。
+/// 上下文宽度由调用方按分卷结构决定（分卷取所在卷宽、不分卷取全书宽，
+/// 连续编号强制全局宽）；全局宽度恒取全书最大。
+pub fn render_title(
+    pattern: &str,
+    number: Option<u32>,
+    width: usize,
+    global_width: usize,
+    title: &str,
+) -> String {
     let mut out = String::new();
-    let mut chars = pattern.chars();
+    let mut chars = pattern.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '#' {
             out.push(ch);
@@ -315,21 +323,32 @@ pub fn render_title(pattern: &str, number: Option<u32>, width: usize, title: &st
         match chars.next() {
             None | Some('#') => out.push('#'),
             Some('T') => out.push_str(title),
-            Some(kind @ ('n' | 'N' | 'c' | 'C')) => match number {
-                None => {
-                    out.push('#');
-                    out.push(kind);
+            Some(kind @ ('n' | 'N' | 'c' | 'C')) => {
+                // `#NN` 全局补零：第二个 `N` 预读，不满足则按单个 `#N` 处理。
+                let global = kind == 'N' && chars.peek() == Some(&'N');
+                if global {
+                    chars.next();
                 }
-                Some(n) => match kind {
-                    'n' => out.push_str(&n.to_string()),
-                    // `String` 落盘永不失败，返回值忽略。
-                    'N' => {
-                        let _ = write!(out, "{n:0>width$}");
+                let active_width = if global { global_width } else { width };
+                match number {
+                    None => {
+                        out.push('#');
+                        out.push(kind);
+                        if global {
+                            out.push('N');
+                        }
                     }
-                    'c' => out.push_str(&format_chinese(n, false)),
-                    _ => out.push_str(&format_chinese(n, true)),
-                },
-            },
+                    Some(n) => match kind {
+                        'n' => out.push_str(&n.to_string()),
+                        // `String` 落盘永不失败，返回值忽略。
+                        'N' => {
+                            let _ = write!(out, "{n:0>active_width$}");
+                        }
+                        'c' => out.push_str(&format_chinese(n, false)),
+                        _ => out.push_str(&format_chinese(n, true)),
+                    },
+                }
+            }
             // 未知占位符整体原样保留。
             Some(other) => {
                 out.push('#');
@@ -434,6 +453,9 @@ fn metadata_block(
 
 /// 卷章标题行：原文格式用完整标题行；内置格式统一为 `第<编号>卷/章 <标题>`
 ///（卷行用 `卷`、章行用 `章`）；自定义卷章各用其模板；缺号留位。
+/// 章标题的 `#N` 取上下文宽度（分卷取所在卷宽、不分卷取全书宽，连续编号强制
+/// 全局宽），`#NN` 恒取全局宽；卷标题只传单宽度（`#NN` 退化为 `#N`）。
+#[allow(clippy::too_many_arguments)]
 pub fn heading(
     kind: TxtTitleKind,
     pattern: &str,
@@ -441,43 +463,91 @@ pub fn heading(
     title: &str,
     number: Option<u32>,
     width: usize,
+    global_width: usize,
     is_volume: bool,
 ) -> String {
     match (kind, is_volume) {
         (TxtTitleKind::Original, _) => full.to_string(),
-        (TxtTitleKind::Arabic, false) => render_title("第#n章 #T", number, width, title),
-        (TxtTitleKind::Arabic, true) => render_title("第#n卷 #T", number, width, title),
-        (TxtTitleKind::Padded, false) => render_title("第#N章 #T", number, width, title),
-        (TxtTitleKind::Padded, true) => render_title("第#N卷 #T", number, width, title),
-        (TxtTitleKind::ChineseLower, false) => render_title("第#c章 #T", number, width, title),
-        (TxtTitleKind::ChineseLower, true) => render_title("第#c卷 #T", number, width, title),
-        (TxtTitleKind::ChineseUpper, false) => render_title("第#C章 #T", number, width, title),
-        (TxtTitleKind::ChineseUpper, true) => render_title("第#C卷 #T", number, width, title),
-        (TxtTitleKind::Custom, _) => render_title(pattern, number, width, title),
+        (TxtTitleKind::Arabic, false) => {
+            render_title("第#n章 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::Arabic, true) => {
+            render_title("第#n卷 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::Padded, false) => {
+            render_title("第#N章 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::Padded, true) => {
+            render_title("第#N卷 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::ChineseLower, false) => {
+            render_title("第#c章 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::ChineseLower, true) => {
+            render_title("第#c卷 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::ChineseUpper, false) => {
+            render_title("第#C章 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::ChineseUpper, true) => {
+            render_title("第#C卷 #T", number, width, global_width, title)
+        }
+        (TxtTitleKind::Custom, _) => render_title(pattern, number, width, global_width, title),
     }
 }
 
 /// 分隔线：32 个 `―` 独占一行。
 const SEPARATOR_LINE: &str = "――――――――――――――――――――――――――――――――";
 
-/// 章编号宽度：连续模式取全书总章数位数，重置模式沿用解析号最大位数（最低 2 位）。
-pub fn chapter_number_width(content: &NovelContent, numbering: ChapterNumbering) -> usize {
-    match numbering {
-        ChapterNumbering::Continuous => content
+/// 章编号全局宽度：全部解析号最大位数与总章数位数取大（最低 2 位），
+/// 供 `#NN` 与连续编号的 `#N` 使用。
+pub fn chapter_global_width(content: &NovelContent) -> usize {
+    let total_digits = content
+        .volumes
+        .iter()
+        .map(|volume| volume.chapters.len())
+        .sum::<usize>()
+        .to_string()
+        .len()
+        .max(2);
+    number_width(
+        content
             .volumes
             .iter()
-            .map(|volume| volume.chapters.len())
-            .sum::<usize>()
-            .to_string()
-            .len()
-            .max(2),
-        ChapterNumbering::PerVolume => number_width(
-            content
-                .volumes
-                .iter()
-                .flat_map(|volume| volume.chapters.iter())
-                .map(|chapter| chapter.number),
-        ),
+            .flat_map(|volume| volume.chapters.iter())
+            .map(|chapter| chapter.number),
+    )
+    .max(total_digits)
+}
+
+/// 章编号卷内宽度：该卷解析号最大位数（最低 2 位），全缺号回落 2。
+pub fn chapter_volume_width(volume: &NovelVolume) -> usize {
+    number_width(volume.chapters.iter().map(|chapter| chapter.number))
+}
+
+/// 章标题上下文宽度：分卷（多卷）取所在卷宽，不分卷取全书解析号最大位数；
+/// 连续编号强制全局宽（`#N` 与 `#NN` 同宽）。
+pub fn chapter_context_width(
+    content: &NovelContent,
+    volume: &NovelVolume,
+    numbering: ChapterNumbering,
+) -> usize {
+    let global = chapter_global_width(content);
+    match numbering {
+        ChapterNumbering::Continuous => global,
+        ChapterNumbering::PerVolume => {
+            if content.volumes.len() > 1 {
+                chapter_volume_width(volume)
+            } else {
+                number_width(
+                    content
+                        .volumes
+                        .iter()
+                        .flat_map(|item| item.chapters.iter())
+                        .map(|chapter| chapter.number),
+                )
+            }
+        }
     }
 }
 
@@ -523,7 +593,7 @@ fn build_txt(
     {
         anyhow::bail!("custom volume pattern must not be empty");
     }
-    let chapter_width = chapter_number_width(content, options.chapter_numbering);
+    let chapter_global = chapter_global_width(content);
     let volume_width = number_width(content.volumes.iter().map(|volume| volume.number));
     let mut blocks: Vec<String> = Vec::new();
     let mut global_seq = 0u32;
@@ -536,6 +606,7 @@ fn build_txt(
                 full_title,
                 volume.title.as_deref().unwrap_or(""),
                 volume.number,
+                volume_width,
                 volume_width,
                 true,
             ));
@@ -558,7 +629,8 @@ fn build_txt(
                 &chapter.full_title,
                 &chapter.title,
                 chapter_number(global_seq, chapter.number, options.chapter_numbering),
-                chapter_width,
+                chapter_context_width(content, volume, options.chapter_numbering),
+                chapter_global,
                 false,
             ));
             // 章标题与章正文之间空一行。
@@ -628,16 +700,19 @@ pub fn preview_title_in(
             volume.title.as_deref().unwrap_or(""),
             volume.number,
             width,
+            width,
             true,
         ));
     }
-    let chapter = content
+    let (volume_index, chapter) = content
         .volumes
         .iter()
-        .flat_map(|volume| volume.chapters.iter())
-        .next()
+        .enumerate()
+        .find_map(|(index, volume)| volume.chapters.first().map(|chapter| (index, chapter)))
         .context("no chapters to preview")?;
-    let width = chapter_number_width(&content, numbering);
+    let volume = &content.volumes[volume_index];
+    let width = chapter_context_width(&content, volume, numbering);
+    let global = chapter_global_width(&content);
     Ok(heading(
         kind,
         pattern,
@@ -645,6 +720,7 @@ pub fn preview_title_in(
         &chapter.title,
         chapter_number(1, chapter.number, numbering),
         width,
+        global,
         false,
     ))
 }
@@ -1072,6 +1148,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn renders_title_formats_and_keeps_missing_placeholders() {
         // 六格式 × 有号。
         assert_eq!(
@@ -1081,6 +1158,7 @@ mod tests {
                 "第一章 引子",
                 "引子",
                 Some(1),
+                2,
                 2,
                 false
             ),
@@ -1094,6 +1172,7 @@ mod tests {
                 "引子",
                 Some(12),
                 2,
+                2,
                 false
             ),
             "第12章 引子"
@@ -1105,6 +1184,7 @@ mod tests {
                 "第一卷 开篇",
                 "开篇",
                 Some(1),
+                2,
                 2,
                 true
             ),
@@ -1118,6 +1198,7 @@ mod tests {
                 "引子",
                 Some(3),
                 2,
+                2,
                 false
             ),
             "第03章 引子"
@@ -1129,6 +1210,7 @@ mod tests {
                 "第一章 引子",
                 "引子",
                 Some(11),
+                2,
                 2,
                 false
             ),
@@ -1142,21 +1224,115 @@ mod tests {
                 "引子",
                 Some(11),
                 2,
+                2,
                 false
             ),
             "第拾壹章 引子"
         );
         // 自定义：转义、未知占位符与缺号留位。
         assert_eq!(
-            render_title("第 #c 章： #T", Some(1), 2, "重生"),
+            render_title("第 #c 章： #T", Some(1), 2, 2, "重生"),
             "第 一 章： 重生"
         );
-        assert_eq!(render_title("##n #x #", Some(2), 2, "重生"), "#n #x #");
+        assert_eq!(render_title("##n #x #", Some(2), 2, 2, "重生"), "#n #x #");
         assert_eq!(
-            render_title("第 #c 章： #T", None, 2, "重生"),
+            render_title("第 #c 章： #T", None, 2, 2, "重生"),
             "第 #c 章： 重生"
         );
-        assert_eq!(render_title("#N", Some(123), 2, ""), "123");
+        assert_eq!(render_title("#N", Some(123), 2, 2, ""), "123");
+        // `#NN` 全局补零：上下文宽与全局宽不一致时各按其宽。
+        assert_eq!(render_title("#N-#NN", Some(5), 2, 3, ""), "05-005");
+        assert_eq!(render_title("#NN", Some(123), 2, 2, ""), "123");
+        assert_eq!(render_title("#NN", None, 2, 3, ""), "#NN");
+        assert_eq!(
+            heading(
+                TxtTitleKind::Custom,
+                "P#NN",
+                "第五章 终局",
+                "终局",
+                Some(5),
+                2,
+                3,
+                false
+            ),
+            "P005"
+        );
+    }
+
+    #[test]
+    fn chapter_widths_follow_volume_structure() {
+        use super::super::novel_files::{NovelChapter, NovelContent, NovelVolume};
+
+        fn chapter(number: u32) -> NovelChapter {
+            NovelChapter {
+                title: "正文".to_string(),
+                full_title: format!("第{number}章 正文"),
+                number: Some(number),
+                lines: vec!["正文".to_string()],
+            }
+        }
+
+        fn volume(number: u32, numbers: &[u32]) -> NovelVolume {
+            NovelVolume {
+                title: Some(format!("卷{number}")),
+                full_title: Some(format!("第{number}卷 卷{number}")),
+                number: Some(number),
+                intro: vec![],
+                chapters: numbers.iter().map(|n| chapter(*n)).collect(),
+            }
+        }
+
+        fn content(volumes: Vec<NovelVolume>) -> NovelContent {
+            NovelContent {
+                schema_version: 1,
+                volume_pattern: String::new(),
+                chapter_pattern: String::new(),
+                parsed_at: String::new(),
+                preface: vec![],
+                volumes,
+            }
+        }
+
+        // 分卷：卷内宽各算各的（9 章卷宽 2、3 位数卷宽 3），全局宽取最大。
+        let grouped = content(vec![
+            volume(1, &[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            volume(2, &[100, 101]),
+        ]);
+        assert_eq!(chapter_global_width(&grouped), 3);
+        assert_eq!(
+            chapter_context_width(&grouped, &grouped.volumes[0], ChapterNumbering::PerVolume),
+            2
+        );
+        assert_eq!(
+            chapter_context_width(&grouped, &grouped.volumes[1], ChapterNumbering::PerVolume),
+            3
+        );
+        // 连续编号强制全局宽。
+        assert_eq!(
+            chapter_context_width(&grouped, &grouped.volumes[0], ChapterNumbering::Continuous),
+            3
+        );
+        // `#N` 走上下文宽，`#NN` 走全局宽。
+        assert_eq!(
+            heading(
+                TxtTitleKind::Custom,
+                "第#N章/#NN",
+                "第五章 正文",
+                "正文",
+                Some(5),
+                chapter_context_width(&grouped, &grouped.volumes[0], ChapterNumbering::PerVolume),
+                chapter_global_width(&grouped),
+                false
+            ),
+            "第05章/005"
+        );
+        // 不分卷：上下文宽即全书解析号最大位数。
+        let flat = content(vec![volume(1, &[8, 9])]);
+        assert_eq!(
+            chapter_context_width(&flat, &flat.volumes[0], ChapterNumbering::PerVolume),
+            2
+        );
+        assert_eq!(chapter_global_width(&flat), 2);
     }
 
     #[test]

@@ -41,6 +41,8 @@
   import {
     COMIC_PAGE_TITLE_KINDS,
     COMIC_VOLUME_TITLE_KINDS,
+    DEFAULT_COMIC_PAGE_PATTERN,
+    DEFAULT_COMIC_VOLUME_PATTERN,
     canExport,
     isValidCustomName,
     isValidImageTitles,
@@ -72,10 +74,10 @@
   let outcome = $state<ExportOutcome | null>(null);
   /** 打开导出目录进行中：按钮禁用态。 */
   let openingDir = $state(false);
-  /** 话页标题格式与自定义模板：与构建页同一套逻辑。 */
-  let pageKind = $state<TxtTitleKind>("arabic");
+  /** 话页标题格式与自定义模板：与构建页同一套逻辑；话默认阿拉伯数字（第n话，不带原名），页默认补零。 */
+  let pageKind = $state<TxtTitleKind>("padded");
   let pagePattern = $state("");
-  let volumeKind = $state<TxtTitleKind>("original");
+  let volumeKind = $state<TxtTitleKind>("arabic");
   let volumePattern = $state("");
   /** 页编号方式：按话重置为现状口径，跨话连续按文档顺序全局累加。 */
   let numbering = $state<ChapterNumbering>("per_volume");
@@ -110,6 +112,12 @@
   });
   /** 分话书：多话时展示话标题格式与编号方式，单话两种编号等价故隐藏。 */
   const isEpisodeBook = $derived(status !== null && status.volume_count > 1);
+  /** 话目录补零提示：10 话以上且话格式不补零时，原图目录在词法排序下可能错序。 */
+  const showVolumePadHint = $derived(
+    checkImages &&
+      (status?.volume_count ?? 0) >= 10 &&
+      (volumeKind === "custom" ? !volumePattern.includes("#N") : volumeKind !== "padded"),
+  );
   /** 导出可用：有勾选、命名合法、原图标题参数合法、空闲中。 */
   const ready = $derived(
     status !== null &&
@@ -166,9 +174,10 @@
     checkCover = status.has_cover;
     naming = "project";
     customName = "";
-    pageKind = "arabic";
+    pageKind = "padded";
     pagePattern = "";
-    volumeKind = "original";
+    // 话数≥10 时话标题默认补零，避免原图目录在词法排序下错序；10 话以下保持第n话审美。
+    volumeKind = status.volume_count >= 10 ? "padded" : "arabic";
     volumePattern = "";
     numbering = "per_volume";
     outcome = null;
@@ -198,7 +207,7 @@
       if ((COMIC_VOLUME_TITLE_KINDS as string[]).includes(value)) {
         volumeKind = value as TxtTitleKind;
         if (volumeKind === "custom" && volumePattern.trim() === "") {
-          volumePattern = "第#N话 #T";
+          volumePattern = DEFAULT_COMIC_VOLUME_PATTERN;
         }
         void refreshTitlePreview("volume");
       }
@@ -207,7 +216,7 @@
     if ((COMIC_PAGE_TITLE_KINDS as string[]).includes(value)) {
       pageKind = value as TxtTitleKind;
       if (pageKind === "custom" && pagePattern.trim() === "") {
-        pagePattern = "第#N页";
+        pagePattern = DEFAULT_COMIC_PAGE_PATTERN;
       }
       void refreshTitlePreview("page");
     }
@@ -499,6 +508,9 @@
                   </span>
                 {/if}
               </div>
+            {/if}
+            {#if showVolumePadHint}
+              <p class="text-xs text-muted-foreground">{m.comic_export_volume_pad_hint()}</p>
             {/if}
           {/if}
           <div class="flex items-center gap-2 py-2">

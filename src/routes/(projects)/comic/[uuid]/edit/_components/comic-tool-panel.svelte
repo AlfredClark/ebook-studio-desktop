@@ -100,7 +100,7 @@
     </SelectContent>
   </Select>
   <div class="shrink-0 border-t"></div>
-  <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto">
     {#if tool === "convert"}
       <div class="flex flex-col gap-1.5">
         <span id="comic-tool-format-label" class="text-sm font-medium">

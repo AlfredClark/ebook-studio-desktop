@@ -49,10 +49,10 @@
   let hasContent = $state(true);
   /** 解析产物话数：多话才展示页编号方式，单话两种编号等价故隐藏。 */
   let volumeCount = $state(0);
-  /** 话页标题格式与自定义模板：重构建沿用当前选择，加载不重置。 */
-  let volumeKind = $state<TxtTitleKind>("original");
+  /** 话页标题格式与自定义模板：重构建沿用当前选择，加载不重置；话默认阿拉伯数字（第n话，不带原名），页默认补零。 */
+  let volumeKind = $state<TxtTitleKind>("arabic");
   let volumePattern = $state("");
-  let pageKind = $state<TxtTitleKind>("arabic");
+  let pageKind = $state<TxtTitleKind>("padded");
   let pagePattern = $state("");
   /** 页编号方式：按话重置为现状口径，跨话连续按文档顺序全局累加。 */
   let numbering = $state<ChapterNumbering>("per_volume");
