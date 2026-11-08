@@ -389,6 +389,7 @@
       toast.success(m.comic_edit_convert_success());
     } finally {
       setConvertRunning(uuid, false);
+      void refreshCompressStatus(uuid);
     }
   }
 
@@ -427,6 +428,7 @@
       );
     } finally {
       setCompressRunning(uuid, false);
+      void refreshCompressStatus(uuid);
     }
   }
 
@@ -443,6 +445,49 @@
     if (!result.data) {
       toast.info(m.comic_edit_tool_cancel_none());
     }
+  }
+
+  /** 清除备份确认框：纯 UI 态，执行走确认回调。 */
+  let clearBackupConfirmOpen = $state(false);
+
+  /** 撤销压缩：备份原图拷回原位，一次性有效；成功后刷新预览戳（同路径缓存）。 */
+  async function handleCompressUndo(): Promise<void> {
+    if (toolRunning) {
+      return;
+    }
+    setCompressRunning(uuid, true);
+    try {
+      const result = await commands.restoreComicCompressBackup(uuid).result();
+      if (result.status === "error") {
+        toast.error(m.comic_edit_tool_undo_failed());
+        return;
+      }
+      outline = result.data;
+      working = toWorking(result.data.volumes);
+      saved = toWorking(result.data.volumes);
+      if (selectedPath != null) {
+        void loadPreview(selectedPath);
+      }
+      toast.success(m.comic_edit_tool_undo_success());
+    } finally {
+      setCompressRunning(uuid, false);
+      void refreshCompressStatus(uuid);
+    }
+  }
+
+  /** 确认清除备份：只删备份目录，当前图片不动；备份一次性，清除后撤销入口消失。 */
+  async function handleClearBackupConfirm(): Promise<void> {
+    const result = await commands.clearComicCompressBackup(uuid).result();
+    if (result.status === "error") {
+      toast.error(m.comic_edit_tool_clear_backup_failed());
+      return;
+    }
+    if (!result.data) {
+      toast.info(m.comic_edit_tool_clear_backup_none());
+    } else {
+      toast.success(m.comic_edit_tool_clear_backup_success());
+    }
+    void refreshCompressStatus(uuid);
   }
 
   /** 键盘话重排：选中页所在话整体上移 / 下移一位；转换中锁定。 */
@@ -1005,9 +1050,12 @@
               canRun={toolRunnable}
               {hasOutcome}
               progress={toolProgress}
+              backupExists={compressJob.backup}
               onRun={() => void handleToolRun()}
               onClear={handleToolReset}
               onCancel={() => void handleToolCancel()}
+              onUndo={() => void handleCompressUndo()}
+              onRequestClearBackup={() => (clearBackupConfirmOpen = true)}
             />
           </div>
         </div>
@@ -1056,4 +1104,12 @@
   cancelLabel={m.projects_create_cancel()}
   confirmLabel={m.comic_edit_tool_run()}
   onConfirm={() => void handleToolConfirm()}
+/>
+<ConfirmDialog
+  bind:open={clearBackupConfirmOpen}
+  title={m.comic_edit_tool_clear_backup_title()}
+  description={m.comic_edit_tool_clear_backup_description()}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_edit_tool_clear_backup()}
+  onConfirm={() => void handleClearBackupConfirm()}
 />

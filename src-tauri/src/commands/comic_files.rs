@@ -130,12 +130,16 @@ pub fn preview_comic_image_compression(
     Ok(comic_images::preview_compression(&app, &id)?)
 }
 
-/// 查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值。
+/// 查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值，备份位实时计算。
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::needless_pass_by_value)]
-pub fn get_comic_compress_status(id: String) -> CommandResult<ComicCompressStatus> {
-    Ok(comic_images::compress_status_of(&id))
+pub fn get_comic_compress_status(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<ComicCompressStatus> {
+    let dir = crate::features::projects::resolve_project_dir(&app, &id)?;
+    Ok(comic_images::compress_status_of(&dir, &id))
 }
 
 /// 压缩全量图片：原地重编码（缩放 + 灰度 + 按源格式重编码），路径不变；
@@ -149,4 +153,23 @@ pub async fn compress_comic_images(
     options: CompressOptions,
 ) -> CommandResult<CompressOutcome> {
     comic_images::compress_images(&app, &id, &options).await
+}
+
+/// 撤销压缩备份：把备份原图拷回原位，一次性有效，无备份直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn restore_comic_compress_backup(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<ComicOutline> {
+    Ok(comic_images::restore_backup(&app, &id)?)
+}
+
+/// 清除压缩备份：只删备份目录，当前图片不动；无备份返回假。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn clear_comic_compress_backup(app: tauri::AppHandle, id: String) -> CommandResult<bool> {
+    Ok(comic_images::clear_backup(&app, &id)?)
 }

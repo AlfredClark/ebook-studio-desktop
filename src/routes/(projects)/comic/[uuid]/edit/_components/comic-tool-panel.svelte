@@ -34,9 +34,12 @@
     canRun = false,
     hasOutcome = false,
     progress = null,
+    backupExists = false,
     onRun,
     onClear,
     onCancel,
+    onUndo,
+    onRequestClearBackup,
   }: {
     tool: ComicTool;
     target: ImageTargetFormat;
@@ -53,9 +56,12 @@
     canRun: boolean;
     hasOutcome: boolean;
     progress: number | null;
+    backupExists: boolean;
     onRun: () => void;
     onClear: () => void;
     onCancel: () => void;
+    onUndo: () => void;
+    onRequestClearBackup: () => void;
   } = $props();
 
   /** 工具下拉候选项：触发器关闭时靠 `items` 解析展示文案。 */
@@ -267,4 +273,26 @@
       {m.comic_edit_tool_reset()}
     </Button>
   </div>
+  {#if backupExists}
+    <div class="flex shrink-0 gap-2">
+      <Button
+        variant="outline"
+        class="min-w-0 flex-1"
+        size="sm"
+        disabled={running}
+        onclick={onUndo}
+      >
+        {m.comic_edit_tool_undo()}
+      </Button>
+      <Button
+        variant="outline"
+        class="min-w-0 flex-1"
+        size="sm"
+        disabled={running}
+        onclick={onRequestClearBackup}
+      >
+        {m.comic_edit_tool_clear_backup()}
+      </Button>
+    </div>
+  {/if}
 </section>

@@ -6,14 +6,15 @@ import { reportCommandFailure } from "#libs/commands/cores";
 /** 压缩进度事件名（见 Rust 侧同名常量）。 */
 const COMPRESS_PROGRESS_EVENT = "comic-images-compress-progress";
 
-/** 单个项目的压缩作业：运行中 + 已完成 / 总数。 */
+/** 单个项目的压缩作业：运行中 + 已完成 / 总数 + 是否有可撤销的压缩备份。 */
 export interface ComicCompressJob {
   running: boolean;
   done: number;
   total: number;
+  backup: boolean;
 }
 
-const idleJob = (): ComicCompressJob => ({ running: false, done: 0, total: 0 });
+const idleJob = (): ComicCompressJob => ({ running: false, done: 0, total: 0, backup: false });
 
 /** 按项目 id 记录的压缩作业；切页 / 重挂载不丢失。 */
 const compressJobs = $state<Record<string, ComicCompressJob>>({});
@@ -35,6 +36,7 @@ export function ensureCompressListener(): void {
             running: true,
             done: event.payload.done_files,
             total: event.payload.total_files,
+            backup: false,
           };
         },
       );
@@ -69,10 +71,10 @@ export async function refreshCompressStatus(uuid: string): Promise<void> {
     if (result.status !== "ok") {
       return;
     }
-    const { running, done_files, total_files } = result.data;
+    const { running, done_files, total_files, has_backup } = result.data;
     compressJobs[uuid] = running
-      ? { running: true, done: done_files, total: total_files }
-      : idleJob();
+      ? { running: true, done: done_files, total: total_files, backup: false }
+      : { running: false, done: 0, total: 0, backup: has_backup };
   } catch (error) {
     reportCommandFailure("[comic-compress] status refresh failed", error);
   }

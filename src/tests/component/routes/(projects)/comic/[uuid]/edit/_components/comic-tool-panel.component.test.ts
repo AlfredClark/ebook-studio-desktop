@@ -21,11 +21,14 @@ if (typeof ResizeObserver === "undefined") {
 const runMock = vi.hoisted(() => vi.fn());
 const clearMock = vi.hoisted(() => vi.fn());
 const cancelMock = vi.hoisted(() => vi.fn());
+const undoMock = vi.hoisted(() => vi.fn());
+const requestClearMock = vi.hoisted(() => vi.fn());
 
 function renderPanel(
   tool: "convert" | "compress" = "convert",
   target: "jpeg" | "png" | "webp" = "jpeg",
   running = false,
+  backupExists = false,
 ) {
   return render(ComicToolPanel, {
     props: {
@@ -44,9 +47,12 @@ function renderPanel(
       canRun: false,
       hasOutcome: false,
       progress: null,
+      backupExists,
       onRun: runMock,
       onClear: clearMock,
       onCancel: cancelMock,
+      onUndo: undoMock,
+      onRequestClearBackup: requestClearMock,
     },
   });
 }
@@ -117,5 +123,20 @@ describe("图片工具面板", () => {
     await user.click(cancel);
     expect(cancelMock).toHaveBeenCalledOnce();
     expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("有备份时显示撤销与清除按钮，无备份时隐藏", async () => {
+    const user = userEvent.setup();
+    renderPanel("compress", "jpeg", false, false);
+    expect(screen.queryByRole("button", { name: "Undo compress" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear backup" })).toBeNull();
+    cleanup();
+    vi.clearAllMocks();
+
+    renderPanel("compress", "jpeg", false, true);
+    await user.click(screen.getByRole("button", { name: "Undo compress" }));
+    expect(undoMock).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Clear backup" }));
+    expect(requestClearMock).toHaveBeenCalledOnce();
   });
 });

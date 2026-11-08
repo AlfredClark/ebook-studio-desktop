@@ -273,11 +273,13 @@ pub struct ComicCompressProgress {
 }
 
 /// 压缩状态探针：供切回页面时回填进度；从未开始返回空闲零值。
+/// `has_backup` 供工具条“撤销/清除备份”按钮显隐，与进度无关、每次探针实时计算。
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ComicCompressStatus {
     pub running: bool,
     pub done_files: u32,
     pub total_files: u32,
+    pub has_backup: bool,
 }
 
 /// 查询压缩作业状态：未在跑回空闲零值。
@@ -291,11 +293,13 @@ pub fn compress_status(id: &str) -> ComicCompressStatus {
                 running: false,
                 done_files: 0,
                 total_files: 0,
+                has_backup: false,
             },
             |(done_files, total_files)| ComicCompressStatus {
                 running: true,
                 done_files,
                 total_files,
+                has_backup: false,
             },
         )
 }
@@ -607,6 +611,8 @@ fn convert_images_in(
             .with_context(|| "content.json missing, parse the images first".to_string());
     }
     check_conflicts(&images, &jobs)?;
+    // 格式转换改写路径与字节：旧压缩备份不再对应当前文件，直接失效。
+    clear_compress_backup(project_dir);
     // 阶段一：全部解码编码到暂存区；任一步失败清理暂存区、原状不动。
     let staging = project_dir.join(STAGING_DIR);
     let _ = std::fs::remove_dir_all(&staging);
@@ -703,6 +709,26 @@ fn stage_all(
 /// 压缩暂存目录：与转换暂存区独立，避免互斥作业互相清理。
 const COMPRESS_STAGING_DIR: &str = ".tmp-compress";
 
+/// 压缩备份目录：阶段二每次覆盖前先把原图拷一份进来（仅实际改写的文件），
+/// 撤销时拷回；一次性有效，恢复/清除/新压缩/格式转换/重解析时整目录删除。
+const COMPRESS_BACKUP_DIR: &str = ".bak-images";
+
+/// 备份目录下拼接相对路径：与 `join_images_path` 同口径（防路径穿越、最多一层话隔板）。
+fn backup_images_path(project_dir: &Path, rel: &str) -> anyhow::Result<std::path::PathBuf> {
+    let images = project_dir.join(COMPRESS_BACKUP_DIR);
+    comic_files::join_images_path(&images, rel)
+}
+
+/// 是否有压缩备份：备份目录存在即真（恢复/清除后删除）。
+pub fn has_compress_backup(project_dir: &Path) -> bool {
+    project_dir.join(COMPRESS_BACKUP_DIR).is_dir()
+}
+
+/// 清除压缩备份：新压缩开始、格式转换、重解析/换源时调用，旧快照不再能安全还原。
+pub fn clear_compress_backup(project_dir: &Path) {
+    let _ = std::fs::remove_dir_all(project_dir.join(COMPRESS_BACKUP_DIR));
+}
+
 /// 灰度判定：Luma 系直接真，RGB 系逐像素比对（忽略 alpha）。
 fn is_grayscale(img: &image::DynamicImage) -> bool {
     use image::ColorType;
@@ -777,9 +803,23 @@ pub fn preview_compression(app: &tauri::AppHandle, id: &str) -> anyhow::Result<C
     preview_compression_in(&dir)
 }
 
-/// 查询压缩状态（`AppHandle` 入口）：供切回页面时回填进度。
-pub fn compress_status_of(id: &str) -> ComicCompressStatus {
-    compress_status(id)
+/// 查询压缩状态（`AppHandle` 入口）：供切回页面时回填进度；备份位实时计算。
+pub fn compress_status_of(project_dir: &Path, id: &str) -> ComicCompressStatus {
+    let mut status = compress_status(id);
+    status.has_backup = has_compress_backup(project_dir);
+    status
+}
+
+/// 撤销压缩备份（`AppHandle` 入口）：一次性有效，无备份直接报错。
+pub fn restore_backup(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    restore_compress_backup_in(&dir)
+}
+
+/// 清除压缩备份（`AppHandle` 入口）：只删备份目录，当前图片不动。
+pub fn clear_backup(app: &tauri::AppHandle, id: &str) -> anyhow::Result<bool> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    clear_compress_backup_in(&dir)
 }
 
 /// 压缩全量图片（`AppHandle` 入口）：阻塞池执行并推送逐文件进度。
@@ -820,6 +860,78 @@ pub async fn compress_images(
     }
 }
 
+/// 撤销压缩：把备份原图拷回 `sources/images`，一次性有效（恢复后删备份）；
+/// 无备份直接报错，前端据 `has_backup` 决定是否展示入口。
+/// 注意：恢复的是压缩前字节，`content.json` 路径不变故无需改写。
+pub fn restore_compress_backup_in(project_dir: &Path) -> anyhow::Result<ComicOutline> {
+    let backup = project_dir.join(COMPRESS_BACKUP_DIR);
+    if !backup.is_dir() {
+        anyhow::bail!("no compress backup to restore");
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let mut restored = 0u32;
+    let mut stack = vec![backup.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .with_context(|| format!("failed to read backup dir {}", dir.display()))?;
+        for entry in entries {
+            let entry =
+                entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("failed to stat {}", entry.path().display()))?;
+            if file_type.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let rel = entry
+                .path()
+                .strip_prefix(&backup)
+                .with_context(|| format!("bad backup path {}", entry.path().display()))?
+                .to_str()
+                .with_context(|| format!("bad backup name {}", entry.path().display()))?
+                .replace('\\', "/");
+            let dest = comic_files::join_images_path(&images, &rel)?;
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            std::fs::copy(entry.path(), &dest).with_context(|| {
+                format!(
+                    "failed to restore {} to {}",
+                    entry.path().display(),
+                    dest.display()
+                )
+            })?;
+            restored = restored.saturating_add(1);
+        }
+    }
+    if restored == 0 {
+        anyhow::bail!("compress backup is empty");
+    }
+    let _ = std::fs::remove_dir_all(&backup);
+    // 恢复的是旧字节，下游产物全部失效。
+    let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
+    let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    super::projects::touch_updated(project_dir);
+    comic_files::outline_in(project_dir)?
+        .with_context(|| "content.json missing after restore".to_string())
+}
+
+/// 清除压缩备份：只删备份目录，当前图片不动；无备份返回假。
+pub fn clear_compress_backup_in(project_dir: &Path) -> anyhow::Result<bool> {
+    let backup = project_dir.join(COMPRESS_BACKUP_DIR);
+    if !backup.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_dir_all(&backup).context("failed to clear compress backup")?;
+    super::projects::touch_updated(project_dir);
+    Ok(true)
+}
+/// 成功后清空下游 `build/` 与 `dist/`。已灰度且无需缩放的张直接跳过。
 /// 压缩内核：事务性两阶段（暂存区编码→原地覆盖），路径不变故不写 `content.json`；
 /// 成功后清空下游 `build/` 与 `dist/`。已灰度且无需缩放的张直接跳过。
 fn compress_images_in(
@@ -848,6 +960,8 @@ fn compress_images_in(
     let staging = project_dir.join(COMPRESS_STAGING_DIR);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).context("failed to create compress staging dir")?;
+    // 新压缩开始即失效旧备份：原图集合即将变化，旧快照不再对应当前文件。
+    clear_compress_backup(project_dir);
     let outcome = stage_compress_all(&images, &staging, &rels, options, progress, should_cancel)
         .inspect_err(|_| {
             let _ = std::fs::remove_dir_all(&staging);
@@ -859,6 +973,14 @@ fn compress_images_in(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
+        // 先备份原图再覆盖：撤销时按原路径拷回；跳过的文件不碰，无需备份。
+        let backup = backup_images_path(project_dir, rel)?;
+        if let Some(parent) = backup.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::copy(&dest, &backup)
+            .with_context(|| format!("failed to back up {}", dest.display()))?;
         std::fs::rename(path, &dest)
             .with_context(|| format!("failed to move {} to {}", path.display(), dest.display()))?;
     }
@@ -1347,6 +1469,77 @@ mod tests {
         assert!(register_compress(id).is_err());
         finish_convert(id);
         assert!(!is_busy(id));
+    }
+
+    #[test]
+    fn compress_backup_restore_and_clear_lifecycle() {
+        let (root, dir) = test_project("compress-backup");
+        seed_images(&dir, &["a.png", "b.png"]);
+        let images = dir.join("sources").join("images");
+        let before: Vec<u8> = std::fs::read(images.join("a.png")).expect("read original");
+        assert!(!has_compress_backup(&dir));
+
+        let mut scaled = valid_compress_options();
+        scaled.scale_percent = 50;
+        let outcome = compress_images_in(&dir, &scaled, None, None).expect("compress");
+        assert_eq!(outcome.processed, 2);
+        // 备份落盘：仅实际改写的文件，原字节一致。
+        assert!(has_compress_backup(&dir));
+        let backed: Vec<u8> =
+            std::fs::read(dir.join(".bak-images").join("a.png")).expect("read backup");
+        assert_eq!(backed, before);
+        let after: Vec<u8> = std::fs::read(images.join("a.png")).expect("read compressed");
+        assert_ne!(after, before);
+
+        // 撤销：字节恢复，备份一次性用完。
+        let outline = restore_compress_backup_in(&dir).expect("restore");
+        assert_eq!(outline.page_count, 2);
+        let restored: Vec<u8> = std::fs::read(images.join("a.png")).expect("read restored");
+        assert_eq!(restored, before);
+        assert!(!has_compress_backup(&dir));
+        assert!(restore_compress_backup_in(&dir).is_err());
+
+        // 清除：有备份回真并删目录，当前图片不动；无备份回假。
+        compress_images_in(&dir, &scaled, None, None).expect("compress again");
+        assert!(has_compress_backup(&dir));
+        assert!(clear_compress_backup_in(&dir).expect("clear"));
+        assert!(!has_compress_backup(&dir));
+        assert!(!clear_compress_backup_in(&dir).expect("clear empty"));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn skipped_files_need_no_backup() {
+        let (root, dir) = test_project("compress-backup-skip");
+        seed_images(&dir, &["a.png"]);
+        let mut gray_only = valid_compress_options();
+        gray_only.grayscale = true;
+        gray_only.scale_percent = 100;
+        // 非灰度图仍会处理；断言点在于跳过路径不写备份——用全跳过场景：
+        // 灰度开关 + 不缩放 + 已灰度图。先压成灰度，再跑一次即全跳过。
+        compress_images_in(&dir, &gray_only, None, None).expect("first compress");
+        assert!(has_compress_backup(&dir));
+        clear_compress_backup_in(&dir).expect("clear");
+        let outcome = compress_images_in(&dir, &gray_only, None, None).expect("second compress");
+        assert_eq!(outcome.processed, 0);
+        assert!(!has_compress_backup(&dir));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn convert_invalidates_compress_backup() {
+        let (root, dir) = test_project("compress-backup-invalidate");
+        seed_images(&dir, &["a.png"]);
+        let mut scaled = valid_compress_options();
+        scaled.scale_percent = 50;
+        compress_images_in(&dir, &scaled, None, None).expect("compress");
+        assert!(has_compress_backup(&dir));
+        // 格式转换改写路径与字节：旧备份直接失效。
+        convert_images_in(&dir, ImageTargetFormat::Jpeg, &valid_options(), None, None)
+            .expect("convert");
+        assert!(!has_compress_backup(&dir));
+        assert!(!dir.join(".bak-images").exists());
+        cleanup(&root);
     }
 
     #[test]

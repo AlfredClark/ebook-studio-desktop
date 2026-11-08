@@ -652,10 +652,12 @@ fn to_posix(rel: &Path) -> String {
 }
 
 /// 清空下游产物：解析、构建与打包结果全部过期，忽略删除失败（缺失即一致）。
+/// 换源后图片集合重置，旧压缩备份一并失效（重解析不碰图片集合，备份保留）。
 fn clear_downstream(project_dir: &Path) {
     let _ = std::fs::remove_file(project_dir.join(CONTENT_NAME));
     let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
     let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    super::comic_images::clear_compress_backup(project_dir);
 }
 
 /// 查询原稿状态（`AppHandle` 入口）：项目目录不存在视为目标缺失。

@@ -54,13 +54,17 @@ export const commands = {
 	cancelComicImages: (id: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("cancel_comic_images", { id })),
 	/**  预览图片压缩：只读 `content.json` + 文件大小，不解码图片。 */
 	previewComicImageCompression: (id: string) => typedError<CompressPreview, CommandError>(__TAURI_INVOKE("preview_comic_image_compression", { id })),
-	/**  查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值。 */
+	/**  查询图片压缩进度：切回页面时回填用；从未开始返回空闲零值，备份位实时计算。 */
 	getComicCompressStatus: (id: string) => typedError<ComicCompressStatus, CommandError>(__TAURI_INVOKE("get_comic_compress_status", { id })),
 	/**
 	 *  压缩全量图片：原地重编码（缩放 + 灰度 + 按源格式重编码），路径不变；
 	 *  成功后清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度。
 	 */
 	compressComicImages: (id: string, options: CompressOptions) => typedError<CompressOutcome, CommandError>(__TAURI_INVOKE("compress_comic_images", { id, options })),
+	/**  撤销压缩备份：把备份原图拷回原位，一次性有效，无备份直接报错。 */
+	restoreComicCompressBackup: (id: string) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("restore_comic_compress_backup", { id })),
+	/**  清除压缩备份：只删备份目录，当前图片不动；无备份返回假。 */
+	clearComicCompressBackup: (id: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("clear_comic_compress_backup", { id })),
 	/**  构建漫画：清空构建目录后全量重生成，返回文件树。 */
 	buildComicContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_comic_content", { id, titles })),
 	/**  预览标题格式：按话取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
@@ -377,11 +381,15 @@ export type CleanupPreset =
 /**  关闭窗口行为：落盘值为 `snake_case` 字符串，未知一律回落弹窗提示 */
 export type CloseBehavior = "prompt" | "exit" | "minimize_to_tray";
 
-/**  压缩状态探针：供切回页面时回填进度；从未开始返回空闲零值。 */
+/**
+ *  压缩状态探针：供切回页面时回填进度；从未开始返回空闲零值。
+ *  `has_backup` 供工具条“撤销/清除备份”按钮显隐，与进度无关、每次探针实时计算。
+ */
 export type ComicCompressStatus = {
 	running: boolean,
 	done_files: number,
 	total_files: number,
+	has_backup: boolean,
 };
 
 /**  转换状态探针：供切回页面时回填进度；从未开始返回空闲零值。 */

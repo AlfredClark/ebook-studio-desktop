@@ -42,6 +42,8 @@ macro_rules! collect_commands {
             $crate::commands::comic_files::preview_comic_image_compression,
             $crate::commands::comic_files::get_comic_compress_status,
             $crate::commands::comic_files::compress_comic_images,
+            $crate::commands::comic_files::restore_comic_compress_backup,
+            $crate::commands::comic_files::clear_comic_compress_backup,
             $crate::commands::comic_build::build_comic_content,
             $crate::commands::comic_build::preview_comic_txt_title,
             $crate::commands::comic_build::clear_comic_build_content,
