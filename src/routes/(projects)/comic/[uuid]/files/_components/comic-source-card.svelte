@@ -10,11 +10,15 @@
   let {
     status,
     importing = false,
+    appending = false,
     onChoose,
+    onAppend,
   }: {
     status: ComicImagesStatus;
     importing: boolean;
+    appending: boolean;
     onChoose: () => void;
+    onAppend: () => void;
   } = $props();
 
   /** 更新时间展示：UTC 落盘转本地时区，不可用时回落原文。 */
@@ -62,12 +66,17 @@
     {#if status.exists}
       <p class="text-xs text-muted-foreground">{m.comic_files_source_reselect_note()}</p>
     {/if}
-    <Button class="w-full" disabled={importing} onclick={onChoose}>
+    <Button class="w-full" disabled={importing || appending} onclick={onChoose}>
       {importing
         ? m.comic_files_source_importing()
         : status.exists
           ? m.comic_files_source_change()
           : m.comic_files_source_choose()}
     </Button>
+    {#if status.exists}
+      <Button variant="outline" class="w-full" disabled={importing || appending} onclick={onAppend}>
+        {appending ? m.comic_files_appending() : m.comic_files_append()}
+      </Button>
+    {/if}
   </div>
 </CardSection>

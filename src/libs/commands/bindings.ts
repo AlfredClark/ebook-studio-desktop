@@ -69,6 +69,11 @@ export const commands = {
 	scanComicOrphans: (id: string) => typedError<ComicOrphans, CommandError>(__TAURI_INVOKE("scan_comic_orphans", { id })),
 	/**  删除孤儿图片：只删扫描命中的无引用图片，返回刷新后的识别大纲。 */
 	deleteComicOrphans: (id: string) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("delete_comic_orphans", { id })),
+	/**
+	 *  增量追加图片：只收源目录顶层图片，按自然排序续号存入 `images/append/`；
+	 *  不碰 `content.json`（下次解析合并），忙时拒绝。
+	 */
+	appendComicImages: (id: string, sourcePath: string) => typedError<AppendOutcome, CommandError>(__TAURI_INVOKE("append_comic_images", { id, sourcePath })),
 	/**  构建漫画：清空构建目录后全量重生成，返回文件树。 */
 	buildComicContent: (id: string, titles: BuildTitleOptions) => typedError<BuildOutcome, CommandError>(__TAURI_INVOKE("build_comic_content", { id, titles })),
 	/**  预览标题格式：按话取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */
@@ -276,6 +281,14 @@ export const commands = {
 };
 
 /* Types */
+/**  增量追加结果：新增与跳过计数（跳过含子目录、非图片与隐藏项）。 */
+export type AppendOutcome = {
+	/**  实际拷贝并编号的图片数。 */
+	added: number,
+	/**  跳过数：子目录按其下文件数计，其余按项计。 */
+	skipped: number,
+};
+
 /**  构建文件内容：二进制回 `None`，前端展示不支持预览提示。 */
 export type BuildFileContent = {
 	/**  文本内容；二进制为 `None`。 */

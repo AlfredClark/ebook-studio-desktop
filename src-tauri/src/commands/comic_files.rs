@@ -2,7 +2,8 @@
 
 use crate::cores::types::CommandResult;
 use crate::features::comic_files::{
-    self, ComicImageInfo, ComicImagesStatus, ComicOrphans, ComicOutline, ComicVolumeInput,
+    self, AppendOutcome, ComicImageInfo, ComicImagesStatus, ComicOrphans, ComicOutline,
+    ComicVolumeInput,
 };
 use crate::features::comic_images::{
     self, ComicCompressStatus, ComicConvertStatus, CompressOptions, CompressOutcome,
@@ -188,4 +189,17 @@ pub fn scan_comic_orphans(app: tauri::AppHandle, id: String) -> CommandResult<Co
 #[allow(clippy::needless_pass_by_value)]
 pub fn delete_comic_orphans(app: tauri::AppHandle, id: String) -> CommandResult<ComicOutline> {
     Ok(comic_files::delete_orphans(&app, &id)?)
+}
+
+/// 增量追加图片：只收源目录顶层图片，按自然排序续号存入 `images/append/`；
+/// 不碰 `content.json`（下次解析合并），忙时拒绝。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn append_comic_images(
+    app: tauri::AppHandle,
+    id: String,
+    source_path: String,
+) -> CommandResult<AppendOutcome> {
+    Ok(comic_files::append_images(&app, &id, &source_path)?)
 }

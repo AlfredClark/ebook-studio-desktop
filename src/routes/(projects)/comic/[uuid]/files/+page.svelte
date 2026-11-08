@@ -21,6 +21,8 @@
   let loading = $state(true);
   let loadFailed = $state(false);
   let importing = $state(false);
+  /** 增量追加进行中：按钮禁用态；追加不碰 content.json，大纲保持有效。 */
+  let appending = $state(false);
   /** 识别大纲：解析成功后落本地态，右栏渲染话页树。 */
   let outline = $state<ComicOutline | null>(null);
   let parsing = $state(false);
@@ -161,6 +163,49 @@
     void loadPreview(path);
   }
 
+  /**
+   * 增量追加：选目录后只收顶层图片，按自然排序续号存入追加话； 不碰 content.json（大纲保持有效），去解析页合并后生效；孤儿扫描不同步刷新，
+   * 避免新增文件被误标（解析合并后旧大纲刷新时一并回填）。
+   */
+  async function handleAppend(): Promise<void> {
+    if (appending) {
+      return;
+    }
+    let picked: string | string[] | null;
+    try {
+      picked = await open({ multiple: false, directory: true });
+    } catch {
+      toast.error(m.comic_files_append_failed());
+      return;
+    }
+    if (typeof picked !== "string" || picked === "") {
+      return;
+    }
+    appending = true;
+    const result = await commands.appendComicImages(uuid, picked).result();
+    appending = false;
+    if (result.status === "error") {
+      toast.error(m.comic_files_append_failed());
+      return;
+    }
+    // 状态字节数跟上；大纲与孤儿列表等解析合并后再刷新，避免误报。
+    await refreshStatusOnly();
+    toast.success(
+      m.comic_files_append_success({
+        added: result.data.added,
+        skipped: result.data.skipped,
+      }),
+    );
+  }
+
+  /** 仅刷新原稿状态（不碰大纲与预览）：追加图片后同步计数用。 */
+  async function refreshStatusOnly(): Promise<void> {
+    const result = await commands.getComicImagesStatus(uuid).result();
+    if (result.status === "ok") {
+      status = result.data;
+    }
+  }
+
   /** 图片预览：绝对路径转 asset: URL，切走后回来的迟到结果直接丢弃。 */
   async function loadPreview(path: string): Promise<void> {
     const token = (previewToken += 1);
@@ -210,7 +255,13 @@
             </Button>
           </div>
         {:else}
-          <ComicSourceCard {status} {importing} onChoose={() => void handleChoose()} />
+          <ComicSourceCard
+            {status}
+            {importing}
+            {appending}
+            onChoose={() => void handleChoose()}
+            onAppend={() => void handleAppend()}
+          />
           {#if orphans != null && orphans.paths.length > 0}
             <div class="flex flex-col gap-2 py-3">
               <p class="text-sm text-muted-foreground">

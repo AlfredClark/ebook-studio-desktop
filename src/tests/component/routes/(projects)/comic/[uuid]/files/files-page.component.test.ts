@@ -11,6 +11,7 @@ const deleteMock = vi.hoisted(() => vi.fn());
 const importMock = vi.hoisted(() => vi.fn());
 const parseMock = vi.hoisted(() => vi.fn());
 const imageMock = vi.hoisted(() => vi.fn());
+const appendMock = vi.hoisted(() => vi.fn());
 const openMock = vi.hoisted(() => vi.fn());
 
 vi.mock("#libs/commands", () => ({
@@ -22,6 +23,7 @@ vi.mock("#libs/commands", () => ({
     importComicImages: importMock,
     parseComicImages: parseMock,
     getComicImagePath: imageMock,
+    appendComicImages: appendMock,
   },
 }));
 
@@ -118,5 +120,37 @@ describe("漫画文件步骤页孤儿清理", () => {
     await waitFor(() => {
       expect(statusMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
+  });
+
+  it("无原稿时不显示添加图片按钮", async () => {
+    statusMock.mockReturnValue(
+      fakeCommand({
+        status: "ok",
+        data: { ...status, exists: false, volume_count: 0, page_count: 0 },
+      }),
+    );
+    outlineMock.mockReturnValue(fakeCommand({ status: "ok", data: null }));
+    render(FilesPage);
+    await screen.findByText("Choose folder…");
+
+    expect(screen.queryByRole("button", { name: "Add images" })).toBeNull();
+  });
+
+  it("添加图片成功后刷新状态并提示去解析", async () => {
+    const user = userEvent.setup();
+    openMock.mockReturnValue(Promise.resolve("/tmp/new-pics"));
+    appendMock.mockReturnValue(fakeCommand({ status: "ok", data: { added: 2, skipped: 1 } }));
+    render(FilesPage);
+    await screen.findByText("第1话");
+
+    await user.click(screen.getByRole("button", { name: "Add images" }));
+
+    expect(openMock).toHaveBeenCalledOnce();
+    expect(appendMock).toHaveBeenCalledWith("abc-uuid", "/tmp/new-pics");
+    // 状态重新拉取（计数跟上），大纲保持有效不清空。
+    await waitFor(() => {
+      expect(statusMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getByText("第1话")).not.toBeNull();
   });
 });

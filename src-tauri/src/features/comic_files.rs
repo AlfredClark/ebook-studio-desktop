@@ -3,6 +3,7 @@
 //! 用户选择的漫画目录整体复制为 `sources/images`，解析时按文件名自然排序后落盘
 //! `<uuid>/content.json`（`metadata.json` 同级），记录阅读顺序供后续步骤调整。
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::Context;
@@ -26,6 +27,10 @@ const CONTENT_SCHEMA_VERSION: u32 = 1;
 const EXTRA_DIR_NAME: &str = "extra";
 /// 收纳话的展示标题：固定为“额外”。
 const EXTRA_TITLE: &str = "额外";
+/// 增量追加目录：`append/`，只由“添加图片”写入，自然排序续号；
+/// 展示标题固定为“追加”，合并解析时追加到末尾（不打乱已有顺序）。
+const APPEND_DIR_NAME: &str = "append";
+const APPEND_TITLE: &str = "追加";
 /// 导入元信息文件名：隐藏文件，记录复制时跳过的文件数，供解析大纲展示“无效项”。
 const IMPORT_META_NAME: &str = ".import-meta.json";
 /// 支持的图片扩展名：其余文件导入与解析时一律忽略并计数。
@@ -211,6 +216,12 @@ fn read_import_skipped(images: &Path) -> u32 {
 /// 是否收纳话路径：`extra/` 前缀即收纳话页，标题改名不影响判定。
 fn is_extra_path(rel: &str) -> bool {
     rel.strip_prefix(EXTRA_DIR_NAME)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// 是否追加话路径：`append/` 前缀即追加话页，标题改名不影响判定。
+fn is_append_path(rel: &str) -> bool {
+    rel.strip_prefix(APPEND_DIR_NAME)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 /// 是否隐藏文件：文件名以 `.` 开头；隐藏文件与目录一律忽略。
@@ -530,6 +541,9 @@ pub fn import_dir_in(project_dir: &Path, source: &Path) -> anyhow::Result<ComicI
             if dirname == EXTRA_DIR_NAME {
                 anyhow::bail!("source must not contain an `extra` directory, it is reserved");
             }
+            if dirname == APPEND_DIR_NAME {
+                anyhow::bail!("source must not contain an `append` directory, it is reserved");
+            }
             let (names, sub_ignored) = direct_images(dirpath)?;
             skipped = skipped.saturating_add(sub_ignored);
             for name in &names {
@@ -616,6 +630,126 @@ pub fn import_dir_in(project_dir: &Path, source: &Path) -> anyhow::Result<ComicI
     clear_downstream(project_dir);
     super::projects::touch_updated(project_dir);
     status_in(project_dir)
+}
+
+/// 增量追加结果：新增与跳过计数（跳过含子目录、非图片与隐藏项）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct AppendOutcome {
+    /// 实际拷贝并编号的图片数。
+    pub added: u32,
+    /// 跳过数：子目录按其下文件数计，其余按项计。
+    pub skipped: u32,
+}
+
+/// 解析追加目录现有最大编号：只认 `NNN.ext` 形态，其余按 0 处理
+///（`append/` 仅由追加写入，手工文件不参与续号）。
+fn append_max_number(append_dir: &Path) -> anyhow::Result<u32> {
+    if !append_dir.is_dir() {
+        return Ok(0);
+    }
+    let (names, _) = direct_images(append_dir)?;
+    let mut max = 0u32;
+    for name in &names {
+        let stem = name
+            .rsplit_once('.')
+            .map_or(name.as_str(), |(stem, _)| stem);
+        let digits: String = stem.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(number) = digits.parse::<u32>() {
+            max = max.max(number);
+        }
+    }
+    Ok(max)
+}
+
+/// 增量追加图片：只收源目录顶层图片，按自然排序续号存入 `images/append/`；
+/// 不碰 `content.json`（下次解析合并），但清空 `build/` 与 `dist/`。
+/// 同名不同格式不去重（独立目录天然隔离）；图片作业进行中拒绝，与导入同口径。
+pub fn append_images_in(project_dir: &Path, source: &Path) -> anyhow::Result<AppendOutcome> {
+    if !source.is_dir() {
+        anyhow::bail!("comic source is not a directory: {}", source.display());
+    }
+    // 只收顶层图片：子目录整体跳过（按其下文件数计），与追加“单话”语义一致。
+    let (names, skipped) = direct_images(source)?;
+    if names.is_empty() {
+        anyhow::bail!(
+            "no supported images found (jpg/jpeg/png/webp): {}",
+            source.display()
+        );
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let append_dir = images.join(APPEND_DIR_NAME);
+    let existing_max = append_max_number(&append_dir)?;
+    // 上限按合并后总量口径：超限整单拒绝，不留半截。
+    let mut new_bytes = 0u64;
+    for name in &names {
+        let meta = std::fs::metadata(source.join(name))
+            .with_context(|| format!("failed to stat {}", source.join(name).display()))?;
+        if !meta.is_file() {
+            anyhow::bail!("comic source changed during append: {}", source.display());
+        }
+        if meta.len() > MAX_IMAGE_BYTES {
+            anyhow::bail!("image is too large (max 50MB): {name}");
+        }
+        new_bytes = new_bytes.saturating_add(meta.len());
+    }
+    let (existing_pages, existing_bytes) = if images.is_dir() {
+        let (_, pages, size, _) = scan_images_dir(&images)?;
+        (pages, size)
+    } else {
+        (0, 0)
+    };
+    let new_count = u32::try_from(names.len()).unwrap_or(u32::MAX);
+    if existing_pages.saturating_add(names.len()) > MAX_PAGES {
+        anyhow::bail!("too many images (max {MAX_PAGES})");
+    }
+    if existing_bytes.saturating_add(new_bytes) > MAX_TOTAL_BYTES {
+        anyhow::bail!("images are too large in total (max 2GB)");
+    }
+    // 位宽下限 3 位，只增不减（应用内自然排序数值可比，混宽不乱序）。
+    let width = (existing_max.saturating_add(new_count))
+        .to_string()
+        .len()
+        .max(3);
+    std::fs::create_dir_all(&append_dir)
+        .with_context(|| format!("failed to create {}", append_dir.display()))?;
+    let mut added = 0u32;
+    for (index, name) in names.iter().enumerate() {
+        let number = existing_max
+            .saturating_add(u32::try_from(index).unwrap_or(u32::MAX))
+            .saturating_add(1);
+        let ext = Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("jpg")
+            .to_ascii_lowercase();
+        let dest = append_dir.join(format!("{number:0>width$}.{ext}"));
+        std::fs::copy(source.join(name), &dest).with_context(|| {
+            format!(
+                "failed to copy {} to {}",
+                source.join(name).display(),
+                dest.display()
+            )
+        })?;
+        added = added.saturating_add(1);
+    }
+    // 图片集合变了：构建与打包产物全部失效，解析产物保留待合并。
+    let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
+    let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    super::projects::touch_updated(project_dir);
+    Ok(AppendOutcome { added, skipped })
+}
+
+/// 增量追加图片（`AppHandle` 入口）：图片作业进行中拒绝，避免与批量替换互斥。
+pub fn append_images(
+    app: &tauri::AppHandle,
+    id: &str,
+    source_path: &str,
+) -> anyhow::Result<AppendOutcome> {
+    if super::comic_images::is_busy(id) {
+        anyhow::bail!("image job in progress for project {id}, try again later");
+    }
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    append_images_in(&dir, Path::new(source_path))
 }
 
 /// 拼接 `images/` 下的相对路径：仅允许 `Normal` 成分，防路径穿越。
@@ -784,6 +918,104 @@ pub fn delete_orphans(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicO
     delete_orphans_in(&dir)
 }
 
+/// 合并解析：保留旧顺序与标题；缺失引用丢弃（仅日志）；`append/` 新增并入已有
+/// 追加话尾，否则追加新话到末尾（标题“追加”，不打乱已有顺序）。
+/// 其它手工新增文件不复活（删页孤儿由孤儿清理覆盖），避免意外重排。
+fn merge_volumes(
+    project_dir: &Path,
+    images: &Path,
+    old: &ComicContent,
+    top_images: &[String],
+) -> anyhow::Result<Vec<ComicVolume>> {
+    let mut volumes: Vec<ComicVolume> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut append_pos: Option<usize> = None;
+    let mut dropped = 0u32;
+    for volume in &old.volumes {
+        let mut pages = Vec::new();
+        for page in &volume.pages {
+            let abs = join_images_path(images, &page.path)?;
+            if abs.is_file() {
+                if is_append_path(&page.path) {
+                    append_pos = Some(volumes.len());
+                }
+                seen.insert(page.path.clone());
+                pages.push(page.clone());
+            } else {
+                dropped = dropped.saturating_add(1);
+            }
+        }
+        // 整话文件都没了：与全量解析跳过空目录同口径，直接删话。
+        if pages.is_empty() {
+            continue;
+        }
+        volumes.push(ComicVolume {
+            title: volume.title.clone(),
+            pages,
+        });
+    }
+    if dropped > 0 {
+        log::warn!(
+            "merge dropped {dropped} missing pages in {}",
+            project_dir.display()
+        );
+    }
+    // 追加话新增：只认 `append/` 下未被引用的文件，按自然排序并入。
+    let append_dir = images.join(APPEND_DIR_NAME);
+    if append_dir.is_dir() {
+        let (names, _) = direct_images(&append_dir)?;
+        let mut fresh: Vec<String> = Vec::new();
+        for name in &names {
+            let rel = format!("{APPEND_DIR_NAME}/{name}");
+            if seen.insert(rel.clone()) {
+                fresh.push(rel);
+            }
+        }
+        if !fresh.is_empty() {
+            fresh.sort_by(|a, b| natural_cmp(a, b));
+            let pages: Vec<ComicPage> = fresh.into_iter().map(|path| ComicPage { path }).collect();
+            match append_pos {
+                Some(pos) => volumes[pos].pages.extend(pages),
+                None => volumes.push(ComicVolume {
+                    title: Some(APPEND_TITLE.to_string()),
+                    pages,
+                }),
+            }
+        }
+    }
+    // 顶层散图：收纳话语义，合并进 extra 前缀话（存在则并入，否则按“排首”新建）；
+    // 话内散文件视为删页残留，不复活（由孤儿清理覆盖）。
+    let mut loose: Vec<String> = top_images
+        .iter()
+        .filter(|name| !seen.contains(name.as_str()))
+        .cloned()
+        .collect();
+    loose.sort_by(|a, b| natural_cmp(a, b));
+    if !loose.is_empty() {
+        let extra_pages: Vec<ComicPage> =
+            loose.into_iter().map(|path| ComicPage { path }).collect();
+        match volumes
+            .iter()
+            .position(|volume| volume.pages.iter().any(|page| is_extra_path(&page.path)))
+        {
+            Some(pos) => {
+                let mut all: Vec<ComicPage> = std::mem::take(&mut volumes[pos].pages);
+                all.extend(extra_pages);
+                all.sort_by(|a, b| natural_cmp(&a.path, &b.path));
+                volumes[pos].pages = all;
+            }
+            None => volumes.insert(
+                0,
+                ComicVolume {
+                    title: Some(EXTRA_TITLE.to_string()),
+                    pages: extra_pages,
+                },
+            ),
+        }
+    }
+    Ok(volumes)
+}
+
 /// 解析图片顺序：扫描 `sources/images` 后落盘 `content.json`，返回识别大纲。
 ///
 /// 话口径：无子目录为平铺单话；否则每子目录一话（`extra` 固定排首，标题“额外”，
@@ -826,7 +1058,12 @@ pub fn parse_images_in(project_dir: &Path) -> anyhow::Result<ComicOutline> {
     }
 
     let mut volumes: Vec<ComicVolume> = Vec::new();
-    if subdirs.is_empty() && !top_images.is_empty() {
+    // 合并解析：已有解析产物时保留旧顺序与标题，只整合新增与缺失；
+    // 无产物回落全量重建（与旧行为一致）。
+    let old = read_content(project_dir).ok();
+    if let Some(previous) = old {
+        volumes = merge_volumes(project_dir, &images, &previous, &top_images)?;
+    } else if subdirs.is_empty() && !top_images.is_empty() {
         top_images.sort_by(|a, b| natural_cmp(a, b));
         volumes.push(ComicVolume {
             title: None,
@@ -850,6 +1087,9 @@ pub fn parse_images_in(project_dir: &Path) -> anyhow::Result<ComicOutline> {
             }
             let title = if dirname == EXTRA_DIR_NAME {
                 Some(EXTRA_TITLE.to_string())
+            } else if dirname == APPEND_DIR_NAME {
+                // 追加话展示标题固定为“追加”，全量重建时按自然排序就位。
+                Some(APPEND_TITLE.to_string())
             } else {
                 Some(dirname.clone())
             };
@@ -1374,6 +1614,101 @@ mod tests {
         assert!(image_path_in(&dir, "../content.json").is_err());
         assert!(image_path_in(&dir, "01.jpg").is_ok());
         assert!(image_path_in(&dir, "missing.jpg").is_err());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn append_numbers_naturally_and_continues_sequence() {
+        let (root, dir) = test_project("append-numbering");
+        import_dir_in(&dir, &source_dir(&root, "base-src", &["第1话/01.jpg"])).expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 首批按源自然排序编号（2.jpg 先于 10.JPG），位宽下限 3 位，扩展名小写归一。
+        let outcome = append_images_in(
+            &dir,
+            &source_dir(&root, "add1-src", &["10.JPG", "2.jpg", "note.txt"]),
+        )
+        .expect("append");
+        assert_eq!(outcome.added, 2);
+        assert_eq!(outcome.skipped, 1);
+        let images = dir.join(SOURCES_DIR).join(IMAGES_DIR);
+        assert!(images.join("append/001.jpg").is_file());
+        assert!(images.join("append/002.jpg").is_file());
+        // 续批接着最大编号往下排。
+        let outcome = append_images_in(&dir, &source_dir(&root, "add2-src", &["a.png"]))
+            .expect("append again");
+        assert_eq!(outcome.added, 1);
+        assert!(images.join("append/003.png").is_file());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn merge_parse_preserves_order_and_appends_new_volume_last() {
+        let (root, dir) = test_project("append-merge");
+        import_dir_in(
+            &dir,
+            &source_dir(&root, "base-src", &["第1话/01.jpg", "第2话/01.jpg"]),
+        )
+        .expect("import");
+        parse_images_in(&dir).expect("parse");
+        // 改个标题：合并后应保留，不被目录名覆盖。
+        update_volumes_in(
+            &dir,
+            &[
+                input(Some("开篇"), &["第1话/01.jpg"]),
+                input(Some("第2话"), &["第2话/01.jpg"]),
+            ],
+        )
+        .expect("rename");
+        append_images_in(&dir, &source_dir(&root, "add-src", &["x.jpg"])).expect("append");
+        let outline = parse_images_in(&dir).expect("merge parse");
+        // 旧顺序与标题保留，追加话在末尾，标题固定为“追加”。
+        assert_eq!(outline.volume_count, 3);
+        assert_eq!(outline.volumes[0].title.as_deref(), Some("开篇"));
+        assert_eq!(outline.volumes[1].title.as_deref(), Some("第2话"));
+        assert_eq!(outline.volumes[2].title.as_deref(), Some("追加"));
+        assert_eq!(outline.volumes[2].pages.len(), 1);
+        assert_eq!(outline.volumes[2].pages[0].path, "append/001.jpg");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn merge_parse_drops_missing_files() {
+        let (root, dir) = test_project("append-missing");
+        import_dir_in(&dir, &source_dir(&root, "base-src", &["01.jpg", "02.jpg"])).expect("import");
+        parse_images_in(&dir).expect("parse");
+        std::fs::remove_file(dir.join(SOURCES_DIR).join(IMAGES_DIR).join("02.jpg"))
+            .expect("delete file");
+        let outline = parse_images_in(&dir).expect("merge parse");
+        assert_eq!(outline.page_count, 1);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn full_parse_maps_append_dir_to_appended_title() {
+        let (root, dir) = test_project("append-full");
+        // 手工摆好 append/ 目录：全量重建同样识别为追加话（自然排序就位）。
+        let images = dir.join(SOURCES_DIR).join(IMAGES_DIR);
+        std::fs::create_dir_all(images.join("append")).expect("create append");
+        std::fs::write(images.join("append/001.jpg"), b"fake-image").expect("write image");
+        std::fs::create_dir_all(images.join("乙话")).expect("create volume");
+        std::fs::write(images.join("乙话/01.jpg"), b"fake-image").expect("write image");
+        let outline = parse_images_in(&dir).expect("parse");
+        assert_eq!(outline.volume_count, 2);
+        let titles: Vec<Option<&str>> = outline
+            .volumes
+            .iter()
+            .map(|volume| volume.title.as_deref())
+            .collect();
+        assert!(titles.contains(&Some("追加")));
+        assert!(titles.contains(&Some("乙话")));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn import_rejects_reserved_append_dir() {
+        let (root, dir) = test_project("append-reserved");
+        let source = source_dir(&root, "reserved-src", &["append/01.jpg"]);
+        assert!(import_dir_in(&dir, &source).is_err());
         cleanup(&root);
     }
 
