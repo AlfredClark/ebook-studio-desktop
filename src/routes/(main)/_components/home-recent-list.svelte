@@ -117,10 +117,10 @@
             {#each stagesOf(project.stages) as stage (stage.label)}
               <span class="flex shrink-0 items-center gap-1">
                 <span
-                  class="size-1.5 rounded-full {stage.done ? 'bg-primary' : 'bg-muted'}"
+                  class="size-2 rounded-full {stage.done ? 'bg-primary' : 'bg-muted'}"
                   aria-hidden="true"
                 ></span>
-                <span class="text-xs {stage.done ? 'text-foreground' : 'text-muted-foreground'}">
+                <span class="text-sm {stage.done ? 'text-foreground' : 'text-muted-foreground'}">
                   {stage.label}
                 </span>
                 <span class="sr-only">{stageState(stage.done)}</span>

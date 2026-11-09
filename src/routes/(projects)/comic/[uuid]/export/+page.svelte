@@ -638,278 +638,281 @@
           </span>
         </label>
         {#if checkPdf}
-          <div class="flex items-center gap-x-4 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_size_label()}</span>
-            <RadioGroup.Root
-              value={pdfPageSize}
-              onValueChange={handlePdfPageSizeChange}
-              class="flex items-center gap-x-4"
-            >
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="original"
-                  aria-label={m.comic_export_pdf_size_original()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_size_original()}</span>
-              </label>
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="average"
-                  aria-label={m.comic_export_pdf_size_average()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_size_average()}</span>
-              </label>
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="fixed"
-                  aria-label={m.comic_export_pdf_size_fixed()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_size_fixed()}</span>
-              </label>
-            </RadioGroup.Root>
-          </div>
-          <div class="flex flex-wrap items-center gap-2 py-2">
-            {#if pdfPageSize === "fixed"}
-              <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_aspect_label()}</span>
-              <Select
-                type="single"
-                value={pdfAspectLock}
-                items={pdfAspectLockItems}
-                onValueChange={handleAspectLockChange}
-              >
-                <SelectTrigger
-                  class="w-28"
-                  aria-label={m.comic_export_pdf_aspect_label()}
-                  disabled={exporting}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {#each pdfAspectLockItems as item (item.value)}
-                      <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
-                    {/each}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            {/if}
-            <label class="flex items-center gap-2 text-sm">
-              <span class="font-medium">{m.comic_export_pdf_dpi_label()}</span>
-              <Input
-                type="number"
-                min={72}
-                max={600}
-                step={1}
-                value={pdfDpi}
-                aria-label={m.comic_export_pdf_dpi_label()}
-                aria-invalid={pdfOptions === null}
-                disabled={exporting}
-                oninput={(event) => (pdfDpi = event.currentTarget.value)}
-                class="w-24"
-              />
-            </label>
-            <span class="text-xs text-muted-foreground">{m.comic_export_pdf_dpi_unit()}</span>
-            <span class="min-w-0 flex-1 text-xs text-muted-foreground">
-              {m.comic_export_pdf_dpi_hint()}
-            </span>
-          </div>
-          {#if pdfPageSize === "fixed"}
-            <div class="flex flex-wrap items-center gap-2 py-2">
-              <label class="flex items-center gap-2 text-sm">
-                <span class="font-medium">{m.comic_export_pdf_width_label()}</span>
-                <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={pdfWidthPx}
-                  aria-label={m.comic_export_pdf_width_label()}
-                  aria-invalid={pdfOptions === null}
-                  disabled={exporting}
-                  oninput={(event) => handlePdfWidthInput(event.currentTarget.value)}
-                  class="w-28"
-                />
-              </label>
-              <span aria-hidden="true" class="text-muted-foreground">×</span>
-              <label class="flex items-center gap-2 text-sm">
-                <span class="font-medium">{m.comic_export_pdf_height_label()}</span>
-                <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={pdfHeightPx}
-                  aria-label={m.comic_export_pdf_height_label()}
-                  aria-invalid={pdfOptions === null}
-                  disabled={exporting}
-                  oninput={(event) => handlePdfHeightInput(event.currentTarget.value)}
-                  class="w-28"
-                />
-              </label>
-            </div>
-          {:else if pdfPageSize === "original"}
-            <p class="text-xs text-muted-foreground">
-              {m.comic_export_pdf_original_hint()}
-            </p>
-          {:else}
-            <p class="text-xs text-muted-foreground">
-              {m.comic_export_pdf_average_hint({ pages: status.page_count })}
-            </p>
-          {/if}
-          {#if pdfPageSize !== "original"}
+          <div class="ml-6 flex flex-col border-l border-border pl-4">
             <div class="flex items-center gap-x-4 py-2">
-              <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_fill_label()}</span>
+              <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_size_label()}</span>
               <RadioGroup.Root
-                value={pdfFillMode}
-                onValueChange={handlePdfFillModeChange}
+                value={pdfPageSize}
+                onValueChange={handlePdfPageSizeChange}
                 class="flex items-center gap-x-4"
               >
                 <label class="flex cursor-pointer items-center gap-1.5 text-sm">
                   <RadioGroup.Item
-                    value="contain"
-                    aria-label={m.comic_export_pdf_fill_contain()}
+                    value="original"
+                    aria-label={m.comic_export_pdf_size_original()}
                     disabled={exporting}
                   />
-                  <span class="whitespace-nowrap">{m.comic_export_pdf_fill_contain()}</span>
+                  <span class="whitespace-nowrap">{m.comic_export_pdf_size_original()}</span>
                 </label>
                 <label class="flex cursor-pointer items-center gap-1.5 text-sm">
                   <RadioGroup.Item
-                    value="cover"
-                    aria-label={m.comic_export_pdf_fill_cover()}
+                    value="average"
+                    aria-label={m.comic_export_pdf_size_average()}
                     disabled={exporting}
                   />
-                  <span class="whitespace-nowrap">{m.comic_export_pdf_fill_cover()}</span>
+                  <span class="whitespace-nowrap">{m.comic_export_pdf_size_average()}</span>
                 </label>
                 <label class="flex cursor-pointer items-center gap-1.5 text-sm">
                   <RadioGroup.Item
-                    value="stretch"
-                    aria-label={m.comic_export_pdf_fill_stretch()}
+                    value="fixed"
+                    aria-label={m.comic_export_pdf_size_fixed()}
                     disabled={exporting}
                   />
-                  <span class="whitespace-nowrap">{m.comic_export_pdf_fill_stretch()}</span>
+                  <span class="whitespace-nowrap">{m.comic_export_pdf_size_fixed()}</span>
                 </label>
               </RadioGroup.Root>
             </div>
             <div class="flex flex-wrap items-center gap-2 py-2">
-              <span class="shrink-0 text-sm font-medium">
-                {m.comic_export_pdf_horizontal_alignment_label()}
-              </span>
-              <Select
-                type="single"
-                value={pdfHorizontalAlignment}
-                items={pdfHorizontalAlignmentItems}
-                onValueChange={handlePdfHorizontalAlignmentChange}
-              >
-                <SelectTrigger
-                  class="w-28"
-                  aria-label={m.comic_export_pdf_horizontal_alignment_label()}
-                  disabled={exporting || pdfFillMode === "stretch"}
+              {#if pdfPageSize === "fixed"}
+                <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_aspect_label()}</span
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {#each pdfHorizontalAlignmentItems as item (item.value)}
-                      <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
-                    {/each}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <span class="shrink-0 text-sm font-medium">
-                {m.comic_export_pdf_vertical_alignment_label()}
-              </span>
-              <Select
-                type="single"
-                value={pdfVerticalAlignment}
-                items={pdfVerticalAlignmentItems}
-                onValueChange={handlePdfVerticalAlignmentChange}
-              >
-                <SelectTrigger
-                  class="w-28"
-                  aria-label={m.comic_export_pdf_vertical_alignment_label()}
-                  disabled={exporting || pdfFillMode === "stretch"}
+                <Select
+                  type="single"
+                  value={pdfAspectLock}
+                  items={pdfAspectLockItems}
+                  onValueChange={handleAspectLockChange}
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {#each pdfVerticalAlignmentItems as item (item.value)}
-                      <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
-                    {/each}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-          {/if}
-          {#if status.has_cover}
-            <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">
-              <Checkbox
-                checked={includePdfCover}
-                disabled={exporting}
-                onCheckedChange={(value) => (includePdfCover = value === true)}
-              />
-              <span>{m.comic_export_pdf_include_cover()}</span>
-            </label>
-          {/if}
-          {#if isEpisodeBook}
-            <div class="flex items-center gap-2 py-2">
-              <span class="shrink-0 text-sm font-medium">
-                {m.comic_build_volume_title_label()}
-              </span>
-              <Select
-                type="single"
-                value={pdfVolumeKind}
-                items={volumeTitleKindItems}
-                onValueChange={handlePdfVolumeTitleKindChange}
-              >
-                <SelectTrigger
-                  class="w-36 shrink-0"
-                  aria-label={m.comic_build_volume_title_label()}
-                  disabled={exporting}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {#each COMIC_VOLUME_TITLE_KINDS as kind (kind)}
-                    <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
-                  {/each}
-                </SelectContent>
-              </Select>
-              {#if pdfVolumeKind === "custom"}
-                <Input
-                  type="text"
-                  value={pdfVolumePattern}
-                  oninput={(event) => handlePdfVolumePatternInput(event.currentTarget.value)}
-                  placeholder={m.comic_build_volume_custom_placeholder()}
-                  aria-label={m.build_title_custom()}
-                  disabled={exporting}
-                  class="min-w-0 flex-1"
-                />
-              {:else if pdfVolumePreview !== null}
-                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                  {m.build_txt_preview_label()}: {pdfVolumePreview}
-                </span>
+                  <SelectTrigger
+                    class="w-28"
+                    aria-label={m.comic_export_pdf_aspect_label()}
+                    disabled={exporting}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {#each pdfAspectLockItems as item (item.value)}
+                        <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                      {/each}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               {/if}
+              <label class="flex items-center gap-2 text-sm">
+                <span class="font-medium">{m.comic_export_pdf_dpi_label()}</span>
+                <Input
+                  type="number"
+                  min={72}
+                  max={600}
+                  step={1}
+                  value={pdfDpi}
+                  aria-label={m.comic_export_pdf_dpi_label()}
+                  aria-invalid={pdfOptions === null}
+                  disabled={exporting}
+                  oninput={(event) => (pdfDpi = event.currentTarget.value)}
+                  class="w-24"
+                />
+              </label>
+              <span class="text-xs text-muted-foreground">{m.comic_export_pdf_dpi_unit()}</span>
+              <span class="min-w-0 flex-1 text-xs text-muted-foreground">
+                {m.comic_export_pdf_dpi_hint()}
+              </span>
             </div>
-            {#if pdfVolumeKind === "custom"}
-              <div class="flex min-h-6 items-center gap-2 py-1">
-                {#if pdfVolumePreview !== null}
+            {#if pdfPageSize === "fixed"}
+              <div class="flex flex-wrap items-center gap-2 py-2">
+                <label class="flex items-center gap-2 text-sm">
+                  <span class="font-medium">{m.comic_export_pdf_width_label()}</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={pdfWidthPx}
+                    aria-label={m.comic_export_pdf_width_label()}
+                    aria-invalid={pdfOptions === null}
+                    disabled={exporting}
+                    oninput={(event) => handlePdfWidthInput(event.currentTarget.value)}
+                    class="w-28"
+                  />
+                </label>
+                <span aria-hidden="true" class="text-muted-foreground">×</span>
+                <label class="flex items-center gap-2 text-sm">
+                  <span class="font-medium">{m.comic_export_pdf_height_label()}</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={pdfHeightPx}
+                    aria-label={m.comic_export_pdf_height_label()}
+                    aria-invalid={pdfOptions === null}
+                    disabled={exporting}
+                    oninput={(event) => handlePdfHeightInput(event.currentTarget.value)}
+                    class="w-28"
+                  />
+                </label>
+              </div>
+            {:else if pdfPageSize === "original"}
+              <p class="text-xs text-muted-foreground">
+                {m.comic_export_pdf_original_hint()}
+              </p>
+            {:else}
+              <p class="text-xs text-muted-foreground">
+                {m.comic_export_pdf_average_hint({ pages: status.page_count })}
+              </p>
+            {/if}
+            {#if pdfPageSize !== "original"}
+              <div class="flex items-center gap-x-4 py-2">
+                <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_fill_label()}</span>
+                <RadioGroup.Root
+                  value={pdfFillMode}
+                  onValueChange={handlePdfFillModeChange}
+                  class="flex items-center gap-x-4"
+                >
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="contain"
+                      aria-label={m.comic_export_pdf_fill_contain()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.comic_export_pdf_fill_contain()}</span>
+                  </label>
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="cover"
+                      aria-label={m.comic_export_pdf_fill_cover()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.comic_export_pdf_fill_cover()}</span>
+                  </label>
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="stretch"
+                      aria-label={m.comic_export_pdf_fill_stretch()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.comic_export_pdf_fill_stretch()}</span>
+                  </label>
+                </RadioGroup.Root>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 py-2">
+                <span class="shrink-0 text-sm font-medium">
+                  {m.comic_export_pdf_horizontal_alignment_label()}
+                </span>
+                <Select
+                  type="single"
+                  value={pdfHorizontalAlignment}
+                  items={pdfHorizontalAlignmentItems}
+                  onValueChange={handlePdfHorizontalAlignmentChange}
+                >
+                  <SelectTrigger
+                    class="w-28"
+                    aria-label={m.comic_export_pdf_horizontal_alignment_label()}
+                    disabled={exporting || pdfFillMode === "stretch"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {#each pdfHorizontalAlignmentItems as item (item.value)}
+                        <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                      {/each}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <span class="shrink-0 text-sm font-medium">
+                  {m.comic_export_pdf_vertical_alignment_label()}
+                </span>
+                <Select
+                  type="single"
+                  value={pdfVerticalAlignment}
+                  items={pdfVerticalAlignmentItems}
+                  onValueChange={handlePdfVerticalAlignmentChange}
+                >
+                  <SelectTrigger
+                    class="w-28"
+                    aria-label={m.comic_export_pdf_vertical_alignment_label()}
+                    disabled={exporting || pdfFillMode === "stretch"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {#each pdfVerticalAlignmentItems as item (item.value)}
+                        <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                      {/each}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+            {/if}
+            {#if status.has_cover}
+              <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">
+                <Checkbox
+                  checked={includePdfCover}
+                  disabled={exporting}
+                  onCheckedChange={(value) => (includePdfCover = value === true)}
+                />
+                <span>{m.comic_export_pdf_include_cover()}</span>
+              </label>
+            {/if}
+            {#if isEpisodeBook}
+              <div class="flex items-center gap-2 py-2">
+                <span class="shrink-0 text-sm font-medium">
+                  {m.comic_build_volume_title_label()}
+                </span>
+                <Select
+                  type="single"
+                  value={pdfVolumeKind}
+                  items={volumeTitleKindItems}
+                  onValueChange={handlePdfVolumeTitleKindChange}
+                >
+                  <SelectTrigger
+                    class="w-36 shrink-0"
+                    aria-label={m.comic_build_volume_title_label()}
+                    disabled={exporting}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {#each COMIC_VOLUME_TITLE_KINDS as kind (kind)}
+                      <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
+                    {/each}
+                  </SelectContent>
+                </Select>
+                {#if pdfVolumeKind === "custom"}
+                  <Input
+                    type="text"
+                    value={pdfVolumePattern}
+                    oninput={(event) => handlePdfVolumePatternInput(event.currentTarget.value)}
+                    placeholder={m.comic_build_volume_custom_placeholder()}
+                    aria-label={m.build_title_custom()}
+                    disabled={exporting}
+                    class="min-w-0 flex-1"
+                  />
+                {:else if pdfVolumePreview !== null}
                   <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                     {m.build_txt_preview_label()}: {pdfVolumePreview}
                   </span>
-                  <span class="shrink-0 text-xs text-muted-foreground">
-                    {m.build_txt_custom_legend()}
-                  </span>
                 {/if}
               </div>
+              {#if pdfVolumeKind === "custom"}
+                <div class="flex min-h-6 items-center gap-2 py-1">
+                  {#if pdfVolumePreview !== null}
+                    <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {m.build_txt_preview_label()}: {pdfVolumePreview}
+                    </span>
+                    <span class="shrink-0 text-xs text-muted-foreground">
+                      {m.build_txt_custom_legend()}
+                    </span>
+                  {/if}
+                </div>
+              {/if}
             {/if}
-          {/if}
-          {#if pdfOptions === null}
-            <p role="alert" class="text-xs text-destructive">
-              {m.comic_export_pdf_settings_invalid()}
-            </p>
-          {/if}
+            {#if pdfOptions === null}
+              <p role="alert" class="text-xs text-destructive">
+                {m.comic_export_pdf_settings_invalid()}
+              </p>
+            {/if}
+          </div>
         {/if}
       </div>
       <!-- 原图一组：复选 + 文件夹/压缩包 + 标题格式，无分隔线 -->
@@ -941,74 +944,130 @@
           </span>
         </label>
         {#if checkImages}
-          <div class="flex items-center gap-x-4 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.comic_export_images_mode_label()}</span>
-            <RadioGroup.Root
-              value={imagesMode}
-              onValueChange={handleImagesModeChange}
-              class="flex items-center gap-x-4"
-            >
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="folder"
-                  aria-label={m.comic_export_images_folder()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_images_folder()}</span>
-              </label>
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="zip"
-                  aria-label={m.comic_export_images_zip()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_images_zip()}</span>
-              </label>
-            </RadioGroup.Root>
-          </div>
-          {#if isEpisodeBook}
+          <div class="ml-6 flex flex-col border-l border-border pl-4">
+            <div class="flex items-center gap-x-4 py-2">
+              <span class="shrink-0 text-sm font-medium">{m.comic_export_images_mode_label()}</span>
+              <RadioGroup.Root
+                value={imagesMode}
+                onValueChange={handleImagesModeChange}
+                class="flex items-center gap-x-4"
+              >
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="folder"
+                    aria-label={m.comic_export_images_folder()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.comic_export_images_folder()}</span>
+                </label>
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="zip"
+                    aria-label={m.comic_export_images_zip()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.comic_export_images_zip()}</span>
+                </label>
+              </RadioGroup.Root>
+            </div>
+            {#if isEpisodeBook}
+              <div class="flex items-center gap-2 py-2">
+                <span class="shrink-0 text-sm font-medium"
+                  >{m.comic_build_volume_title_label()}</span
+                >
+                <Select
+                  type="single"
+                  value={volumeKind}
+                  items={volumeTitleKindItems}
+                  onValueChange={(value) => handleTitleKindChange(value, "volume")}
+                >
+                  <SelectTrigger
+                    class="w-36 shrink-0"
+                    aria-label={m.comic_build_volume_title_label()}
+                    disabled={exporting}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {#each COMIC_VOLUME_TITLE_KINDS as kind (kind)}
+                      <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
+                    {/each}
+                  </SelectContent>
+                </Select>
+                {#if volumeKind === "custom"}
+                  <Input
+                    type="text"
+                    value={volumePattern}
+                    oninput={(event) => handlePatternInput("volume", event.currentTarget.value)}
+                    placeholder={m.comic_build_volume_custom_placeholder()}
+                    aria-label={m.build_title_custom()}
+                    disabled={exporting}
+                    class="min-w-0 flex-1"
+                  />
+                {:else if volumePreview !== null}
+                  <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    {m.build_txt_preview_label()}: {volumePreview}
+                  </span>
+                {/if}
+              </div>
+              {#if volumeKind === "custom"}
+                <div class="flex min-h-6 items-center gap-2 py-1">
+                  {#if volumePreview !== null}
+                    <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {m.build_txt_preview_label()}: {volumePreview}
+                    </span>
+                    <span class="shrink-0 text-xs text-muted-foreground">
+                      {m.build_txt_custom_legend()}
+                    </span>
+                  {/if}
+                </div>
+              {/if}
+              {#if showVolumePadHint}
+                <p class="text-xs text-muted-foreground">{m.comic_export_volume_pad_hint()}</p>
+              {/if}
+            {/if}
             <div class="flex items-center gap-2 py-2">
-              <span class="shrink-0 text-sm font-medium">{m.comic_build_volume_title_label()}</span>
+              <span class="shrink-0 text-sm font-medium">{m.comic_build_page_title_label()}</span>
               <Select
                 type="single"
-                value={volumeKind}
-                items={volumeTitleKindItems}
-                onValueChange={(value) => handleTitleKindChange(value, "volume")}
+                value={pageKind}
+                items={pageTitleKindItems}
+                onValueChange={(value) => handleTitleKindChange(value, "page")}
               >
                 <SelectTrigger
                   class="w-36 shrink-0"
-                  aria-label={m.comic_build_volume_title_label()}
+                  aria-label={m.comic_build_page_title_label()}
                   disabled={exporting}
                 >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {#each COMIC_VOLUME_TITLE_KINDS as kind (kind)}
+                  {#each COMIC_PAGE_TITLE_KINDS as kind (kind)}
                     <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
                   {/each}
                 </SelectContent>
               </Select>
-              {#if volumeKind === "custom"}
+              {#if pageKind === "custom"}
                 <Input
                   type="text"
-                  value={volumePattern}
-                  oninput={(event) => handlePatternInput("volume", event.currentTarget.value)}
-                  placeholder={m.comic_build_volume_custom_placeholder()}
+                  value={pagePattern}
+                  oninput={(event) => handlePatternInput("page", event.currentTarget.value)}
+                  placeholder={m.comic_build_page_custom_placeholder()}
                   aria-label={m.build_title_custom()}
                   disabled={exporting}
                   class="min-w-0 flex-1"
                 />
-              {:else if volumePreview !== null}
+              {:else if pagePreview !== null}
                 <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                  {m.build_txt_preview_label()}: {volumePreview}
+                  {m.build_txt_preview_label()}: {pagePreview}
                 </span>
               {/if}
             </div>
-            {#if volumeKind === "custom"}
+            {#if pageKind === "custom"}
               <div class="flex min-h-6 items-center gap-2 py-1">
-                {#if volumePreview !== null}
+                {#if pagePreview !== null}
                   <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                    {m.build_txt_preview_label()}: {volumePreview}
+                    {m.build_txt_preview_label()}: {pagePreview}
                   </span>
                   <span class="shrink-0 text-xs text-muted-foreground">
                     {m.build_txt_custom_legend()}
@@ -1016,86 +1075,34 @@
                 {/if}
               </div>
             {/if}
-            {#if showVolumePadHint}
-              <p class="text-xs text-muted-foreground">{m.comic_export_volume_pad_hint()}</p>
-            {/if}
-          {/if}
-          <div class="flex items-center gap-2 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.comic_build_page_title_label()}</span>
-            <Select
-              type="single"
-              value={pageKind}
-              items={pageTitleKindItems}
-              onValueChange={(value) => handleTitleKindChange(value, "page")}
-            >
-              <SelectTrigger
-                class="w-36 shrink-0"
-                aria-label={m.comic_build_page_title_label()}
-                disabled={exporting}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {#each COMIC_PAGE_TITLE_KINDS as kind (kind)}
-                  <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
-                {/each}
-              </SelectContent>
-            </Select>
-            {#if pageKind === "custom"}
-              <Input
-                type="text"
-                value={pagePattern}
-                oninput={(event) => handlePatternInput("page", event.currentTarget.value)}
-                placeholder={m.comic_build_page_custom_placeholder()}
-                aria-label={m.build_title_custom()}
-                disabled={exporting}
-                class="min-w-0 flex-1"
-              />
-            {:else if pagePreview !== null}
-              <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                {m.build_txt_preview_label()}: {pagePreview}
-              </span>
+            {#if isEpisodeBook}
+              <div class="flex items-center gap-x-4 py-2">
+                <span class="shrink-0 text-sm font-medium">{m.comic_build_numbering_label()}</span>
+                <RadioGroup.Root
+                  value={numbering}
+                  onValueChange={handleNumberingChange}
+                  class="flex items-center gap-x-4"
+                >
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="continuous"
+                      aria-label={m.comic_build_numbering_continuous()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.comic_build_numbering_continuous()}</span>
+                  </label>
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="per_volume"
+                      aria-label={m.comic_build_numbering_per_volume()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.comic_build_numbering_per_volume()}</span>
+                  </label>
+                </RadioGroup.Root>
+              </div>
             {/if}
           </div>
-          {#if pageKind === "custom"}
-            <div class="flex min-h-6 items-center gap-2 py-1">
-              {#if pagePreview !== null}
-                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                  {m.build_txt_preview_label()}: {pagePreview}
-                </span>
-                <span class="shrink-0 text-xs text-muted-foreground">
-                  {m.build_txt_custom_legend()}
-                </span>
-              {/if}
-            </div>
-          {/if}
-          {#if isEpisodeBook}
-            <div class="flex items-center gap-x-4 py-2">
-              <span class="shrink-0 text-sm font-medium">{m.comic_build_numbering_label()}</span>
-              <RadioGroup.Root
-                value={numbering}
-                onValueChange={handleNumberingChange}
-                class="flex items-center gap-x-4"
-              >
-                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                  <RadioGroup.Item
-                    value="continuous"
-                    aria-label={m.comic_build_numbering_continuous()}
-                    disabled={exporting}
-                  />
-                  <span class="whitespace-nowrap">{m.comic_build_numbering_continuous()}</span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                  <RadioGroup.Item
-                    value="per_volume"
-                    aria-label={m.comic_build_numbering_per_volume()}
-                    disabled={exporting}
-                  />
-                  <span class="whitespace-nowrap">{m.comic_build_numbering_per_volume()}</span>
-                </label>
-              </RadioGroup.Root>
-            </div>
-          {/if}
         {/if}
       </div>
       <label class="flex cursor-pointer items-center gap-2 py-3 text-sm">

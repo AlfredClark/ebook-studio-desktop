@@ -442,18 +442,70 @@
           </span>
         </label>
         {#if checkTxt}
-          {#if isVolumeBook}
+          <div class="ml-6 flex flex-col border-l border-border pl-4">
+            {#if isVolumeBook}
+              <div class="flex items-center gap-2 py-2">
+                <span class="shrink-0 text-sm font-medium">{m.export_txt_volume_title_label()}</span
+                >
+                <Select
+                  type="single"
+                  value={volumeKind}
+                  items={titleKindItems}
+                  onValueChange={(value) => handleTitleKindChange(value, "volume")}
+                >
+                  <SelectTrigger
+                    class="w-36 shrink-0"
+                    aria-label={m.export_txt_volume_title_label()}
+                    disabled={exporting}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {#each TXT_TITLE_KINDS as kind (kind)}
+                      <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
+                    {/each}
+                  </SelectContent>
+                </Select>
+                {#if volumeKind === "custom"}
+                  <Input
+                    type="text"
+                    value={volumePattern}
+                    oninput={(event) => handlePatternInput("volume", event.currentTarget.value)}
+                    placeholder={m.export_txt_volume_custom_placeholder()}
+                    aria-label={m.export_txt_title_custom()}
+                    disabled={exporting}
+                    class="min-w-0 flex-1"
+                  />
+                {:else if volumePreview !== null}
+                  <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    {m.export_txt_preview_label()}: {volumePreview}
+                  </span>
+                {/if}
+              </div>
+              {#if volumeKind === "custom"}
+                <div class="flex min-h-6 items-center gap-2 py-1">
+                  {#if volumePreview !== null}
+                    <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {m.export_txt_preview_label()}: {volumePreview}
+                    </span>
+                    <span class="shrink-0 text-xs text-muted-foreground">
+                      {m.export_txt_custom_legend()}
+                    </span>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
             <div class="flex items-center gap-2 py-2">
-              <span class="shrink-0 text-sm font-medium">{m.export_txt_volume_title_label()}</span>
+              <span class="shrink-0 text-sm font-medium">{m.export_txt_chapter_title_label()}</span>
               <Select
                 type="single"
-                value={volumeKind}
+                value={chapterKind}
                 items={titleKindItems}
-                onValueChange={(value) => handleTitleKindChange(value, "volume")}
+                onValueChange={(value) => handleTitleKindChange(value, "chapter")}
               >
                 <SelectTrigger
                   class="w-36 shrink-0"
-                  aria-label={m.export_txt_volume_title_label()}
+                  aria-label={m.export_txt_chapter_title_label()}
                   disabled={exporting}
                 >
                   <SelectValue />
@@ -464,27 +516,27 @@
                   {/each}
                 </SelectContent>
               </Select>
-              {#if volumeKind === "custom"}
+              {#if chapterKind === "custom"}
                 <Input
                   type="text"
-                  value={volumePattern}
-                  oninput={(event) => handlePatternInput("volume", event.currentTarget.value)}
-                  placeholder={m.export_txt_volume_custom_placeholder()}
+                  value={chapterPattern}
+                  oninput={(event) => handlePatternInput("chapter", event.currentTarget.value)}
+                  placeholder={m.export_txt_custom_placeholder()}
                   aria-label={m.export_txt_title_custom()}
                   disabled={exporting}
                   class="min-w-0 flex-1"
                 />
-              {:else if volumePreview !== null}
+              {:else if chapterPreview !== null}
                 <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                  {m.export_txt_preview_label()}: {volumePreview}
+                  {m.export_txt_preview_label()}: {chapterPreview}
                 </span>
               {/if}
             </div>
-            {#if volumeKind === "custom"}
+            {#if chapterKind === "custom"}
               <div class="flex min-h-6 items-center gap-2 py-1">
-                {#if volumePreview !== null}
+                {#if chapterPreview !== null}
                   <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                    {m.export_txt_preview_label()}: {volumePreview}
+                    {m.export_txt_preview_label()}: {chapterPreview}
                   </span>
                   <span class="shrink-0 text-xs text-muted-foreground">
                     {m.export_txt_custom_legend()}
@@ -492,102 +544,53 @@
                 {/if}
               </div>
             {/if}
-          {/if}
-          <div class="flex items-center gap-2 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.export_txt_chapter_title_label()}</span>
-            <Select
-              type="single"
-              value={chapterKind}
-              items={titleKindItems}
-              onValueChange={(value) => handleTitleKindChange(value, "chapter")}
-            >
-              <SelectTrigger
-                class="w-36 shrink-0"
-                aria-label={m.export_txt_chapter_title_label()}
-                disabled={exporting}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {#each TXT_TITLE_KINDS as kind (kind)}
-                  <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
-                {/each}
-              </SelectContent>
-            </Select>
-            {#if chapterKind === "custom"}
-              <Input
-                type="text"
-                value={chapterPattern}
-                oninput={(event) => handlePatternInput("chapter", event.currentTarget.value)}
-                placeholder={m.export_txt_custom_placeholder()}
-                aria-label={m.export_txt_title_custom()}
-                disabled={exporting}
-                class="min-w-0 flex-1"
-              />
-            {:else if chapterPreview !== null}
-              <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                {m.export_txt_preview_label()}: {chapterPreview}
-              </span>
+            {#if isVolumeBook}
+              <div class="flex items-center gap-x-4 py-2">
+                <span class="shrink-0 text-sm font-medium"
+                  >{m.export_txt_chapter_numbering_label()}</span
+                >
+                <RadioGroup.Root
+                  value={numbering}
+                  onValueChange={handleNumberingChange}
+                  class="flex items-center gap-x-4"
+                >
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="continuous"
+                      aria-label={m.export_txt_numbering_continuous()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.export_txt_numbering_continuous()}</span>
+                  </label>
+                  <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                    <RadioGroup.Item
+                      value="per_volume"
+                      aria-label={m.export_txt_numbering_per_volume()}
+                      disabled={exporting}
+                    />
+                    <span class="whitespace-nowrap">{m.export_txt_numbering_per_volume()}</span>
+                  </label>
+                </RadioGroup.Root>
+              </div>
             {/if}
-          </div>
-          {#if chapterKind === "custom"}
-            <div class="flex min-h-6 items-center gap-2 py-1">
-              {#if chapterPreview !== null}
-                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                  {m.export_txt_preview_label()}: {chapterPreview}
-                </span>
-                <span class="shrink-0 text-xs text-muted-foreground">
-                  {m.export_txt_custom_legend()}
-                </span>
-              {/if}
+            <div class="flex items-center gap-2 py-2">
+              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm">
+                <Checkbox
+                  checked={metaEnabled}
+                  disabled={exporting}
+                  onCheckedChange={(value) => {
+                    metaEnabled = value === true;
+                    if (metaEnabled) {
+                      metaFields = [...METADATA_FIELDS];
+                    }
+                  }}
+                />
+                <span class="font-medium">{m.export_meta_label()}</span>
+              </label>
+              <Button variant="outline" size="sm" disabled={exporting} onclick={openMetaDialog}>
+                {m.export_meta_choose()}
+              </Button>
             </div>
-          {/if}
-          {#if isVolumeBook}
-            <div class="flex items-center gap-x-4 py-2">
-              <span class="shrink-0 text-sm font-medium"
-                >{m.export_txt_chapter_numbering_label()}</span
-              >
-              <RadioGroup.Root
-                value={numbering}
-                onValueChange={handleNumberingChange}
-                class="flex items-center gap-x-4"
-              >
-                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                  <RadioGroup.Item
-                    value="continuous"
-                    aria-label={m.export_txt_numbering_continuous()}
-                    disabled={exporting}
-                  />
-                  <span class="whitespace-nowrap">{m.export_txt_numbering_continuous()}</span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                  <RadioGroup.Item
-                    value="per_volume"
-                    aria-label={m.export_txt_numbering_per_volume()}
-                    disabled={exporting}
-                  />
-                  <span class="whitespace-nowrap">{m.export_txt_numbering_per_volume()}</span>
-                </label>
-              </RadioGroup.Root>
-            </div>
-          {/if}
-          <div class="flex items-center gap-2 py-2">
-            <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm">
-              <Checkbox
-                checked={metaEnabled}
-                disabled={exporting}
-                onCheckedChange={(value) => {
-                  metaEnabled = value === true;
-                  if (metaEnabled) {
-                    metaFields = [...METADATA_FIELDS];
-                  }
-                }}
-              />
-              <span class="font-medium">{m.export_meta_label()}</span>
-            </label>
-            <Button variant="outline" size="sm" disabled={exporting} onclick={openMetaDialog}>
-              {m.export_meta_choose()}
-            </Button>
           </div>
         {/if}
       </div>
