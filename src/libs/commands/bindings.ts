@@ -544,7 +544,7 @@ export type ComicPdfHorizontalAlignment =
 /**  右对齐。 */
 "right";
 
-/**  漫画 PDF 导出参数；固定尺寸字段在平均模式下忽略。 */
+/**  漫画 PDF 导出参数；固定尺寸字段仅在固定模式下使用，原图尺寸模式下填充与对齐无意义。 */
 export type ComicPdfOptions = {
 	/**  页面尺寸来源。 */
 	page_size: ComicPdfPageSize,
@@ -569,7 +569,9 @@ export type ComicPdfPageSize =
 /**  按漫画页的平均像素宽高生成统一画布。 */
 "average" | 
 /**  使用用户指定的像素宽高生成统一画布。 */
-"fixed";
+"fixed" | 
+/**  每页采用原图宽高，一图一页；填充与对齐此时无意义。 */
+"original";
 
 /**  图片的垂直对齐位置。 */
 export type ComicPdfVerticalAlignment = 

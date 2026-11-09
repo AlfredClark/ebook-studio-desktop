@@ -29,6 +29,8 @@ pub enum ComicPdfPageSize {
     Average,
     /// 使用用户指定的像素宽高生成统一画布。
     Fixed,
+    /// 每页采用原图宽高，一图一页；填充与对齐此时无意义。
+    Original,
 }
 
 /// 图片在 PDF 页面内的填充方式。
@@ -67,7 +69,7 @@ pub enum ComicPdfVerticalAlignment {
     Bottom,
 }
 
-/// 漫画 PDF 导出参数；固定尺寸字段在平均模式下忽略。
+/// 漫画 PDF 导出参数；固定尺寸字段仅在固定模式下使用，原图尺寸模式下填充与对齐无意义。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ComicPdfOptions {
     /// 页面尺寸来源。
@@ -231,12 +233,26 @@ pub(super) fn write_pdf_file(
     validate_pdf_options(options)?;
     anyhow::ensure!(!comic_pages.is_empty(), "no comic pages to export as PDF");
 
-    let page_size_px = resolve_page_size(comic_pages, options)?;
-    validate_resolved_page_size(page_size_px, options.dpi)?;
+    // 统一画布模式先解析并前置校验；原图尺寸模式逐页采用自身宽高，在页序确定后逐页校验。
+    let shared_page_size_px = if options.page_size == ComicPdfPageSize::Original {
+        None
+    } else {
+        let size = resolve_page_size(comic_pages, options)?;
+        validate_resolved_page_size(size, options.dpi)?;
+        Some(size)
+    };
     let pages = output_pages(comic_pages, cover, options.include_cover)?;
+    if options.page_size == ComicPdfPageSize::Original {
+        for page in &pages {
+            validate_resolved_page_size(
+                (f64::from(page.width_px), f64::from(page.height_px)),
+                options.dpi,
+            )?;
+        }
+    }
     let temp_path = temporary_sibling_path(destination)?;
 
-    if let Err(error) = write_pdf_temp(&temp_path, &pages, page_size_px, options, progress) {
+    if let Err(error) = write_pdf_temp(&temp_path, &pages, shared_page_size_px, options, progress) {
         let _ = fs::remove_file(&temp_path);
         return Err(error);
     }
@@ -265,7 +281,7 @@ fn output_pages(
     Ok(pages)
 }
 
-/// 解析固定或平均像素画布；平均值仅统计 content.json 的漫画页。
+/// 解析固定或平均像素画布；平均值仅统计 content.json 的漫画页，原图尺寸模式不经过此函数。
 fn resolve_page_size(
     comic_pages: &[PdfPageImage],
     options: &ComicPdfOptions,
@@ -278,6 +294,19 @@ fn resolve_page_size(
         .map(|page| (page.width_px, page.height_px))
         .collect();
     average_page_dimensions(&dimensions)
+}
+
+/// 解析单页画布；原图尺寸模式下每页采用自身宽高，其余模式共用统一画布。
+fn page_canvas_size(
+    page: &PdfPageImage,
+    shared_page_size_px: Option<(f64, f64)>,
+    options: &ComicPdfOptions,
+) -> anyhow::Result<(f64, f64)> {
+    if options.page_size == ComicPdfPageSize::Original {
+        Ok((f64::from(page.width_px), f64::from(page.height_px)))
+    } else {
+        shared_page_size_px.context("shared PDF page size is missing")
+    }
 }
 
 /// 在同目录创建唯一临时文件，成功后再替换最终目标。
@@ -298,7 +327,7 @@ fn temporary_sibling_path(destination: &Path) -> anyhow::Result<PathBuf> {
 fn write_pdf_temp(
     temp_path: &Path,
     pages: &[PdfPageImage],
-    page_size_px: (f64, f64),
+    shared_page_size_px: Option<(f64, f64)>,
     options: &ComicPdfOptions,
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
@@ -308,7 +337,7 @@ fn write_pdf_temp(
         .open(temp_path)
         .with_context(|| format!("failed to create temporary PDF {}", temp_path.display()))?;
     let mut writer = BufWriter::new(file);
-    write_pdf_to(&mut writer, pages, page_size_px, options, progress)?;
+    write_pdf_to(&mut writer, pages, shared_page_size_px, options, progress)?;
     writer.flush().context("failed to flush temporary PDF")?;
     writer
         .get_ref()
@@ -330,7 +359,7 @@ fn replace_pdf_file(temp_path: &Path, destination: &Path) -> anyhow::Result<()> 
 fn write_pdf_to<W: Write>(
     writer: &mut W,
     pages: &[PdfPageImage],
-    page_size_px: (f64, f64),
+    shared_page_size_px: Option<(f64, f64)>,
     options: &ComicPdfOptions,
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
@@ -354,7 +383,8 @@ fn write_pdf_to<W: Write>(
 
     for (index, page) in pages.iter().enumerate() {
         let refs = page_object_refs(index)?;
-        let layout = calculate_page_layout((page.width_px, page.height_px), page_size_px, options)?;
+        let canvas = page_canvas_size(page, shared_page_size_px, options)?;
+        let layout = calculate_page_layout((page.width_px, page.height_px), canvas, options)?;
         let samples = encode_image_samples(page)?;
         write_image_object(&mut sink, refs.image, page, &samples)?;
         write_content_object(&mut sink, refs.content, &layout)?;
@@ -1023,6 +1053,84 @@ mod tests {
     }
 
     #[test]
+    fn original_size_gives_each_page_its_own_dimensions() {
+        let dir = std::env::temp_dir().join(format!(
+            "ebook-studio-comic-pdf-original-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let wide_path = dir.join("wide.png");
+        let tall_path = dir.join("tall.png");
+        write_test_png_size(&wide_path, [255, 0, 0], 10, 5);
+        write_test_png_size(&tall_path, [0, 0, 255], 5, 10);
+        let pages = [
+            inspect_page_image(&wide_path).expect("inspect wide page"),
+            inspect_page_image(&tall_path).expect("inspect tall page"),
+        ];
+        let output = dir.join("book.pdf");
+        let options = ComicPdfOptions {
+            page_size: ComicPdfPageSize::Original,
+            ..ComicPdfOptions::default()
+        };
+
+        write_pdf_file(&output, &pages, None, &options, None).expect("write PDF");
+
+        let pdf = std::fs::read(&output).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Count 2"));
+        // 300DPI 下 10px 为 2.4pt、5px 为 1.2pt，两页画布各随原图。
+        assert!(text.contains("/MediaBox [0 0 2.4 1.2]"));
+        assert!(text.contains("/MediaBox [0 0 1.2 2.4]"));
+        std::fs::remove_dir_all(dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn original_canvas_makes_fill_and_alignment_noops() {
+        let fills = [
+            ComicPdfFillMode::Contain,
+            ComicPdfFillMode::Cover,
+            ComicPdfFillMode::Stretch,
+        ];
+        let horizontals = [
+            ComicPdfHorizontalAlignment::Left,
+            ComicPdfHorizontalAlignment::Center,
+            ComicPdfHorizontalAlignment::Right,
+        ];
+        let verticals = [
+            ComicPdfVerticalAlignment::Top,
+            ComicPdfVerticalAlignment::Center,
+            ComicPdfVerticalAlignment::Bottom,
+        ];
+        for fill_mode in fills {
+            for horizontal_alignment in horizontals {
+                for vertical_alignment in verticals {
+                    let options = ComicPdfOptions {
+                        page_size: ComicPdfPageSize::Original,
+                        fill_mode,
+                        horizontal_alignment,
+                        vertical_alignment,
+                        ..ComicPdfOptions::default()
+                    };
+                    let layout = calculate_page_layout((1860, 2480), (1860.0, 2480.0), &options)
+                        .expect("layout");
+                    // 同尺寸画布理论上恰好铺满；浮点连乘允许 1ulp 级误差。
+                    for (drawn, page) in [
+                        (layout.image_width_pt, layout.page_width_pt),
+                        (layout.image_height_pt, layout.page_height_pt),
+                    ] {
+                        assert!(
+                            (drawn - page).abs() < 1e-9,
+                            "original canvas must fit exactly for {fill_mode:?}"
+                        );
+                    }
+                    assert!(layout.offset_x_pt.abs() < 1e-9);
+                    assert!(layout.offset_y_pt.abs() < 1e-9);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rejects_images_over_the_decoded_pixel_budget() {
         assert!(validate_image_dimensions(5001, 10_000).is_err());
         assert!(validate_image_dimensions(5000, 10_000).is_ok());
@@ -1044,8 +1152,14 @@ mod tests {
         let emit_progress = |done, total| progress.borrow_mut().push((done, total));
         let mut pdf = std::io::Cursor::new(Vec::new());
 
-        write_pdf_to(&mut pdf, &pages, (1.0, 1.0), &options, Some(&emit_progress))
-            .expect("write PDF");
+        write_pdf_to(
+            &mut pdf,
+            &pages,
+            Some((1.0, 1.0)),
+            &options,
+            Some(&emit_progress),
+        )
+        .expect("write PDF");
 
         let bytes = pdf.into_inner();
         let text = String::from_utf8_lossy(&bytes);

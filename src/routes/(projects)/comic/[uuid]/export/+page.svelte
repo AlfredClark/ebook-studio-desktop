@@ -251,7 +251,7 @@
 
   /** PDF 页面尺寸模式下拉值收窄。 */
   function handlePdfPageSizeChange(value: string): void {
-    if (value === "average" || value === "fixed") {
+    if (value === "average" || value === "fixed" || value === "original") {
       pdfPageSize = value;
     }
   }
@@ -538,6 +538,14 @@
                 />
                 <span class="whitespace-nowrap">{m.comic_export_pdf_size_fixed()}</span>
               </label>
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
+                  value="original"
+                  aria-label={m.comic_export_pdf_size_original()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_size_original()}</span>
+              </label>
             </RadioGroup.Root>
           </div>
           {#if pdfPageSize === "fixed"}
@@ -572,110 +580,100 @@
                 />
               </label>
             </div>
+          {:else if pdfPageSize === "original"}
+            <p class="text-xs text-muted-foreground">
+              {m.comic_export_pdf_original_hint()}
+            </p>
           {:else}
             <p class="text-xs text-muted-foreground">
               {m.comic_export_pdf_average_hint({ pages: status.page_count })}
             </p>
           {/if}
-          <div class="flex flex-wrap items-center gap-2 py-2">
-            <label class="flex items-center gap-2 text-sm">
-              <span class="font-medium">{m.comic_export_pdf_dpi_label()}</span>
-              <Input
-                type="number"
-                min={72}
-                max={600}
-                step={1}
-                value={pdfDpi}
-                aria-label={m.comic_export_pdf_dpi_label()}
-                aria-invalid={pdfOptions === null}
-                disabled={exporting}
-                oninput={(event) => (pdfDpi = event.currentTarget.value)}
-                class="w-24"
-              />
-            </label>
-            <span class="text-xs text-muted-foreground">{m.comic_export_pdf_dpi_unit()}</span>
-            <span class="min-w-0 flex-1 text-xs text-muted-foreground">
-              {m.comic_export_pdf_dpi_hint()}
-            </span>
-          </div>
-          <div class="flex items-center gap-x-4 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_fill_label()}</span>
-            <RadioGroup.Root
-              value={pdfFillMode}
-              onValueChange={handlePdfFillModeChange}
-              class="flex items-center gap-x-4"
-            >
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="contain"
-                  aria-label={m.comic_export_pdf_fill_contain()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_fill_contain()}</span>
-              </label>
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="cover"
-                  aria-label={m.comic_export_pdf_fill_cover()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_fill_cover()}</span>
-              </label>
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="stretch"
-                  aria-label={m.comic_export_pdf_fill_stretch()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_fill_stretch()}</span>
-              </label>
-            </RadioGroup.Root>
-          </div>
-          <div class="flex flex-wrap items-center gap-2 py-2">
-            <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_alignment_label()}</span>
-            <Select
-              type="single"
-              value={pdfHorizontalAlignment}
-              items={pdfHorizontalAlignmentItems}
-              onValueChange={handlePdfHorizontalAlignmentChange}
-            >
-              <SelectTrigger
-                class="w-28"
-                aria-label={m.comic_export_pdf_horizontal_alignment_label()}
-                disabled={exporting || pdfFillMode === "stretch"}
+          {#if pdfPageSize !== "original"}
+            <div class="flex items-center gap-x-4 py-2">
+              <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_fill_label()}</span>
+              <RadioGroup.Root
+                value={pdfFillMode}
+                onValueChange={handlePdfFillModeChange}
+                class="flex items-center gap-x-4"
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {#each pdfHorizontalAlignmentItems as item (item.value)}
-                    <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
-                  {/each}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select
-              type="single"
-              value={pdfVerticalAlignment}
-              items={pdfVerticalAlignmentItems}
-              onValueChange={handlePdfVerticalAlignmentChange}
-            >
-              <SelectTrigger
-                class="w-28"
-                aria-label={m.comic_export_pdf_vertical_alignment_label()}
-                disabled={exporting || pdfFillMode === "stretch"}
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="contain"
+                    aria-label={m.comic_export_pdf_fill_contain()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.comic_export_pdf_fill_contain()}</span>
+                </label>
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="cover"
+                    aria-label={m.comic_export_pdf_fill_cover()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.comic_export_pdf_fill_cover()}</span>
+                </label>
+                <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                  <RadioGroup.Item
+                    value="stretch"
+                    aria-label={m.comic_export_pdf_fill_stretch()}
+                    disabled={exporting}
+                  />
+                  <span class="whitespace-nowrap">{m.comic_export_pdf_fill_stretch()}</span>
+                </label>
+              </RadioGroup.Root>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 py-2">
+              <span class="shrink-0 text-sm font-medium">
+                {m.comic_export_pdf_horizontal_alignment_label()}
+              </span>
+              <Select
+                type="single"
+                value={pdfHorizontalAlignment}
+                items={pdfHorizontalAlignmentItems}
+                onValueChange={handlePdfHorizontalAlignmentChange}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {#each pdfVerticalAlignmentItems as item (item.value)}
-                    <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
-                  {/each}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </div>
+                <SelectTrigger
+                  class="w-28"
+                  aria-label={m.comic_export_pdf_horizontal_alignment_label()}
+                  disabled={exporting || pdfFillMode === "stretch"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {#each pdfHorizontalAlignmentItems as item (item.value)}
+                      <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                    {/each}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <span class="shrink-0 text-sm font-medium">
+                {m.comic_export_pdf_vertical_alignment_label()}
+              </span>
+              <Select
+                type="single"
+                value={pdfVerticalAlignment}
+                items={pdfVerticalAlignmentItems}
+                onValueChange={handlePdfVerticalAlignmentChange}
+              >
+                <SelectTrigger
+                  class="w-28"
+                  aria-label={m.comic_export_pdf_vertical_alignment_label()}
+                  disabled={exporting || pdfFillMode === "stretch"}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {#each pdfVerticalAlignmentItems as item (item.value)}
+                      <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                    {/each}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+          {/if}
           {#if status.has_cover}
             <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">
               <Checkbox

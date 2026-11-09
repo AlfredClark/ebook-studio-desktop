@@ -139,6 +139,30 @@ describe("漫画导出表单", () => {
     ).toBeNull();
   });
 
+  it("PDF 原图尺寸透传且忽略宽高", () => {
+    expect(
+      buildComicPdfOptions({
+        page_size: "original",
+        width_px: "",
+        height_px: "",
+        dpi: "300",
+        fill_mode: "cover",
+        horizontal_alignment: "right",
+        vertical_alignment: "top",
+        include_cover: false,
+      }),
+    ).toEqual({
+      page_size: "original",
+      width_px: 0,
+      height_px: 0,
+      dpi: 300,
+      fill_mode: "cover",
+      horizontal_alignment: "right",
+      vertical_alignment: "top",
+      include_cover: false,
+    });
+  });
+
   it("话 6 种页 5 种格式，页无原文", () => {
     expect(COMIC_VOLUME_TITLE_KINDS).toContain("original");
     expect(COMIC_PAGE_TITLE_KINDS).not.toContain("original");
