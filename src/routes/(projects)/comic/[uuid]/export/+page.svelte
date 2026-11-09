@@ -56,6 +56,7 @@
     canExport,
     isValidCustomName,
     isValidImageTitles,
+    isValidPdfVolumeTitle,
     linkedHeightForWidth,
     linkedWidthForHeight,
     namingKinds,
@@ -83,11 +84,13 @@
   let checkImages = $state(false);
   let imagesMode = $state<ComicImagesMode>("folder");
   let checkCover = $state(false);
-  let pdfPageSize = $state<ComicPdfPageSize>("average");
+  let pdfPageSize = $state<ComicPdfPageSize>("original");
   let pdfWidthPx = $state(DEFAULT_PDF_WIDTH_PX);
   let pdfHeightPx = $state(DEFAULT_PDF_HEIGHT_PX);
   let pdfAspectLock = $state<ComicPdfAspectLock>("free");
   let pdfDpi = $state("300");
+  let pdfVolumeKind = $state<TxtTitleKind>("arabic");
+  let pdfVolumePattern = $state("");
   let pdfFillMode = $state<ComicPdfFillMode>("contain");
   let pdfHorizontalAlignment = $state<ComicPdfHorizontalAlignment>("center");
   let pdfVerticalAlignment = $state<ComicPdfVerticalAlignment>("center");
@@ -107,11 +110,14 @@
   /** 格式示例：首话/首页各渲染一行；自定义按输入模板实时渲染（防抖），空白模板不展示，失败静默隐藏。 */
   let pagePreview = $state<string | null>(null);
   let volumePreview = $state<string | null>(null);
+  let pdfVolumePreview = $state<string | null>(null);
   let pageNonce = $state(0);
   let volumeNonce = $state(0);
+  let pdfVolumeNonce = $state(0);
   /** 自定义模板输入防抖定时器：避免每敲一键一次 IPC。 */
   let pageDebounce: ReturnType<typeof setTimeout> | undefined;
   let volumeDebounce: ReturnType<typeof setTimeout> | undefined;
+  let pdfVolumeDebounce: ReturnType<typeof setTimeout> | undefined;
 
   /** 是否空态：三类产物皆无时引导回文件步骤。 */
   const isEmpty = $derived(
@@ -144,6 +150,8 @@
       horizontal_alignment: pdfHorizontalAlignment,
       vertical_alignment: pdfVerticalAlignment,
       include_cover: includePdfCover,
+      volume_kind: pdfVolumeKind,
+      volume_pattern: pdfVolumePattern,
     }),
   );
   const pdfHorizontalAlignmentItems = $derived([
@@ -171,7 +179,7 @@
       (status?.volume_count ?? 0) >= 10 &&
       (volumeKind === "custom" ? !volumePattern.includes("#N") : volumeKind !== "padded"),
   );
-  /** 导出可用：有勾选、命名合法、原图标题参数合法、空闲中。 */
+  /** 导出可用：有勾选、命名合法、原图标题与 PDF 话标题参数合法、空闲中。 */
   const ready = $derived(
     status !== null &&
       canExport(
@@ -181,6 +189,7 @@
       (naming !== "custom" || isValidCustomName(customName)) &&
       (!checkImages || isValidImageTitles(pageKind, pagePattern, volumeKind, volumePattern)) &&
       (!checkPdf || pdfOptions !== null) &&
+      (!checkPdf || isValidPdfVolumeTitle(pdfVolumeKind, pdfVolumePattern, isEpisodeBook)) &&
       !exporting &&
       !loading,
   );
@@ -230,7 +239,7 @@
     checkImages = false;
     imagesMode = "folder";
     checkCover = false;
-    pdfPageSize = "average";
+    pdfPageSize = "original";
     pdfWidthPx = DEFAULT_PDF_WIDTH_PX;
     pdfHeightPx = DEFAULT_PDF_HEIGHT_PX;
     pdfAspectLock = "free";
@@ -239,6 +248,10 @@
     pdfHorizontalAlignment = "center";
     pdfVerticalAlignment = "center";
     includePdfCover = false;
+    // PDF 书签话标题默认与原图同口径：10 话以上补零，以下保持第n话审美。
+    pdfVolumeKind = status.volume_count >= 10 ? "padded" : "arabic";
+    pdfVolumePattern = "";
+    pdfVolumePreview = null;
     naming = "project";
     customName = "";
     pageKind = "padded";
@@ -329,6 +342,49 @@
     if (value === "top" || value === "center" || value === "bottom") {
       pdfVerticalAlignment = value;
     }
+  }
+
+  /** PDF 话标题格式下拉：同上收窄，切 custom 空模板时预填默认，切换后刷新书签示例。 */
+  function handlePdfVolumeTitleKindChange(value: string): void {
+    if ((COMIC_VOLUME_TITLE_KINDS as string[]).includes(value)) {
+      pdfVolumeKind = value as TxtTitleKind;
+      if (pdfVolumeKind === "custom" && pdfVolumePattern.trim() === "") {
+        pdfVolumePattern = DEFAULT_COMIC_VOLUME_PATTERN;
+      }
+      void refreshPdfVolumePreview();
+    }
+  }
+
+  /** PDF 话自定义模板输入：更新后防抖 400ms 刷新书签示例。 */
+  function handlePdfVolumePatternInput(value: string): void {
+    pdfVolumePattern = value;
+    clearTimeout(pdfVolumeDebounce);
+    pdfVolumeDebounce = setTimeout(() => void refreshPdfVolumePreview(), 400);
+  }
+
+  /** PDF 书签示例：内置格式取首话渲染，自定义按输入模板实时渲染；单话不展示（无书签），失败静默隐藏；序号防迟到覆盖。 */
+  async function refreshPdfVolumePreview(): Promise<void> {
+    if (!checkPdf || !isEpisodeBook) {
+      return;
+    }
+    pdfVolumePreview = null;
+    if (pdfVolumeKind === "custom" && pdfVolumePattern.trim() === "") {
+      return;
+    }
+    const nonce = (pdfVolumeNonce += 1);
+    const result = await commands
+      .previewComicTxtTitle(
+        uuid,
+        pdfVolumeKind,
+        pdfVolumeKind === "custom" ? pdfVolumePattern : "",
+        true,
+        numbering,
+      )
+      .result();
+    if (nonce !== pdfVolumeNonce || result.status === "error") {
+      return;
+    }
+    pdfVolumePreview = result.data;
   }
 
   /** 标题格式下拉：同上收窄，切 custom 空模板时预填默认，切换后刷新对应示例。 */
@@ -437,6 +493,8 @@
       horizontal_alignment: "center",
       vertical_alignment: "center",
       include_cover: false,
+      volume_kind: pdfVolumeKind,
+      volume_pattern: pdfVolumePattern,
     };
     setExportRunning(uuid, true);
     const result = await commands
@@ -552,7 +610,12 @@
           <Checkbox
             checked={checkPdf}
             disabled={!status.has_content || status.page_count === 0 || exporting}
-            onCheckedChange={(value) => (checkPdf = value === true)}
+            onCheckedChange={(value) => {
+              checkPdf = value === true;
+              if (checkPdf) {
+                void refreshPdfVolumePreview();
+              }
+            }}
           />
           <span class="min-w-0 flex-1">
             <span class="font-medium">{m.comic_export_pdf_label()}</span>
@@ -578,6 +641,14 @@
             >
               <label class="flex cursor-pointer items-center gap-1.5 text-sm">
                 <RadioGroup.Item
+                  value="original"
+                  aria-label={m.comic_export_pdf_size_original()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_size_original()}</span>
+              </label>
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
                   value="average"
                   aria-label={m.comic_export_pdf_size_average()}
                   disabled={exporting}
@@ -591,14 +662,6 @@
                   disabled={exporting}
                 />
                 <span class="whitespace-nowrap">{m.comic_export_pdf_size_fixed()}</span>
-              </label>
-              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
-                <RadioGroup.Item
-                  value="original"
-                  aria-label={m.comic_export_pdf_size_original()}
-                  disabled={exporting}
-                />
-                <span class="whitespace-nowrap">{m.comic_export_pdf_size_original()}</span>
               </label>
             </RadioGroup.Root>
           </div>
@@ -782,6 +845,59 @@
               />
               <span>{m.comic_export_pdf_include_cover()}</span>
             </label>
+          {/if}
+          {#if isEpisodeBook}
+            <div class="flex items-center gap-2 py-2">
+              <span class="shrink-0 text-sm font-medium">
+                {m.comic_build_volume_title_label()}
+              </span>
+              <Select
+                type="single"
+                value={pdfVolumeKind}
+                items={volumeTitleKindItems}
+                onValueChange={handlePdfVolumeTitleKindChange}
+              >
+                <SelectTrigger
+                  class="w-36 shrink-0"
+                  aria-label={m.comic_build_volume_title_label()}
+                  disabled={exporting}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {#each COMIC_VOLUME_TITLE_KINDS as kind (kind)}
+                    <SelectItem value={kind}>{titleKindLabel(kind)}</SelectItem>
+                  {/each}
+                </SelectContent>
+              </Select>
+              {#if pdfVolumeKind === "custom"}
+                <Input
+                  type="text"
+                  value={pdfVolumePattern}
+                  oninput={(event) => handlePdfVolumePatternInput(event.currentTarget.value)}
+                  placeholder={m.comic_build_volume_custom_placeholder()}
+                  aria-label={m.build_title_custom()}
+                  disabled={exporting}
+                  class="min-w-0 flex-1"
+                />
+              {:else if pdfVolumePreview !== null}
+                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {m.build_txt_preview_label()}: {pdfVolumePreview}
+                </span>
+              {/if}
+            </div>
+            {#if pdfVolumeKind === "custom"}
+              <div class="flex min-h-6 items-center gap-2 py-1">
+                {#if pdfVolumePreview !== null}
+                  <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    {m.build_txt_preview_label()}: {pdfVolumePreview}
+                  </span>
+                  <span class="shrink-0 text-xs text-muted-foreground">
+                    {m.build_txt_custom_legend()}
+                  </span>
+                {/if}
+              </div>
+            {/if}
           {/if}
           {#if pdfOptions === null}
             <p role="alert" class="text-xs text-destructive">

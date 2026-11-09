@@ -12,6 +12,7 @@ import {
   buildComicPdfOptions,
   isValidCustomName,
   isValidImageTitles,
+  isValidPdfVolumeTitle,
   isValidTitlePattern,
   linkedHeightForWidth,
   linkedWidthForHeight,
@@ -91,6 +92,8 @@ describe("漫画导出表单", () => {
         horizontal_alignment: "center",
         vertical_alignment: "center",
         include_cover: true,
+        volume_kind: "arabic",
+        volume_pattern: "",
       }),
     ).toEqual({
       page_size: "average",
@@ -101,6 +104,8 @@ describe("漫画导出表单", () => {
       horizontal_alignment: "center",
       vertical_alignment: "center",
       include_cover: true,
+      volume_kind: "arabic",
+      volume_pattern: "",
     });
   });
 
@@ -114,6 +119,8 @@ describe("漫画导出表单", () => {
       horizontal_alignment: "right" as const,
       vertical_alignment: "top" as const,
       include_cover: false,
+      volume_kind: "arabic" as const,
+      volume_pattern: "",
     };
     expect(buildComicPdfOptions(base)?.width_px).toBe(2480);
     expect(buildComicPdfOptions({ ...base, width_px: "0" })).toBeNull();
@@ -132,6 +139,8 @@ describe("漫画导出表单", () => {
       horizontal_alignment: "center" as const,
       vertical_alignment: "center" as const,
       include_cover: false,
+      volume_kind: "arabic" as const,
+      volume_pattern: "",
     };
     expect(buildComicPdfOptions(base)).not.toBeNull();
     expect(buildComicPdfOptions({ ...base, width_px: "60001" })).toBeNull();
@@ -177,6 +186,8 @@ describe("漫画导出表单", () => {
         horizontal_alignment: "center",
         vertical_alignment: "center",
         include_cover: false,
+        volume_kind: "arabic",
+        volume_pattern: "",
       }),
     ).not.toBeNull();
   });
@@ -192,6 +203,8 @@ describe("漫画导出表单", () => {
         horizontal_alignment: "right",
         vertical_alignment: "top",
         include_cover: false,
+        volume_kind: "padded",
+        volume_pattern: "",
       }),
     ).toEqual({
       page_size: "original",
@@ -202,7 +215,17 @@ describe("漫画导出表单", () => {
       horizontal_alignment: "right",
       vertical_alignment: "top",
       include_cover: false,
+      volume_kind: "padded",
+      volume_pattern: "",
     });
+  });
+
+  it("PDF 话标题格式合法：仅多话自定义模板要求非空", () => {
+    expect(isValidPdfVolumeTitle("arabic", "", false)).toBe(true);
+    expect(isValidPdfVolumeTitle("custom", "", false)).toBe(true);
+    expect(isValidPdfVolumeTitle("arabic", "", true)).toBe(true);
+    expect(isValidPdfVolumeTitle("custom", "  ", true)).toBe(false);
+    expect(isValidPdfVolumeTitle("custom", "第#N话", true)).toBe(true);
   });
 
   it("话 6 种页 5 种格式，页无原文", () => {

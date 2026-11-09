@@ -562,6 +562,10 @@ export type ComicPdfOptions = {
 	vertical_alignment: ComicPdfVerticalAlignment,
 	/**  是否将项目封面作为第一页。 */
 	include_cover: boolean,
+	/**  话标题格式：多话 PDF 书签的卷标题渲染口径，与原图话目录同源。 */
+	volume_kind: TxtTitleKind,
+	/**  话标题自定义模板：`volume_kind` 为自定义时生效。 */
+	volume_pattern: string,
 };
 
 /**  PDF 页面尺寸来源。 */

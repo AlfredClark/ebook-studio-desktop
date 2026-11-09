@@ -74,7 +74,7 @@ export function linkedWidthForHeight(heightPx: string, lock: ComicPdfAspectLock)
   return String(Math.max(1, Math.round((height * ratio[0]) / ratio[1])));
 }
 
-/** 漫画 PDF 表单字段以字符串接收原始输入。 */
+/** 漫画 PDF 表单字段以字符串接收原始输入；话标题格式仅多话书签使用。 */
 export type ComicPdfFormValues = {
   page_size: ComicPdfPageSize;
   width_px: string;
@@ -84,6 +84,8 @@ export type ComicPdfFormValues = {
   horizontal_alignment: ComicPdfHorizontalAlignment;
   vertical_alignment: ComicPdfVerticalAlignment;
   include_cover: boolean;
+  volume_kind: TxtTitleKind;
+  volume_pattern: string;
 };
 
 /** 命名候选：项目名与书名相同合并为一项（取项目名）。 */
@@ -154,6 +156,8 @@ export function buildComicPdfOptions(values: ComicPdfFormValues): ComicPdfOption
     horizontal_alignment: values.horizontal_alignment,
     vertical_alignment: values.vertical_alignment,
     include_cover: values.include_cover,
+    volume_kind: values.volume_kind,
+    volume_pattern: values.volume_pattern,
   };
 }
 
@@ -183,6 +187,21 @@ export const DEFAULT_COMIC_PAGE_PATTERN = "#N";
 /** 自定义模板可用：去首尾空白后非空。 */
 export function isValidTitlePattern(pattern: string): boolean {
   return pattern.trim().length > 0;
+}
+
+/** PDF 话标题格式合法：仅多话书签使用，单话直接通过。 */
+export function isValidPdfVolumeTitle(
+  volumeKind: TxtTitleKind,
+  volumePattern: string,
+  isEpisodeBook: boolean,
+): boolean {
+  if (!isEpisodeBook) {
+    return true;
+  }
+  if (volumeKind === "custom") {
+    return isValidTitlePattern(volumePattern);
+  }
+  return true;
 }
 
 /** 原图标题格式合法：话页自定义模板各自非空。 */

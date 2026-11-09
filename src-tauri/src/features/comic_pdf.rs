@@ -12,7 +12,10 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use image::ImageDecoder;
 use image::metadata::Orientation;
-use pdf_writer::{Chunk, Content, Filter, Name, Rect, Ref};
+use pdf_writer::{Chunk, Content, Filter, Name, Rect, Ref, TextStr};
+
+use super::comic_files::ComicContent;
+use super::novel_export::TxtTitleKind;
 
 const MIN_DPI: u32 = 72;
 const MAX_DPI: u32 = 600;
@@ -88,6 +91,10 @@ pub struct ComicPdfOptions {
     pub vertical_alignment: ComicPdfVerticalAlignment,
     /// 是否将项目封面作为第一页。
     pub include_cover: bool,
+    /// 话标题格式：多话 PDF 书签的卷标题渲染口径，与原图话目录同源。
+    pub volume_kind: TxtTitleKind,
+    /// 话标题自定义模板：`volume_kind` 为自定义时生效。
+    pub volume_pattern: String,
 }
 
 impl Default for ComicPdfOptions {
@@ -101,6 +108,8 @@ impl Default for ComicPdfOptions {
             horizontal_alignment: ComicPdfHorizontalAlignment::Center,
             vertical_alignment: ComicPdfVerticalAlignment::Center,
             include_cover: false,
+            volume_kind: TxtTitleKind::Arabic,
+            volume_pattern: String::new(),
         }
     }
 }
@@ -223,11 +232,13 @@ fn validate_resolved_page_size(page_size_px: (f64, f64), dpi: u32) -> anyhow::Re
 }
 
 /// 生成多页 PDF；仅保留当前页的解码数据，进度按实际 PDF 页数推进。
+/// 书签为空时不写 Outline 对象，单话输出与此前字节形态一致。
 pub(super) fn write_pdf_file(
     destination: &Path,
     comic_pages: &[PdfPageImage],
     cover: Option<&PdfPageImage>,
     options: &ComicPdfOptions,
+    outline: &[PdfOutlineEntry],
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
     validate_pdf_options(options)?;
@@ -252,7 +263,14 @@ pub(super) fn write_pdf_file(
     }
     let temp_path = temporary_sibling_path(destination)?;
 
-    if let Err(error) = write_pdf_temp(&temp_path, &pages, shared_page_size_px, options, progress) {
+    if let Err(error) = write_pdf_temp(
+        &temp_path,
+        &pages,
+        shared_page_size_px,
+        options,
+        outline,
+        progress,
+    ) {
         let _ = fs::remove_file(&temp_path);
         return Err(error);
     }
@@ -279,6 +297,45 @@ fn output_pages(
     }
     pages.extend_from_slice(comic_pages);
     Ok(pages)
+}
+
+/// PDF 书签条目：话标题与目标输出页下标（含封面页偏移）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PdfOutlineEntry {
+    /// 渲染后的卷标题，与原图话目录名同源（不做文件系统清洗）。
+    pub title: String,
+    /// 目标页在最终输出页序中的下标。
+    pub page_index: usize,
+}
+
+/// 按话构建 PDF 书签；单话返回空（无处可跳），封面页下标由调用方计入偏移。
+pub(super) fn collect_pdf_outline(
+    content: &ComicContent,
+    options: &ComicPdfOptions,
+    first_page_offset: usize,
+) -> Vec<PdfOutlineEntry> {
+    if content.volumes.len() < 2 {
+        return Vec::new();
+    }
+    let volume_width = super::novel_build::count_width(content.volumes.len());
+    let mut page_index = first_page_offset;
+    content
+        .volumes
+        .iter()
+        .enumerate()
+        .map(|(volume_index, volume)| {
+            let title = super::comic_export::render_volume_title(
+                volume.title.as_deref(),
+                volume_index + 1,
+                volume_width,
+                options.volume_kind,
+                &options.volume_pattern,
+            );
+            let entry = PdfOutlineEntry { title, page_index };
+            page_index += volume.pages.len();
+            entry
+        })
+        .collect()
 }
 
 /// 解析固定或平均像素画布；平均值仅统计 content.json 的漫画页，原图尺寸模式不经过此函数。
@@ -329,6 +386,7 @@ fn write_pdf_temp(
     pages: &[PdfPageImage],
     shared_page_size_px: Option<(f64, f64)>,
     options: &ComicPdfOptions,
+    outline: &[PdfOutlineEntry],
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
     let file = OpenOptions::new()
@@ -337,7 +395,14 @@ fn write_pdf_temp(
         .open(temp_path)
         .with_context(|| format!("failed to create temporary PDF {}", temp_path.display()))?;
     let mut writer = BufWriter::new(file);
-    write_pdf_to(&mut writer, pages, shared_page_size_px, options, progress)?;
+    write_pdf_to(
+        &mut writer,
+        pages,
+        shared_page_size_px,
+        options,
+        outline,
+        progress,
+    )?;
     writer.flush().context("failed to flush temporary PDF")?;
     writer
         .get_ref()
@@ -361,15 +426,31 @@ fn write_pdf_to<W: Write>(
     pages: &[PdfPageImage],
     shared_page_size_px: Option<(f64, f64)>,
     options: &ComicPdfOptions,
+    outline: &[PdfOutlineEntry],
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
     validate_pdf_options(options)?;
     anyhow::ensure!(!pages.is_empty(), "no PDF pages to write");
+    for entry in outline {
+        anyhow::ensure!(
+            entry.page_index < pages.len(),
+            "PDF outline target is out of range"
+        );
+    }
     let page_count = i32::try_from(pages.len()).context("PDF page count exceeds format limit")?;
+    let outline_objects = if outline.is_empty() {
+        0
+    } else {
+        outline
+            .len()
+            .checked_add(1)
+            .context("PDF outline object count overflow")?
+    };
     let object_count = pages
         .len()
         .checked_mul(3)
         .and_then(|count| count.checked_add(2))
+        .and_then(|count| count.checked_add(outline_objects))
         .context("PDF object count overflow")?;
     anyhow::ensure!(
         i32::try_from(object_count).is_ok(),
@@ -398,7 +479,18 @@ fn write_pdf_to<W: Write>(
         }
     }
 
-    write_page_tree(&mut sink, &page_refs, page_count)?;
+    let outline_root = if outline.is_empty() {
+        None
+    } else {
+        Some(write_outline_tree(
+            &mut sink,
+            &page_refs,
+            outline,
+            outline_first_ref(pages.len())?,
+        )?)
+    };
+
+    write_page_tree(&mut sink, &page_refs, page_count, outline_root)?;
     sink.finish()
 }
 
@@ -421,6 +513,65 @@ fn page_object_refs(index: usize) -> anyhow::Result<PdfPageObjectRefs> {
         content: Ref::new(first + 1),
         page: Ref::new(first + 2),
     })
+}
+
+/// 书签根节点编号：紧随全部页面对象之后，条目依次后排。
+fn outline_first_ref(page_len: usize) -> anyhow::Result<Ref> {
+    let first = page_len
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(3))
+        .context("PDF outline object id overflow")?;
+    let first = i32::try_from(first).context("PDF outline object id exceeds format limit")?;
+    Ok(Ref::new(first))
+}
+
+/// 写入书签目录：根节点 + 每话一条全部展开的条目，标题非 ASCII 时自动 UTF-16 编码。
+fn write_outline_tree<W: Write>(
+    sink: &mut PdfObjectSink<'_, W>,
+    page_refs: &[Ref],
+    outline: &[PdfOutlineEntry],
+    outline_root: Ref,
+) -> anyhow::Result<Ref> {
+    let first_id = outline_root.get();
+    let item_ref = |index: usize| {
+        let step = i32::try_from(index).ok()?.checked_add(1)?;
+        first_id.checked_add(step).map(Ref::new)
+    };
+    let count = i32::try_from(outline.len()).context("PDF outline count exceeds format limit")?;
+    let first = item_ref(0).context("PDF outline item id overflow")?;
+    let last = item_ref(outline.len() - 1).context("PDF outline item id overflow")?;
+
+    for (index, entry) in outline.iter().enumerate() {
+        let reference = item_ref(index).context("PDF outline item id overflow")?;
+        let mut chunk = Chunk::new();
+        {
+            let mut item = chunk.outline_item(reference);
+            item.title(TextStr(&entry.title)).parent(outline_root);
+            if index > 0 {
+                item.prev(item_ref(index - 1).context("PDF outline item id overflow")?);
+            }
+            if index + 1 < outline.len() {
+                item.next(item_ref(index + 1).context("PDF outline item id overflow")?);
+            }
+            item.dest()
+                .page(
+                    *page_refs
+                        .get(entry.page_index)
+                        .context("PDF outline target is out of range")?,
+                )
+                .fit();
+        }
+        sink.write_object(&chunk)?;
+    }
+
+    let mut chunk = Chunk::new();
+    chunk
+        .outline(outline_root)
+        .first(first)
+        .last(last)
+        .count(count);
+    sink.write_object(&chunk)?;
+    Ok(outline_root)
 }
 
 /// 写入一页图像对象；兼容 JPEG 直接嵌入，其余格式使用无损 RGB 样本。
@@ -499,11 +650,12 @@ fn write_page_object<W: Write>(
     sink.write_object(&chunk)
 }
 
-/// 写入页树和目录根节点。
+/// 写入页树和目录根节点；有书签时目录挂载 Outline 并默认展开目录面板。
 fn write_page_tree<W: Write>(
     sink: &mut PdfObjectSink<'_, W>,
     page_refs: &[Ref],
     page_count: i32,
+    outline_root: Option<Ref>,
 ) -> anyhow::Result<()> {
     let mut pages = Chunk::new();
     pages
@@ -513,11 +665,15 @@ fn write_page_tree<W: Write>(
     sink.write_object(&pages)?;
 
     let mut catalog = Chunk::new();
-    catalog
-        .indirect(CATALOG_REF)
-        .dict()
-        .pair(Name(b"Type"), Name(b"Catalog"))
-        .pair(Name(b"Pages"), PAGES_REF);
+    {
+        let mut dict = catalog.indirect(CATALOG_REF).dict();
+        dict.pair(Name(b"Type"), Name(b"Catalog"))
+            .pair(Name(b"Pages"), PAGES_REF);
+        if let Some(root) = outline_root {
+            dict.pair(Name(b"Outlines"), root)
+                .pair(Name(b"PageMode"), Name(b"UseOutlines"));
+        }
+    }
     sink.write_object(&catalog)
 }
 
@@ -871,13 +1027,75 @@ pub(super) fn average_page_dimensions(dimensions: &[(u32, u32)]) -> anyhow::Resu
     Ok((width_sum / count, height_sum / count))
 }
 
+/// 解析 PDF 书签标题：十六进制串按 UTF-16BE 解码，字面串按转义解码，供单测跨模块复用。
+#[cfg(test)]
+pub(super) fn decoded_outline_titles(pdf: &[u8]) -> Vec<String> {
+    fn find_title(pdf: &[u8], from: usize) -> Option<usize> {
+        pdf.get(from..)?
+            .windows("/Title ".len())
+            .position(|window| window == b"/Title ")
+            .map(|index| from + index)
+    }
+
+    fn hex_value(byte: u8) -> u8 {
+        u8::try_from((byte as char).to_digit(16).expect("hex outline title"))
+            .expect("hex outline title")
+    }
+
+    let mut titles = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = find_title(pdf, cursor) {
+        cursor = offset + "/Title ".len();
+        let title = if pdf[cursor] == b'<' {
+            cursor += 1;
+            let mut raw = Vec::new();
+            while pdf[cursor] != b'>' {
+                raw.push(hex_value(pdf[cursor]) << 4 | hex_value(pdf[cursor + 1]));
+                cursor += 2;
+            }
+            cursor += 1;
+            // pdf-writer 按 u16 逐字转十六进制，逐字节拼回大端字。
+            let mut words = Vec::new();
+            let mut index = 0;
+            while index + 1 < raw.len() {
+                words.push(u16::from_be_bytes([raw[index], raw[index + 1]]));
+                index += 2;
+            }
+            let words = words.strip_prefix(&[0xFEFF]).unwrap_or(&words);
+            String::from_utf16(words).expect("UTF-16 outline title")
+        } else if pdf[cursor] == b'(' {
+            cursor += 1;
+            let mut raw = Vec::new();
+            loop {
+                let byte = pdf[cursor];
+                if byte == b'\\' {
+                    cursor += 1;
+                    raw.push(pdf[cursor]);
+                } else if byte == b')' {
+                    break;
+                } else {
+                    raw.push(byte);
+                }
+                cursor += 1;
+            }
+            cursor += 1;
+            // 字面串仅出现在纯 ASCII 标题，与 PDFDocEncoding 一致。
+            String::from_utf8(raw).expect("ASCII outline title")
+        } else {
+            panic!("unsupported outline title form");
+        };
+        titles.push(title);
+    }
+    titles
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ComicPdfFillMode, ComicPdfHorizontalAlignment, ComicPdfOptions, ComicPdfPageSize,
-        ComicPdfVerticalAlignment, Orientation, PdfPageImage, average_page_dimensions,
-        calculate_page_layout, inspect_page_image, validate_image_dimensions, validate_pdf_options,
-        write_pdf_file, write_pdf_to,
+        ComicPdfVerticalAlignment, Orientation, PdfOutlineEntry, PdfPageImage,
+        average_page_dimensions, calculate_page_layout, inspect_page_image,
+        validate_image_dimensions, validate_pdf_options, write_pdf_file, write_pdf_to,
     };
 
     #[test]
@@ -987,6 +1205,7 @@ mod tests {
             horizontal_alignment: ComicPdfHorizontalAlignment::Center,
             vertical_alignment: ComicPdfVerticalAlignment::Center,
             include_cover: false,
+            ..ComicPdfOptions::default()
         };
         assert!(validate_pdf_options(&options).is_ok());
 
@@ -1035,7 +1254,14 @@ mod tests {
             orientation: Orientation::NoTransforms,
         };
 
-        let result = write_pdf_file(&output, &[page], None, &ComicPdfOptions::default(), None);
+        let result = write_pdf_file(
+            &output,
+            &[page],
+            None,
+            &ComicPdfOptions::default(),
+            &[],
+            None,
+        );
         assert!(
             result.is_err_and(|error| error.to_string().contains("exceed the supported limit")),
             "oversize average must fail with a limit error"
@@ -1073,7 +1299,7 @@ mod tests {
             ..ComicPdfOptions::default()
         };
 
-        write_pdf_file(&output, &pages, None, &options, None).expect("write PDF");
+        write_pdf_file(&output, &pages, None, &options, &[], None).expect("write PDF");
 
         let pdf = std::fs::read(&output).expect("read PDF");
         let text = String::from_utf8_lossy(&pdf);
@@ -1081,6 +1307,53 @@ mod tests {
         // 300DPI 下 10px 为 2.4pt、5px 为 1.2pt，两页画布各随原图。
         assert!(text.contains("/MediaBox [0 0 2.4 1.2]"));
         assert!(text.contains("/MediaBox [0 0 1.2 2.4]"));
+        std::fs::remove_dir_all(dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn outline_entries_link_volumes_and_open_panel() {
+        let dir = std::env::temp_dir().join(format!(
+            "ebook-studio-comic-pdf-outline-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let image_path = dir.join("page.png");
+        std::fs::write(&image_path, PIXEL_PNG).expect("write test image");
+        let image = inspect_page_image(&image_path).expect("inspect test image");
+        let pages = vec![image.clone(), image];
+        let outline = vec![
+            PdfOutlineEntry {
+                title: "第1话".to_string(),
+                page_index: 0,
+            },
+            PdfOutlineEntry {
+                title: "第2话".to_string(),
+                page_index: 1,
+            },
+        ];
+        let output = dir.join("book.pdf");
+
+        write_pdf_file(
+            &output,
+            &pages,
+            None,
+            &ComicPdfOptions::default(),
+            &outline,
+            None,
+        )
+        .expect("write PDF");
+
+        let pdf = std::fs::read(&output).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Type /Outlines"));
+        assert!(text.contains("/PageMode /UseOutlines"));
+        assert_eq!(
+            super::decoded_outline_titles(&pdf),
+            vec!["第1话".to_string(), "第2话".to_string()]
+        );
+        // 两页均为 1x1：页对象编号为 5 与 8，书签直指对应页。
+        assert!(text.contains("/Dest [5 0 R /Fit]"));
+        assert!(text.contains("/Dest [8 0 R /Fit]"));
         std::fs::remove_dir_all(dir).expect("remove test dir");
     }
 
@@ -1157,6 +1430,7 @@ mod tests {
             &pages,
             Some((1.0, 1.0)),
             &options,
+            &[],
             Some(&emit_progress),
         )
         .expect("write PDF");
@@ -1196,7 +1470,7 @@ mod tests {
             ..ComicPdfOptions::default()
         };
 
-        write_pdf_file(&output, &pages, Some(&cover), &options, None).expect("write PDF");
+        write_pdf_file(&output, &pages, Some(&cover), &options, &[], None).expect("write PDF");
 
         let pdf = std::fs::read(&output).expect("read PDF");
         assert_eq!(
@@ -1227,7 +1501,17 @@ mod tests {
             orientation: Orientation::NoTransforms,
         };
 
-        assert!(write_pdf_file(&output, &[page], None, &ComicPdfOptions::default(), None).is_err());
+        assert!(
+            write_pdf_file(
+                &output,
+                &[page],
+                None,
+                &ComicPdfOptions::default(),
+                &[],
+                None
+            )
+            .is_err()
+        );
         assert_eq!(
             std::fs::read(&output).expect("read existing PDF"),
             b"existing PDF"
@@ -1253,8 +1537,15 @@ mod tests {
         let page = inspect_page_image(&image_path).expect("inspect source JPEG");
         let output = dir.join("book.pdf");
 
-        write_pdf_file(&output, &[page], None, &ComicPdfOptions::default(), None)
-            .expect("write PDF");
+        write_pdf_file(
+            &output,
+            &[page],
+            None,
+            &ComicPdfOptions::default(),
+            &[],
+            None,
+        )
+        .expect("write PDF");
 
         let pdf = std::fs::read(&output).expect("read PDF");
         assert!(

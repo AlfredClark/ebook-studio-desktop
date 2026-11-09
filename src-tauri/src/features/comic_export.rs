@@ -209,6 +209,24 @@ pub fn status_in(project_dir: &Path) -> anyhow::Result<ComicExportStatus> {
     })
 }
 
+/// 渲染卷标题：原图话目录名与 PDF 书签同源（文件系统清洗由调用方另行决定）。
+pub(super) fn render_volume_title(
+    title: Option<&str>,
+    volume_no: usize,
+    volume_width: usize,
+    volume_kind: TxtTitleKind,
+    volume_pattern: &str,
+) -> String {
+    super::comic_build::comic_heading_volume(
+        volume_kind,
+        volume_pattern,
+        title,
+        saturating_u32(volume_no),
+        volume_width,
+        volume_width,
+    )
+}
+
 /// 渲染后的卷目录名：标题渲染 + 文件系统清洗。
 fn volume_dir_name(
     title: Option<&str>,
@@ -216,13 +234,12 @@ fn volume_dir_name(
     volume_width: usize,
     titles: &BuildTitleOptions,
 ) -> String {
-    let rendered = super::comic_build::comic_heading_volume(
+    let rendered = render_volume_title(
+        title,
+        volume_no,
+        volume_width,
         titles.volume_kind,
         &titles.volume_pattern,
-        title,
-        saturating_u32(volume_no),
-        volume_width,
-        volume_width,
     );
     novel_package::sanitize_stem(&rendered)
 }
@@ -352,6 +369,26 @@ pub fn export_in(
         Some(inspect_page_image(Path::new(&absolute))?)
     } else {
         None
+    };
+    // 多话 PDF 书签：标题渲染与原图话目录同源，单话无处可跳直接为空；
+    // 封面占首页时各话起始下标后移一位。
+    if items.pdf
+        && content
+            .as_ref()
+            .is_some_and(|content| content.volumes.len() > 1)
+        && matches!(pdf_options.volume_kind, TxtTitleKind::Custom)
+        && pdf_options.volume_pattern.trim().is_empty()
+    {
+        anyhow::bail!("custom volume pattern must not be empty");
+    }
+    let pdf_outline = if items.pdf {
+        super::comic_pdf::collect_pdf_outline(
+            content.as_ref().context("comic content is missing")?,
+            pdf_options,
+            usize::from(pdf_cover.is_some()),
+        )
+    } else {
+        Vec::new()
     };
 
     // 落盘条目分两组，互不混入：
@@ -518,6 +555,7 @@ pub fn export_in(
             &pdf_pages,
             pdf_cover.as_ref(),
             pdf_options,
+            &pdf_outline,
             Some(&report_pdf_progress),
         )?;
         done = done.saturating_add(saturating_u32(pdf_units));
@@ -1153,6 +1191,8 @@ mod tests {
         let pdf = std::fs::read(&pdf_path).expect("read PDF");
         let text = String::from_utf8_lossy(&pdf);
         assert!(text.contains("/Count 3"));
+        // 单话无处可跳：不写 Outline 对象。
+        assert!(!text.contains("/Type /Outlines"));
         assert_eq!(outcome.files, vec!["雾镇.pdf"]);
         assert_eq!(outcome.dir, dest.to_str().expect("utf8 destination"));
 
@@ -1182,6 +1222,90 @@ mod tests {
             vec!["雾镇/雾镇.pdf".to_string(), "雾镇/雾镇.png".to_string()]
         );
         assert_eq!(*progress.borrow(), vec![(1, 3), (2, 3), (3, 3)]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn exports_pdf_with_volume_outline_and_validates_custom_pattern() {
+        let (root, dir) = parsed_project("pdf-outline", &["甲/01.png", "乙/01.png", "乙/02.png"]);
+        let dest = root.join("dest");
+        std::fs::create_dir_all(&dest).expect("create destination");
+        let dest_str = dest.to_str().expect("utf8 destination");
+        let pdf_only = ComicExportItems {
+            epub: false,
+            pdf: true,
+            images: false,
+            cover: false,
+        };
+        // 自然排序下乙在前：乙为第 1 话（2 页），甲为第 2 话（1 页）。
+        let arabic = ComicPdfOptions {
+            volume_kind: TxtTitleKind::Arabic,
+            ..ComicPdfOptions::default()
+        };
+        export_in(
+            &dir,
+            dest_str,
+            ExportNaming::Project,
+            "",
+            &pdf_only,
+            &default_titles(),
+            &arabic,
+            ComicImagesMode::Folder,
+            None,
+        )
+        .expect("export PDF");
+        let pdf = std::fs::read(dest.join("雾镇.pdf")).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/PageMode /UseOutlines"));
+        assert_eq!(
+            super::super::comic_pdf::decoded_outline_titles(&pdf),
+            vec!["第1话".to_string(), "第2话".to_string()]
+        );
+        // 第 2 话起于第 3 页（页对象编号 11），书签直指该页。
+        assert!(text.contains("/Dest [11 0 R /Fit]"));
+        // 自定义话模板同样渲染进书签。
+        let custom = ComicPdfOptions {
+            volume_kind: TxtTitleKind::Custom,
+            volume_pattern: "EP#N".to_string(),
+            ..ComicPdfOptions::default()
+        };
+        export_in(
+            &dir,
+            dest_str,
+            ExportNaming::Project,
+            "",
+            &pdf_only,
+            &default_titles(),
+            &custom,
+            ComicImagesMode::Folder,
+            None,
+        )
+        .expect("export custom PDF");
+        let pdf = std::fs::read(dest.join("雾镇.pdf")).expect("read custom PDF");
+        assert_eq!(
+            super::super::comic_pdf::decoded_outline_titles(&pdf),
+            vec!["EP01".to_string(), "EP02".to_string()]
+        );
+        // 多话下空自定义话模板拒绝，与原图校验同一口径。
+        let empty_custom = ComicPdfOptions {
+            volume_kind: TxtTitleKind::Custom,
+            volume_pattern: "  ".to_string(),
+            ..ComicPdfOptions::default()
+        };
+        assert!(
+            export_in(
+                &dir,
+                dest_str,
+                ExportNaming::Project,
+                "",
+                &pdf_only,
+                &default_titles(),
+                &empty_custom,
+                ComicImagesMode::Folder,
+                None,
+            )
+            .is_err()
+        );
         cleanup(&root);
     }
 
