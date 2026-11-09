@@ -3,10 +3,10 @@
 import { SvelteSet } from "svelte/reactivity";
 import type { ComicExportState } from "#libs/commands/types";
 
-/** 打包作业状态即导出作业状态：运行中 + 已写 / 总数。 */
+/** 导出作业状态：运行中 + 已完成的文件或 PDF 页处理单元数。 */
 export type ExportJob = ComicExportState;
 
-const idleJob = (): ComicExportState => ({ running: false, done_files: 0, total_files: 0 });
+const idleJob = (): ComicExportState => ({ running: false, done_units: 0, total_units: 0 });
 
 /** 按项目 id 记录的导出作业；切页 / 重挂载不丢失（comic 与 novel 共用一张表，id 全局唯一）。 */
 const exportJobs = $state<Record<string, ComicExportState>>({});
@@ -24,13 +24,13 @@ export function ensureExportListener(eventName: string): void {
     .then(({ listen }) =>
       listen<{
         id: string;
-        done_files: number;
-        total_files: number;
+        done_units: number;
+        total_units: number;
       }>(eventName, (event) => {
         exportJobs[event.payload.id] = {
           running: true,
-          done_files: event.payload.done_files,
-          total_files: event.payload.total_files,
+          done_units: event.payload.done_units,
+          total_units: event.payload.total_units,
         };
       }),
     )

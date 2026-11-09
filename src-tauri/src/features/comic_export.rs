@@ -12,7 +12,10 @@ use specta::Type;
 use zip::write::SimpleFileOptions;
 
 use super::comic_build::{comic_heading_page, page_context_width, page_global_width, page_number};
-use super::comic_files::read_content;
+use super::comic_files::{ComicContent, read_content};
+use super::comic_pdf::{
+    ComicPdfOptions, PdfPageImage, inspect_page_image, validate_pdf_options, write_pdf_file,
+};
 use super::novel_build::count_width;
 use super::novel_export::{
     BuildTitleOptions, ExportNaming, ExportOutcome, TxtTitleKind, cover_ext_of, target_dir,
@@ -31,18 +34,21 @@ pub enum ComicImagesMode {
     Zip,
 }
 
-/// 漫画导出勾选：EPUB / 原图 / 封面。
+/// 漫画导出勾选：EPUB / PDF / 原图 / 封面。
+#[allow(clippy::struct_excessive_bools, reason = "导出产物互相独立且允许多选")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ComicExportItems {
     /// EPUB 电子书。
     pub epub: bool,
+    /// 单个 PDF 文件。
+    pub pdf: bool,
     /// 原图（文件夹或压缩包，见 `ComicImagesMode`）。
     pub images: bool,
     /// 封面图片。
     pub cover: bool,
 }
 
-/// 导出进度事件名：前端据此订阅原图落盘进度；改名时两端同步。
+/// 导出进度事件名：前端据此订阅文件与 PDF 页的处理进度；改名时两端同步。
 pub const EXPORT_PROGRESS_EVENT: &str = "comic-export-progress";
 
 /// 导出进度载荷：`id` 供前端多窗口过滤。
@@ -50,21 +56,21 @@ pub const EXPORT_PROGRESS_EVENT: &str = "comic-export-progress";
 pub struct ComicExportProgress {
     /// 项目 id。
     pub id: String,
-    /// 已写文件数。
-    pub done_files: u32,
-    /// 文件总数。
-    pub total_files: u32,
+    /// 已完成的文件 / PDF 页处理单元数。
+    pub done_units: u32,
+    /// 文件 / PDF 页处理单元总数。
+    pub total_units: u32,
 }
 
 /// 导出作业状态：供切回页面时回填进度；从未开始返回空闲零值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ComicExportState {
     pub running: bool,
-    pub done_files: u32,
-    pub total_files: u32,
+    pub done_units: u32,
+    pub total_units: u32,
 }
 
-/// 进行中的导出作业：uuid → (已写, 总数)。单进程内互斥与状态查询共用；
+/// 进行中的导出作业：uuid → (已完成单元数, 总单元数)。单进程内互斥与状态查询共用；
 /// 崩溃重启即清空（导出落盘在用户自选目录，无暂存区残留问题）。
 static EXPORTING: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
@@ -72,15 +78,23 @@ static EXPORTING: std::sync::LazyLock<
 
 /// 登记作业：同项目已有在跑导出时整单拒绝（目标目录按项目独占，不可并发）。
 fn register_export(id: &str) -> anyhow::Result<()> {
-    let mut jobs = EXPORTING
-        .lock()
-        .map_err(|_| anyhow::anyhow!("export registry poisoned"))?;
-    if jobs.contains_key(id) {
-        anyhow::bail!("export already in progress for project {id}");
+    super::comic_images::lock_project_images(id)?;
+    let result = (|| {
+        let mut jobs = EXPORTING
+            .lock()
+            .map_err(|_| anyhow::anyhow!("export registry poisoned"))?;
+        anyhow::ensure!(
+            !jobs.contains_key(id),
+            "export already in progress for project {id}"
+        );
+        jobs.insert(id.to_string(), (0, 0));
+        drop(jobs);
+        Ok(())
+    })();
+    if result.is_err() {
+        super::comic_images::unlock_project_images(id);
     }
-    jobs.insert(id.to_string(), (0, 0));
-    drop(jobs);
-    Ok(())
+    result
 }
 
 /// 更新作业进度：注册表缺失时静默跳过，只写不读，不影响主流程。
@@ -97,6 +111,7 @@ fn finish_export(id: &str) {
     if let Ok(mut jobs) = EXPORTING.lock() {
         jobs.remove(id);
     }
+    super::comic_images::unlock_project_images(id);
 }
 
 /// 查询导出作业状态（`AppHandle` 入口仅作透传；注册表是进程级，无需解析项目）。
@@ -108,13 +123,13 @@ pub fn export_progress_status(id: &str) -> ComicExportState {
         .map_or_else(
             || ComicExportState {
                 running: false,
-                done_files: 0,
-                total_files: 0,
+                done_units: 0,
+                total_units: 0,
             },
-            |(done_files, total_files)| ComicExportState {
+            |(done_units, total_units)| ComicExportState {
                 running: true,
-                done_files,
-                total_files,
+                done_units,
+                total_units,
             },
         )
 }
@@ -231,8 +246,45 @@ fn page_stem(
     novel_package::sanitize_stem(&rendered)
 }
 
-/// 导出全量生成：EPUB / 封面照拷，原图按话建目录拷贝或打成单个压缩包；
-/// `progress` 在每个文件落盘后回调（分子/分母），调用方据此推送进度事件。
+/// 按 content.json 的话序、页序读取 PDF 页面尺寸，不扫描或重排 sources/images。
+fn collect_pdf_pages(
+    project_dir: &Path,
+    content: &ComicContent,
+) -> anyhow::Result<Vec<PdfPageImage>> {
+    let images_dir = project_dir.join("sources").join("images");
+    content
+        .volumes
+        .iter()
+        .flat_map(|volume| volume.pages.iter())
+        .map(|page| {
+            let path = super::comic_files::join_images_path(&images_dir, &page.path)?;
+            inspect_page_image(&path)
+        })
+        .collect()
+}
+
+/// 推进一个文件或 PDF 页处理单元。
+fn advance_progress(done: &mut u32, total: u32, progress: Option<&dyn Fn(u32, u32)>) {
+    *done = done.saturating_add(1);
+    if let Some(emit) = progress {
+        emit(*done, total);
+    }
+}
+
+/// 记录已导出的相对路径并推进进度。
+fn record_exported_file(
+    files: &mut Vec<String>,
+    path: String,
+    done: &mut u32,
+    total: u32,
+    progress: Option<&dyn Fn(u32, u32)>,
+) {
+    advance_progress(done, total, progress);
+    files.push(path);
+}
+
+/// 导出 EPUB / 封面、按页序生成 PDF，或将原图按话拷贝 / 压缩；
+/// `progress` 按文件、原图条目或 PDF 页完成回调，调用方据此推送进度事件。
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn export_in(
     project_dir: &Path,
@@ -241,18 +293,25 @@ pub fn export_in(
     custom_name: &str,
     items: &ComicExportItems,
     titles: &BuildTitleOptions,
+    pdf_options: &ComicPdfOptions,
     images_mode: ComicImagesMode,
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<ExportOutcome> {
-    if !items.epub && !items.images && !items.cover {
+    if !items.epub && !items.pdf && !items.images && !items.cover {
         anyhow::bail!("no export items selected");
     }
-    if matches!(titles.chapter_kind, TxtTitleKind::Custom)
+    if items.pdf {
+        validate_pdf_options(pdf_options)?;
+    }
+    if items.images
+        && matches!(titles.chapter_kind, TxtTitleKind::Custom)
         && titles.chapter_pattern.trim().is_empty()
     {
         anyhow::bail!("custom page pattern must not be empty");
     }
-    if matches!(titles.volume_kind, TxtTitleKind::Custom) && titles.volume_pattern.trim().is_empty()
+    if items.images
+        && matches!(titles.volume_kind, TxtTitleKind::Custom)
+        && titles.volume_pattern.trim().is_empty()
     {
         anyhow::bail!("custom volume pattern must not be empty");
     }
@@ -274,6 +333,26 @@ pub fn export_in(
             novel_package::sanitize_stem(custom_name)
         }
     };
+    let content = if items.images || items.pdf {
+        Some(read_content(project_dir)?)
+    } else {
+        None
+    };
+    let pdf_pages = if items.pdf {
+        collect_pdf_pages(
+            project_dir,
+            content.as_ref().context("comic content is missing")?,
+        )?
+    } else {
+        Vec::new()
+    };
+    let pdf_cover = if items.pdf && pdf_options.include_cover {
+        let absolute =
+            cover_absolute_path_in(project_dir)?.context("no cover to include in PDF")?;
+        Some(inspect_page_image(Path::new(&absolute))?)
+    } else {
+        None
+    };
 
     // 落盘条目分两组，互不混入：
     // 根直出组（多选进书名目录 <stem>/，单选直出 dest 根）：EPUB 与独立封面；
@@ -293,7 +372,9 @@ pub fn export_in(
         root_entries.push((format!("{stem}.{ext}"), PathBuf::from(absolute)));
     }
     if items.images {
-        let content = read_content(project_dir)?;
+        let content = content
+            .as_ref()
+            .context("comic content is missing for image export")?;
         let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
         // 原画必带封面（有则必含），与封面复选框相互独立。
         if let Some(absolute) = cover_absolute_path_in(project_dir)? {
@@ -305,7 +386,7 @@ pub fn export_in(
             image_entries.push((rel, PathBuf::from(absolute)));
         }
         let volume_width = count_width(content.volumes.len());
-        let page_global = page_global_width(&content);
+        let page_global = page_global_width(content);
         // 平铺（单个无标题卷）无子目录，其余按话建子目录。
         let grouped = content.volumes.len() > 1
             || content
@@ -330,7 +411,7 @@ pub fn export_in(
                     volume.title.as_deref(),
                     number,
                     page_context_width(
-                        &content,
+                        content,
                         volume.pages.len(),
                         grouped,
                         titles.chapter_numbering,
@@ -363,7 +444,7 @@ pub fn export_in(
             anyhow::bail!("no images to export");
         }
     }
-    let selected_count = [items.epub, items.images, items.cover]
+    let selected_count = [items.epub, items.pdf, items.images, items.cover]
         .iter()
         .filter(|&&checked| checked)
         .count();
@@ -393,16 +474,14 @@ pub fn export_in(
     };
     let mut files: Vec<String> = Vec::new();
     let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // 进度分母：根直出文件 + 原图条目（压缩包按条目数计，落盘为一次性写包）。
-    let total = saturating_u32(root_entries.len() + image_entries.len());
-    let mut done = 0u32;
-    let mut bump = |files: &mut Vec<String>, rel: String| {
-        done += 1;
-        if let Some(emit) = progress {
-            emit(done, total);
-        }
-        files.push(rel);
+    // PDF 按页计进度；其余产物按文件或原图条目计。
+    let pdf_units = if items.pdf {
+        pdf_pages.len() + usize::from(pdf_cover.is_some())
+    } else {
+        0
     };
+    let total = saturating_u32(root_entries.len() + image_entries.len() + pdf_units);
+    let mut done = 0u32;
     // 根直出组：EPUB / 独立封面（多选时进书名目录，单选直出 dest 根；覆盖旧文件）。
     for (name, source) in &root_entries {
         let rel = format!("{prefix}{name}");
@@ -416,7 +495,33 @@ pub fn export_in(
         }
         std::fs::copy(source, &dest_path)
             .with_context(|| format!("failed to copy {}", dest_path.display()))?;
-        bump(&mut files, rel);
+        record_exported_file(&mut files, rel, &mut done, total, progress);
+    }
+    if items.pdf {
+        let rel = format!("{prefix}{stem}.pdf");
+        if !seen_paths.insert(rel.clone()) {
+            anyhow::bail!("duplicate export file name: {rel}");
+        }
+        let pdf_path = dest.join(&rel);
+        if let Some(parent) = pdf_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let done_before_pdf = done;
+        let report_pdf_progress = |pdf_done: u32, _pdf_total: u32| {
+            if let Some(emit) = progress {
+                emit(done_before_pdf.saturating_add(pdf_done), total);
+            }
+        };
+        write_pdf_file(
+            &pdf_path,
+            &pdf_pages,
+            pdf_cover.as_ref(),
+            pdf_options,
+            Some(&report_pdf_progress),
+        )?;
+        done = done.saturating_add(saturating_u32(pdf_units));
+        files.push(rel);
     }
     match images_mode {
         ComicImagesMode::Folder => {
@@ -433,7 +538,7 @@ pub fn export_in(
                     }
                     std::fs::copy(source, &dest_path)
                         .with_context(|| format!("failed to copy {}", dest_path.display()))?;
-                    bump(&mut files, final_rel);
+                    record_exported_file(&mut files, final_rel, &mut done, total, progress);
                 }
             }
             files.sort();
@@ -472,10 +577,7 @@ pub fn export_in(
                     .with_context(|| format!("failed to add {rel}"))?;
                 zip.write_all(&bytes)
                     .with_context(|| format!("failed to write {rel}"))?;
-                done += 1;
-                if let Some(emit) = progress {
-                    emit(done, total);
-                }
+                advance_progress(&mut done, total, progress);
             }
             zip.finish().context("failed to finish zip")?;
             files.push(zip_rel);
@@ -491,7 +593,7 @@ pub fn export_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicEx
     status_in(&dir)
 }
 
-/// 导出漫画（`AppHandle` 入口）：阻塞池执行并推送原图落盘进度，前端据此渲染进度条。
+/// 导出漫画（`AppHandle` 入口）：阻塞池执行并推送文件 / PDF 页处理进度。
 #[allow(clippy::too_many_arguments)]
 pub async fn export_comic(
     app: &tauri::AppHandle,
@@ -501,6 +603,7 @@ pub async fn export_comic(
     custom_name: &str,
     items: &ComicExportItems,
     titles: &BuildTitleOptions,
+    pdf_options: &ComicPdfOptions,
     images_mode: ComicImagesMode,
 ) -> anyhow::Result<ExportOutcome> {
     use tauri::Emitter;
@@ -511,6 +614,7 @@ pub async fn export_comic(
     let name = custom_name.to_string();
     let items = items.clone();
     let titles = titles.clone();
+    let pdf_options = pdf_options.clone();
     let handle = app.clone();
     let report_id = id.to_string();
     let progress_id = id.to_string();
@@ -521,8 +625,8 @@ pub async fn export_comic(
                 EXPORT_PROGRESS_EVENT,
                 ComicExportProgress {
                     id: report_id.clone(),
-                    done_files: done,
-                    total_files: total,
+                    done_units: done,
+                    total_units: total,
                 },
             );
         };
@@ -533,6 +637,7 @@ pub async fn export_comic(
             &name,
             &items,
             &titles,
+            &pdf_options,
             images_mode,
             Some(&on_progress),
         )
@@ -548,6 +653,7 @@ mod tests {
 
     use super::super::comic_build;
     use super::super::comic_files;
+    use super::super::comic_pdf::ComicPdfOptions;
     use super::super::novel_export::BuildTitleOptions;
     use super::super::novel_export::ChapterNumbering;
     use super::super::novel_export::ExportNaming;
@@ -576,7 +682,7 @@ mod tests {
 
     /// 1x1 真 PNG 字节：epub 校验嗅探内容，假字节过不了。
     const PIXEL_PNG: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x48,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
         0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
         0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
@@ -603,6 +709,7 @@ mod tests {
     fn images_only() -> ComicExportItems {
         ComicExportItems {
             epub: false,
+            pdf: false,
             images: true,
             cover: false,
         }
@@ -630,6 +737,7 @@ mod tests {
             "",
             &images_only(),
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Folder,
             None,
         )
@@ -659,6 +767,7 @@ mod tests {
             "",
             &images_only(),
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Folder,
             None,
         )
@@ -689,10 +798,12 @@ mod tests {
             "",
             &ComicExportItems {
                 epub: true,
+                pdf: false,
                 images: true,
                 cover: true,
             },
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Folder,
             None,
         )
@@ -728,10 +839,12 @@ mod tests {
             "",
             &ComicExportItems {
                 epub: true,
+                pdf: false,
                 images: false,
                 cover: false,
             },
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Folder,
             None,
         )
@@ -763,10 +876,12 @@ mod tests {
             "",
             &ComicExportItems {
                 epub: true,
+                pdf: false,
                 images: false,
                 cover: true,
             },
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Folder,
             None,
         )
@@ -782,10 +897,12 @@ mod tests {
             "精选集",
             &ComicExportItems {
                 epub: true,
+                pdf: false,
                 images: true,
                 cover: false,
             },
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Zip,
             None,
         )
@@ -808,6 +925,7 @@ mod tests {
             "",
             &images_only(),
             &default_titles(),
+            &ComicPdfOptions::default(),
             ComicImagesMode::Zip,
             None,
         )
@@ -853,6 +971,7 @@ mod tests {
             "精选",
             &images_only(),
             &titles,
+            &ComicPdfOptions::default(),
             ComicImagesMode::Folder,
             None,
         )
@@ -880,10 +999,12 @@ mod tests {
                 "",
                 &ComicExportItems {
                     epub: false,
+                    pdf: false,
                     images: false,
                     cover: false,
                 },
                 &default_titles(),
+                &ComicPdfOptions::default(),
                 ComicImagesMode::Folder,
                 None,
             )
@@ -903,6 +1024,7 @@ mod tests {
                 "",
                 &images_only(),
                 &titles,
+                &ComicPdfOptions::default(),
                 ComicImagesMode::Folder,
                 None,
             )
@@ -918,6 +1040,7 @@ mod tests {
                 "",
                 &images_only(),
                 &default_titles(),
+                &ComicPdfOptions::default(),
                 ComicImagesMode::Zip,
                 None,
             )
@@ -960,12 +1083,12 @@ mod tests {
         update_export_progress(id, 3, 10);
         let status = export_progress_status(id);
         assert!(status.running);
-        assert_eq!((status.done_files, status.total_files), (3, 10));
+        assert_eq!((status.done_units, status.total_units), (3, 10));
         finish_export(id);
         assert!(!is_registered_for_test(id));
         let idle = export_progress_status(id);
         assert!(!idle.running);
-        assert_eq!((idle.done_files, idle.total_files), (0, 0));
+        assert_eq!((idle.done_units, idle.total_units), (0, 0));
     }
 
     #[test]
@@ -976,6 +1099,90 @@ mod tests {
         finish_export(id);
         register_export(id).expect("register after finish");
         finish_export(id);
+    }
+
+    #[test]
+    fn export_and_image_mutation_share_one_project_lock() {
+        let id = "export-image-lock";
+        register_export(id).expect("register export");
+        assert!(super::super::comic_images::lock_project_images(id).is_err());
+        finish_export(id);
+
+        super::super::comic_images::lock_project_images(id).expect("lock image mutation");
+        assert!(register_export(id).is_err());
+        super::super::comic_images::unlock_project_images(id);
+    }
+
+    #[test]
+    fn exports_pdf_as_one_named_file_with_cover_page() {
+        let (root, dir) = parsed_project("pdf", &["01.png", "02.png"]);
+        let cover_source = root.join("cover-source.png");
+        std::fs::write(&cover_source, PIXEL_PNG).expect("write cover source");
+        super::super::project_metadata::import_cover_in(&dir, &cover_source).expect("import cover");
+        let dest = root.join("dest");
+        std::fs::create_dir_all(&dest).expect("create destination");
+        let pdf_options = ComicPdfOptions {
+            include_cover: true,
+            ..ComicPdfOptions::default()
+        };
+        let irrelevant_image_titles = BuildTitleOptions {
+            chapter_kind: TxtTitleKind::Custom,
+            chapter_pattern: String::new(),
+            ..default_titles()
+        };
+
+        let outcome = export_in(
+            &dir,
+            dest.to_str().expect("utf8 destination"),
+            ExportNaming::Project,
+            "",
+            &ComicExportItems {
+                epub: false,
+                images: false,
+                cover: false,
+                pdf: true,
+            },
+            &irrelevant_image_titles,
+            &pdf_options,
+            ComicImagesMode::Folder,
+            None,
+        )
+        .expect("export PDF");
+
+        let pdf_path = dest.join("雾镇.pdf");
+        let pdf = std::fs::read(&pdf_path).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Count 3"));
+        assert_eq!(outcome.files, vec!["雾镇.pdf"]);
+        assert_eq!(outcome.dir, dest.to_str().expect("utf8 destination"));
+
+        let progress = std::cell::RefCell::new(Vec::new());
+        let emit_progress = |done, total| progress.borrow_mut().push((done, total));
+        let grouped = export_in(
+            &dir,
+            dest.to_str().expect("utf8 destination"),
+            ExportNaming::Project,
+            "",
+            &ComicExportItems {
+                epub: false,
+                pdf: true,
+                images: false,
+                cover: true,
+            },
+            &default_titles(),
+            &ComicPdfOptions::default(),
+            ComicImagesMode::Folder,
+            Some(&emit_progress),
+        )
+        .expect("export PDF with standalone cover");
+        assert!(dest.join("雾镇").join("雾镇.pdf").is_file());
+        assert!(dest.join("雾镇").join("雾镇.png").is_file());
+        assert_eq!(
+            grouped.files,
+            vec!["雾镇/雾镇.pdf".to_string(), "雾镇/雾镇.png".to_string()]
+        );
+        assert_eq!(*progress.borrow(), vec![(1, 3), (2, 3), (3, 3)]);
+        cleanup(&root);
     }
 
     /// 测试探针：注册表内部状态只读暴露（生产代码走 `export_progress_status`）。

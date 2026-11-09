@@ -123,10 +123,10 @@ export const commands = {
 	/**  查询导出作业状态：切回页面时回填进度；从未开始返回空闲零值。 */
 	getComicExportProgress: (id: string) => typedError<ComicExportState, CommandError>(__TAURI_INVOKE("get_comic_export_progress", { id })),
 	/**
-	 *  导出漫画：改名拷贝 EPUB / 封面、原图按话建目录拷贝或打成压缩包，落到自选目录的 `<命名>/` 下；
-	 *  阻塞池执行并推送原图落盘进度，前端据此渲染进度条。
+	 *  导出漫画：改名拷贝 EPUB / 封面、按 content.json 顺序输出 PDF 或原图，落到自选目录；
+	 *  阻塞池执行并推送文件 / PDF 页处理进度，前端据此渲染进度条。
 	 */
-	exportComicContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ComicExportItems, titles: BuildTitleOptions, imagesMode: ComicImagesMode) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_comic_content", { id, destDir, naming, customName, items, titles, imagesMode })),
+	exportComicContent: (id: string, destDir: string, naming: ExportNaming, customName: string, items: ComicExportItems, titles: BuildTitleOptions, pdfOptions: ComicPdfOptions, imagesMode: ComicImagesMode) => typedError<ExportOutcome, CommandError>(__TAURI_INVOKE("export_comic_content", { id, destDir, naming, customName, items, titles, pdfOptions, imagesMode })),
 	/**  读取全部项目；根目录不存在视为尚无项目，返回空列表 */
 	listProjects: () => typedError<ProjectInfo[], CommandError>(__TAURI_INVOKE("list_projects")),
 	/**  读取全部项目总览：基本信息 + 四阶段状态 + 内容条数，供首页工作台展示 */
@@ -416,10 +416,12 @@ export type ComicConvertStatus = {
 	total_files: number,
 };
 
-/**  漫画导出勾选：EPUB / 原图 / 封面。 */
+/**  漫画导出勾选：EPUB / PDF / 原图 / 封面。 */
 export type ComicExportItems = {
 	/**  EPUB 电子书。 */
 	epub: boolean,
+	/**  单个 PDF 文件。 */
+	pdf: boolean,
 	/**  原图（文件夹或压缩包，见 `ComicImagesMode`）。 */
 	images: boolean,
 	/**  封面图片。 */
@@ -429,8 +431,8 @@ export type ComicExportItems = {
 /**  导出作业状态：供切回页面时回填进度；从未开始返回空闲零值。 */
 export type ComicExportState = {
 	running: boolean,
-	done_files: number,
-	total_files: number,
+	done_units: number,
+	total_units: number,
 };
 
 /**  漫画导出状态：进页一次查全，前端据此渲染表单与禁用态。 */
@@ -523,6 +525,60 @@ export type ComicPageOutline = {
 	/**  本页字节数（`u32` 以满足 specta 导出约束，上限内足够）。 */
 	size_bytes: number,
 };
+
+/**  图片在 PDF 页面内的填充方式。 */
+export type ComicPdfFillMode = 
+/**  保持比例并完整显示图片。 */
+"contain" | 
+/**  保持比例并裁切超出页面的部分。 */
+"cover" | 
+/**  分别缩放宽高以填满页面。 */
+"stretch";
+
+/**  图片的水平对齐位置。 */
+export type ComicPdfHorizontalAlignment = 
+/**  左对齐。 */
+"left" | 
+/**  水平居中。 */
+"center" | 
+/**  右对齐。 */
+"right";
+
+/**  漫画 PDF 导出参数；固定尺寸字段在平均模式下忽略。 */
+export type ComicPdfOptions = {
+	/**  页面尺寸来源。 */
+	page_size: ComicPdfPageSize,
+	/**  固定页面宽度（像素）。 */
+	width_px: number,
+	/**  固定页面高度（像素）。 */
+	height_px: number,
+	/**  像素到 PDF 物理页面的换算分辨率。 */
+	dpi: number,
+	/**  图片填充方式。 */
+	fill_mode: ComicPdfFillMode,
+	/**  图片水平对齐。 */
+	horizontal_alignment: ComicPdfHorizontalAlignment,
+	/**  图片垂直对齐。 */
+	vertical_alignment: ComicPdfVerticalAlignment,
+	/**  是否将项目封面作为第一页。 */
+	include_cover: boolean,
+};
+
+/**  PDF 页面尺寸来源。 */
+export type ComicPdfPageSize = 
+/**  按漫画页的平均像素宽高生成统一画布。 */
+"average" | 
+/**  使用用户指定的像素宽高生成统一画布。 */
+"fixed";
+
+/**  图片的垂直对齐位置。 */
+export type ComicPdfVerticalAlignment = 
+/**  顶部对齐。 */
+"top" | 
+/**  垂直居中。 */
+"center" | 
+/**  底部对齐。 */
+"bottom";
 
 /**  话输入：编辑页全量提交的单话（标题可改、话可增删排序，页须全量覆盖）。 */
 export type ComicVolumeInput = {

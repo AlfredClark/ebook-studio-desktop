@@ -739,15 +739,13 @@ pub fn append_images_in(project_dir: &Path, source: &Path) -> anyhow::Result<App
     Ok(AppendOutcome { added, skipped })
 }
 
-/// 增量追加图片（`AppHandle` 入口）：图片作业进行中拒绝，避免与批量替换互斥。
+/// 增量追加图片（`AppHandle` 入口）：图片或导出作业进行中拒绝，避免改动正在导出的内容。
 pub fn append_images(
     app: &tauri::AppHandle,
     id: &str,
     source_path: &str,
 ) -> anyhow::Result<AppendOutcome> {
-    if super::comic_images::is_busy(id) {
-        anyhow::bail!("image job in progress for project {id}, try again later");
-    }
+    let _lock = super::comic_images::ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     append_images_in(&dir, Path::new(source_path))
 }
@@ -800,15 +798,13 @@ pub fn images_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicIm
     status_in(&dir)
 }
 
-/// 导入漫画目录（`AppHandle` 入口）：转换/压缩进行中拒绝，避免与批量替换互斥。
+/// 导入漫画目录（`AppHandle` 入口）：图片或导出作业进行中拒绝，避免改动正在导出的内容。
 pub fn import_images(
     app: &tauri::AppHandle,
     id: &str,
     source_path: &str,
 ) -> anyhow::Result<ComicImagesStatus> {
-    if super::comic_images::is_busy(id) {
-        anyhow::bail!("image job in progress for project {id}, try again later");
-    }
+    let _lock = super::comic_images::ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     import_dir_in(&dir, Path::new(source_path))
 }
@@ -914,6 +910,7 @@ pub fn scan_orphans(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOrp
 
 /// 删除孤儿图片（`AppHandle` 入口）。
 pub fn delete_orphans(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
+    let _lock = super::comic_images::ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     delete_orphans_in(&dir)
 }
@@ -1227,11 +1224,9 @@ pub fn outline_in(project_dir: &Path) -> anyhow::Result<Option<ComicOutline>> {
     Ok(Some(outline_of(project_dir, &content, 0)?))
 }
 
-/// 解析图片顺序（`AppHandle` 入口）：转换/压缩进行中拒绝，避免与批量替换互斥。
+/// 解析图片顺序（`AppHandle` 入口）：图片或导出作业进行中拒绝，避免改动正在导出的内容。
 pub fn parse_images(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
-    if super::comic_images::is_busy(id) {
-        anyhow::bail!("image job in progress for project {id}, try again later");
-    }
+    let _lock = super::comic_images::ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     parse_images_in(&dir)
 }
@@ -1381,16 +1376,14 @@ pub fn update_volumes_in(
     outline_of(project_dir, &content, skipped)
 }
 
-/// 全量更新分话结构（`AppHandle` 入口）：转换/压缩进行中拒绝，避免与批量替换互斥。
+/// 全量更新分话结构（`AppHandle` 入口）：图片或导出作业进行中拒绝，避免改动正在导出的内容。
 #[allow(clippy::needless_pass_by_value)]
 pub fn update_volumes(
     app: &tauri::AppHandle,
     id: &str,
     volumes: Vec<ComicVolumeInput>,
 ) -> anyhow::Result<ComicOutline> {
-    if super::comic_images::is_busy(id) {
-        anyhow::bail!("image job in progress for project {id}, try again later");
-    }
+    let _lock = super::comic_images::ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     update_volumes_in(&dir, &volumes)
 }

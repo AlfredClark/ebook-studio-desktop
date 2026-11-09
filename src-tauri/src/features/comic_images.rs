@@ -121,6 +121,57 @@ static COMPRESSING: std::sync::LazyLock<
 static CANCEL_REQUESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
+/// 与导出共用的项目级独占锁，防止图片或 `content.json` 在读取期间被替换。
+static PROJECT_IMAGE_LOCKS: std::sync::LazyLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashSet::new()));
+
+/// 锁定一个项目的图片与页序操作；转换、压缩和导出共用该锁。
+pub(super) fn lock_project_images(id: &str) -> anyhow::Result<()> {
+    let mut projects = PROJECT_IMAGE_LOCKS
+        .lock()
+        .map_err(|_| anyhow::anyhow!("project image lock registry poisoned"))?;
+    anyhow::ensure!(
+        projects.insert(id.to_string()),
+        "comic project operation already in progress for {id}"
+    );
+    drop(projects);
+    Ok(())
+}
+
+/// 解锁项目图片操作；锁中毒时尽力结算。
+pub(super) fn unlock_project_images(id: &str) {
+    if let Ok(mut projects) = PROJECT_IMAGE_LOCKS.lock() {
+        projects.remove(id);
+    }
+}
+
+/// 查询项目图片是否被转换、压缩或导出任务独占。
+#[cfg(test)]
+fn project_images_locked(id: &str) -> bool {
+    PROJECT_IMAGE_LOCKS
+        .lock()
+        .is_ok_and(|projects| projects.contains(id))
+}
+
+/// 同步项目操作的锁守卫；作用域结束时自动释放共享项目锁。
+pub(super) struct ProjectImagesGuard {
+    id: String,
+}
+
+impl ProjectImagesGuard {
+    /// 获取项目级图片锁；已有导出、转换或压缩任务时直接失败。
+    pub(super) fn acquire(id: &str) -> anyhow::Result<Self> {
+        lock_project_images(id)?;
+        Ok(Self { id: id.to_string() })
+    }
+}
+
+impl Drop for ProjectImagesGuard {
+    fn drop(&mut self) {
+        unlock_project_images(&self.id);
+    }
+}
+
 /// 取消信号：前后端约定的错误标记，入口处映射为 [`CommandError::Cancelled`]。
 pub const CANCELLED_MARKER: &str = "cancelled by user";
 
@@ -182,18 +233,23 @@ pub fn convert_status(id: &str) -> ComicConvertStatus {
 
 /// 登记作业：同项目已有在跑任务时整单拒绝（暂存区按项目独占，不可并发）。
 fn register_convert(id: &str) -> anyhow::Result<()> {
-    if is_compressing(id) {
-        anyhow::bail!("compression already in progress for project {id}");
+    lock_project_images(id)?;
+    let result = (|| {
+        let mut jobs = CONVERTING
+            .lock()
+            .map_err(|_| anyhow::anyhow!("convert registry poisoned"))?;
+        anyhow::ensure!(
+            !jobs.contains_key(id),
+            "conversion already in progress for project {id}"
+        );
+        jobs.insert(id.to_string(), (0, 0));
+        drop(jobs);
+        Ok(())
+    })();
+    if result.is_err() {
+        unlock_project_images(id);
     }
-    let mut jobs = CONVERTING
-        .lock()
-        .map_err(|_| anyhow::anyhow!("convert registry poisoned"))?;
-    if jobs.contains_key(id) {
-        anyhow::bail!("conversion already in progress for project {id}");
-    }
-    jobs.insert(id.to_string(), (0, 0));
-    drop(jobs);
-    Ok(())
+    result
 }
 
 /// 更新作业进度：注册表缺失时静默跳过，只写不读，不影响主流程。
@@ -211,6 +267,7 @@ fn finish_convert(id: &str) {
         jobs.remove(id);
     }
     clear_cancel(id);
+    unlock_project_images(id);
 }
 
 /// 压缩参数：原地重编码，保持源格式与路径不变。
@@ -306,18 +363,23 @@ pub fn compress_status(id: &str) -> ComicCompressStatus {
 
 /// 登记压缩作业：转换/压缩互斥，同项目已有在跑任务整单拒绝。
 fn register_compress(id: &str) -> anyhow::Result<()> {
-    if is_converting(id) {
-        anyhow::bail!("conversion already in progress for project {id}");
+    lock_project_images(id)?;
+    let result = (|| {
+        let mut jobs = COMPRESSING
+            .lock()
+            .map_err(|_| anyhow::anyhow!("compress registry poisoned"))?;
+        anyhow::ensure!(
+            !jobs.contains_key(id),
+            "compression already in progress for project {id}"
+        );
+        jobs.insert(id.to_string(), (0, 0));
+        drop(jobs);
+        Ok(())
+    })();
+    if result.is_err() {
+        unlock_project_images(id);
     }
-    let mut jobs = COMPRESSING
-        .lock()
-        .map_err(|_| anyhow::anyhow!("compress registry poisoned"))?;
-    if jobs.contains_key(id) {
-        anyhow::bail!("compression already in progress for project {id}");
-    }
-    jobs.insert(id.to_string(), (0, 0));
-    drop(jobs);
-    Ok(())
+    result
 }
 
 /// 更新压缩作业进度：注册表缺失时静默跳过。
@@ -335,6 +397,7 @@ fn finish_compress(id: &str) {
         jobs.remove(id);
     }
     clear_cancel(id);
+    unlock_project_images(id);
 }
 
 /// 暂存目录：项目根下的隐藏目录，编码期中转，成功 / 失败后清理。
@@ -812,12 +875,14 @@ pub fn compress_status_of(project_dir: &Path, id: &str) -> ComicCompressStatus {
 
 /// 撤销压缩备份（`AppHandle` 入口）：一次性有效，无备份直接报错。
 pub fn restore_backup(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicOutline> {
+    let _lock = ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     restore_compress_backup_in(&dir)
 }
 
 /// 清除压缩备份（`AppHandle` 入口）：只删备份目录，当前图片不动。
 pub fn clear_backup(app: &tauri::AppHandle, id: &str) -> anyhow::Result<bool> {
+    let _lock = ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     clear_compress_backup_in(&dir)
 }
@@ -1162,6 +1227,7 @@ mod tests {
         assert!(!idle.running);
         register_convert(id).expect("register");
         assert!(is_converting(id));
+        assert!(project_images_locked(id));
         let status = convert_status(id);
         assert!(status.running);
         assert_eq!((status.done_files, status.total_files), (0, 0));
@@ -1170,6 +1236,18 @@ mod tests {
         assert_eq!((status.done_files, status.total_files), (3, 10));
         finish_convert(id);
         assert!(!is_converting(id));
+        assert!(!project_images_locked(id));
+    }
+
+    #[test]
+    fn synchronous_project_image_guard_releases_on_scope_exit() {
+        let id = "sync-project-image-lock";
+        {
+            let _guard = ProjectImagesGuard::acquire(id).expect("acquire project lock");
+            assert!(project_images_locked(id));
+            assert!(lock_project_images(id).is_err());
+        }
+        assert!(!project_images_locked(id));
     }
 
     #[test]

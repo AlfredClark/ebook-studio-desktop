@@ -178,7 +178,7 @@
     }
   }
 
-  /** 进页探针：有产物默认全选，无产物展示空态引导。 */
+  /** 进页探针：所有导出项默认不选中，由用户按需勾选；无产物展示空态引导。 */
   async function loadStatus(): Promise<void> {
     loading = true;
     loadFailed = false;
@@ -190,9 +190,9 @@
       return;
     }
     status = result.data;
-    checkEpub = status.has_epub;
-    checkTxt = status.has_content;
-    checkCover = status.has_cover;
+    checkEpub = false;
+    checkTxt = false;
+    checkCover = false;
     naming = "project";
     customName = "";
     chapterKind = "original";
@@ -203,10 +203,6 @@
     metaEnabled = false;
     metaFields = [];
     outcome = null;
-    if (checkTxt) {
-      void refreshTitlePreview("volume");
-      void refreshTitlePreview("chapter");
-    }
   }
 
   /** 下拉给字符串，经候选项收窄后才提交，无类型断言。 */

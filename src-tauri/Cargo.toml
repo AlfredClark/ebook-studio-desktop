@@ -52,12 +52,17 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 # 小说打包：`build/` 目录树 → 标准 EPUB（`features/novel_package.rs`，`mimetype` 首条明存、其余 Deflate）
 zip = "9"
+# 漫画 PDF：按页写入 PDF 图像对象，避免整本图片常驻内存；MIT / Apache-2.0
+pdf-writer = "0.15"
+# PDF 图像样本的无损 Flate 压缩；固定纯 Rust 后端，复用现有锁文件版本
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # 打包校验：纯 Rust 的 epubcheck 平替（`features/novel_package.rs`，报告沿用 `RSC-*` / `OPF-*` 标准 ID）；
 # AGPL-3.0-only，本仓已整体转 AGPL-3.0-only 后引入，升级需人工评审 API 变更
 epubveri = "0.37"
-# 漫画图片格式转换（`features/comic_images.rs`）：`image` 纯 Rust 解码 JPEG/PNG/WebP
+# 漫画图片格式转换与 PDF 导出（`features/comic_images.rs` / `features/comic_pdf.rs`）：
+# `image` 纯 Rust 解码 JPEG/PNG/WebP；GIF 仅用于封面首帧
 # 并编码 JPEG/PNG（WebP 仅无损），零外部进程；仅开所需三个格式特性，避免全特性拖慢编译
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # WebP 有损编码：`image` 不支持，用 libwebp 官方绑定补有损 + 质量；
 # C 源码随 cargo 一起编译（无需系统预装），BSD-3-Clause 与 AGPL-3.0-only 兼容
 webp = "0.3"

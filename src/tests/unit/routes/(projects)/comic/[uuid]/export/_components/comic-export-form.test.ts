@@ -6,6 +6,7 @@ import {
   DEFAULT_COMIC_PAGE_PATTERN,
   DEFAULT_COMIC_VOLUME_PATTERN,
   canExport,
+  buildComicPdfOptions,
   isValidCustomName,
   isValidImageTitles,
   isValidTitlePattern,
@@ -45,9 +46,74 @@ describe("漫画导出表单", () => {
 
   it("导出可用：至少勾选一项现存产物", () => {
     const full = statusWith({ has_content: true, has_epub: true, has_cover: true });
-    expect(canExport({ epub: false, images: false, cover: false }, full)).toBe(false);
-    expect(canExport({ epub: true, images: false, cover: false }, full)).toBe(true);
-    expect(canExport({ epub: true, images: false, cover: false }, statusWith({}))).toBe(false);
+    expect(canExport({ epub: false, images: false, cover: false, pdf: false }, full)).toBe(false);
+    expect(canExport({ epub: true, images: false, cover: false, pdf: false }, full)).toBe(true);
+    expect(canExport({ epub: true, images: false, cover: false, pdf: false }, statusWith({}))).toBe(
+      false,
+    );
+  });
+
+  it("PDF 仅在有解析图片时可导出", () => {
+    expect(
+      canExport(
+        { epub: false, images: false, cover: false, pdf: true },
+        statusWith({ has_content: true, page_count: 1 }),
+      ),
+    ).toBe(true);
+    expect(
+      canExport(
+        { epub: false, images: false, cover: false, pdf: true },
+        statusWith({ has_content: true, page_count: 0 }),
+      ),
+    ).toBe(false);
+    expect(
+      canExport(
+        { epub: false, images: false, cover: false, pdf: true },
+        statusWith({ has_content: false }),
+      ),
+    ).toBe(false);
+  });
+
+  it("PDF 平均尺寸允许宽高留空，DPI 默认设置可用", () => {
+    expect(
+      buildComicPdfOptions({
+        page_size: "average",
+        width_px: "",
+        height_px: "",
+        dpi: "300",
+        fill_mode: "contain",
+        horizontal_alignment: "center",
+        vertical_alignment: "center",
+        include_cover: true,
+      }),
+    ).toEqual({
+      page_size: "average",
+      width_px: 0,
+      height_px: 0,
+      dpi: 300,
+      fill_mode: "contain",
+      horizontal_alignment: "center",
+      vertical_alignment: "center",
+      include_cover: true,
+    });
+  });
+
+  it("PDF 固定尺寸要求正整数宽高且 DPI 在 72–600 范围内", () => {
+    const base = {
+      page_size: "fixed" as const,
+      width_px: "2480",
+      height_px: "3508",
+      dpi: "300",
+      fill_mode: "cover" as const,
+      horizontal_alignment: "right" as const,
+      vertical_alignment: "top" as const,
+      include_cover: false,
+    };
+    expect(buildComicPdfOptions(base)?.width_px).toBe(2480);
+    expect(buildComicPdfOptions({ ...base, width_px: "0" })).toBeNull();
+    expect(buildComicPdfOptions({ ...base, width_px: "1.5" })).toBeNull();
+    expect(buildComicPdfOptions({ ...base, dpi: "71" })).toBeNull();
+    expect(buildComicPdfOptions({ ...base, dpi: "601" })).toBeNull();
   });
 
   it("话 6 种页 5 种格式，页无原文", () => {

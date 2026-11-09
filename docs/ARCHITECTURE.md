@@ -15,7 +15,7 @@
 - **国际化：** 前端 Paraglide（策略 `localStorage` + `baseLocale`，CLI 为 `@inlang/cli`）；后端 rust-i18n（`src-tauri/locales/*.yml`，`fallback = "en"`）。
 - **后端：** Tauri v2 + Rust（`edition = "2024"`，工具链由 `rust-toolchain.toml` 锁定，`tauri-build` 构建脚本）。
 - **后端插件：** `opener` / `store` / `log` / `os` / `updater` / `autostart` / `window-state` / `system-fonts` / `dialog` / `single-instance` / `deep-link` / `clipboard-manager` / `global-shortcut`——依次对应外部打开、持久化（`config.json` 存 `locale`）、日志、系统语言与平台信息采集（`tauri-plugin-os` 仅作 Rust 库使用）、自动更新 / 开机自启 / 窗口状态（仅非移动端启用）、系统字体探测（`plugins/system_fonts.rs`）、文件选择框（`plugins/dialog.rs`，封面选图，前端 `open()` 直调，`dialog:allow-open` 最小权限）、单实例（二次启动聚焦 + 深链参数转发，仅桌面端）、深链协议（`plugins.deep-link.desktop.schemes`）、剪贴板纯文本、显示应用全局快捷键（配置驱动动态注册，仅桌面端、无前端直调）。
-- **后端支撑：** `serde` / `serde_json` + `chrono`（UTC 时间）+ `uuid`（项目 id/文件夹名）+ `log` 门面 + `thiserror` / `anyhow`（统一错误 `CommandError` / `CommandResult`）。
+- **后端支撑：** `serde` / `serde_json` + `chrono`（UTC 时间）+ `uuid`（项目 id/文件夹名）+ `log` 门面 + `thiserror` / `anyhow`（统一错误 `CommandError` / `CommandResult`）；漫画 PDF 使用 `pdf-writer` 逐页写入、`flate2` 纯 Rust 无损压缩与 `image`（JPEG / PNG / WebP / GIF 首帧解码）。
 - **构建 / 质量：** Vite（固定端口 `1420`）+ `svelte-check` 严格 TS 检查 + ESLint / Prettier + vitest；包管理器 `pnpm`（`engines.node >= 24`）；`pnpm-lock.yaml` 与 `Cargo.lock` 均提交。
 - **部署：** GitHub Actions + Tauri bundler；入口 `.github/workflows/ci.yml`（质量门禁）、`release.yml`（打包发布）。
 
@@ -71,7 +71,7 @@ ebook-studio-desktop/
 │   │   ├── lib.rs                  # 串联插件注册 → 命令处理器 → 核心初始化
 │   │   ├── commands/               # 命令封装层：薄封装 + collect_commands! 注册
 │   │   ├── cores/                  # 通用能力与跨层共享类型（types / locale / config / deep_link / shortcut / specta / system / tray / updater）
-│   │   ├── features/               # 具体业务逻辑：按业务类型拆文件组装完整业务，供 commands/ 调用（通用逻辑抽到 cores/；projects.rs：APPDATA/Projects 落盘读写）
+│   │   ├── features/               # 具体业务逻辑：按业务类型拆文件组装完整业务，供 commands/ 调用（通用逻辑抽到 cores/；comic_pdf.rs：漫画 PDF 页面与逐页写入；projects.rs：APPDATA/Projects 落盘读写）
 │   │   └── plugins/                # 各 Tauri 插件的初始化（log / store / opener / updater / autostart / window-state / system-fonts / dialog / single-instance / deep-link / clipboard / global-shortcut）
 │   ├── locales/                    # rust-i18n 后端文案（按功能分文件，一文件一命名空间：当前 tray.yml 的 tray.*，单文件可内含多 locale 的 en/zh-CN 双写）
 │   ├── templates/                  # 内置 EPUB3.3 模板骨架（EPUB33-NOVEL / EPUB33-COMIC），经 bundle.resources 打包，Rust 侧由 features/epub_template 只读访问

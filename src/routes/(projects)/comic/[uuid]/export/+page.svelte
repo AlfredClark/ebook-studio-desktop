@@ -1,6 +1,6 @@
 <script lang="ts">
   // 漫画导出页：进页探针查全产物，表单勾选文件与命名，目录框选定后改名落盘；
-  // 原图按 content.json 顺序与分话结构导出为文件夹或压缩包。
+  // PDF 与原图均按 content.json 顺序导出，原图保留分话结构。
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
@@ -15,6 +15,7 @@
   import {
     Select,
     SelectContent,
+    SelectGroup,
     SelectItem,
     SelectTrigger,
     SelectValue,
@@ -26,6 +27,11 @@
     ChapterNumbering,
     ComicExportStatus,
     ComicImagesMode,
+    ComicPdfFillMode,
+    ComicPdfHorizontalAlignment,
+    ComicPdfOptions,
+    ComicPdfPageSize,
+    ComicPdfVerticalAlignment,
     ExportNaming,
     ExportOutcome,
     TxtTitleKind,
@@ -43,6 +49,7 @@
     COMIC_VOLUME_TITLE_KINDS,
     DEFAULT_COMIC_PAGE_PATTERN,
     DEFAULT_COMIC_VOLUME_PATTERN,
+    buildComicPdfOptions,
     canExport,
     isValidCustomName,
     isValidImageTitles,
@@ -57,18 +64,27 @@
   const exporting = $derived(exportJob.running);
   /** 导出进度：确定性百分比；`null` 表无可显示进度。 */
   const progress = $derived(
-    !exportJob.running || exportJob.total_files === 0
+    !exportJob.running || exportJob.total_units === 0
       ? null
-      : Math.round((exportJob.done_files / exportJob.total_files) * 100),
+      : Math.round((exportJob.done_units / exportJob.total_units) * 100),
   );
 
   let status = $state<ComicExportStatus | null>(null);
   let loading = $state(true);
   let loadFailed = $state(false);
   let checkEpub = $state(false);
+  let checkPdf = $state(false);
   let checkImages = $state(false);
   let imagesMode = $state<ComicImagesMode>("folder");
   let checkCover = $state(false);
+  let pdfPageSize = $state<ComicPdfPageSize>("average");
+  let pdfWidthPx = $state("");
+  let pdfHeightPx = $state("");
+  let pdfDpi = $state("300");
+  let pdfFillMode = $state<ComicPdfFillMode>("contain");
+  let pdfHorizontalAlignment = $state<ComicPdfHorizontalAlignment>("center");
+  let pdfVerticalAlignment = $state<ComicPdfVerticalAlignment>("center");
+  let includePdfCover = $state(false);
   let naming = $state<ExportNaming>("project");
   let customName = $state("");
   let outcome = $state<ExportOutcome | null>(null);
@@ -110,6 +126,29 @@
           : `${kind === "book" ? m.export_naming_book() : m.export_naming_project()} · ${namingValue(kind, project_name, book_title)}`,
     }));
   });
+  /** PDF 表单值：固定尺寸未填写或 DPI 越界时返回空值并禁用导出。 */
+  const pdfOptions = $derived(
+    buildComicPdfOptions({
+      page_size: pdfPageSize,
+      width_px: pdfWidthPx,
+      height_px: pdfHeightPx,
+      dpi: pdfDpi,
+      fill_mode: pdfFillMode,
+      horizontal_alignment: pdfHorizontalAlignment,
+      vertical_alignment: pdfVerticalAlignment,
+      include_cover: includePdfCover,
+    }),
+  );
+  const pdfHorizontalAlignmentItems = $derived([
+    { value: "left" as const, label: m.comic_export_pdf_align_left() },
+    { value: "center" as const, label: m.comic_export_pdf_align_center() },
+    { value: "right" as const, label: m.comic_export_pdf_align_right() },
+  ]);
+  const pdfVerticalAlignmentItems = $derived([
+    { value: "top" as const, label: m.comic_export_pdf_align_top() },
+    { value: "center" as const, label: m.comic_export_pdf_align_center() },
+    { value: "bottom" as const, label: m.comic_export_pdf_align_bottom() },
+  ]);
   /** 分话书：多话时展示话标题格式与编号方式，单话两种编号等价故隐藏。 */
   const isEpisodeBook = $derived(status !== null && status.volume_count > 1);
   /** 话目录补零提示：10 话以上且话格式不补零时，原图目录在词法排序下可能错序。 */
@@ -121,9 +160,13 @@
   /** 导出可用：有勾选、命名合法、原图标题参数合法、空闲中。 */
   const ready = $derived(
     status !== null &&
-      canExport({ epub: checkEpub, images: checkImages, cover: checkCover }, status) &&
+      canExport(
+        { epub: checkEpub, pdf: checkPdf, images: checkImages, cover: checkCover },
+        status,
+      ) &&
       (naming !== "custom" || isValidCustomName(customName)) &&
       (!checkImages || isValidImageTitles(pageKind, pagePattern, volumeKind, volumePattern)) &&
+      (!checkPdf || pdfOptions !== null) &&
       !exporting &&
       !loading,
   );
@@ -156,7 +199,7 @@
     }
   }
 
-  /** 进页探针：有产物默认全选，无产物展示空态引导。 */
+  /** 进页探针：所有导出项默认不选中，由用户按需勾选。 */
   async function loadStatus(): Promise<void> {
     loading = true;
     loadFailed = false;
@@ -168,10 +211,19 @@
       return;
     }
     status = result.data;
-    checkEpub = status.has_epub;
-    checkImages = status.has_content;
+    checkEpub = false;
+    checkPdf = false;
+    checkImages = false;
     imagesMode = "folder";
-    checkCover = status.has_cover;
+    checkCover = false;
+    pdfPageSize = "average";
+    pdfWidthPx = "";
+    pdfHeightPx = "";
+    pdfDpi = "300";
+    pdfFillMode = "contain";
+    pdfHorizontalAlignment = "center";
+    pdfVerticalAlignment = "center";
+    includePdfCover = status.has_cover;
     naming = "project";
     customName = "";
     pageKind = "padded";
@@ -181,10 +233,6 @@
     volumePattern = "";
     numbering = "per_volume";
     outcome = null;
-    if (checkImages) {
-      void refreshTitlePreview("volume");
-      void refreshTitlePreview("page");
-    }
   }
 
   /** 下拉给字符串，经候选项收窄后才提交，无类型断言。 */
@@ -198,6 +246,34 @@
   function handleImagesModeChange(value: string): void {
     if (value === "folder" || value === "zip") {
       imagesMode = value;
+    }
+  }
+
+  /** PDF 页面尺寸模式下拉值收窄。 */
+  function handlePdfPageSizeChange(value: string): void {
+    if (value === "average" || value === "fixed") {
+      pdfPageSize = value;
+    }
+  }
+
+  /** PDF 填充模式下拉值收窄。 */
+  function handlePdfFillModeChange(value: string): void {
+    if (value === "contain" || value === "cover" || value === "stretch") {
+      pdfFillMode = value;
+    }
+  }
+
+  /** PDF 水平对齐下拉值收窄。 */
+  function handlePdfHorizontalAlignmentChange(value: string): void {
+    if (value === "left" || value === "center" || value === "right") {
+      pdfHorizontalAlignment = value;
+    }
+  }
+
+  /** PDF 垂直对齐下拉值收窄。 */
+  function handlePdfVerticalAlignmentChange(value: string): void {
+    if (value === "top" || value === "center" || value === "bottom") {
+      pdfVerticalAlignment = value;
     }
   }
 
@@ -298,6 +374,16 @@
     if (dest == null) {
       return;
     }
+    const exportPdfOptions: ComicPdfOptions = pdfOptions ?? {
+      page_size: "average",
+      width_px: 0,
+      height_px: 0,
+      dpi: 300,
+      fill_mode: "contain",
+      horizontal_alignment: "center",
+      vertical_alignment: "center",
+      include_cover: status.has_cover,
+    };
     setExportRunning(uuid, true);
     const result = await commands
       .exportComicContent(
@@ -307,6 +393,7 @@
         customName,
         {
           epub: checkEpub,
+          pdf: checkPdf,
           images: checkImages,
           cover: checkCover,
         },
@@ -317,6 +404,7 @@
           volume_pattern: volumePattern,
           chapter_numbering: numbering,
         },
+        exportPdfOptions,
         imagesMode,
       )
       .result();
@@ -352,7 +440,7 @@
   });
 </script>
 
-<!-- 漫画导出页：文件勾选 + 命名 + 原图格式 + 目录导出 -->
+<!-- 漫画导出页：产物勾选 + 命名 + PDF / 原图选项 + 目录导出 -->
 {#snippet progressView()}
   {#if exporting && progress !== null}
     <div class="flex w-full flex-col gap-1.5" role="status" aria-live="polite">
@@ -405,6 +493,205 @@
           {/if}
         </span>
       </label>
+      <div class="flex flex-col">
+        <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">
+          <Checkbox
+            checked={checkPdf}
+            disabled={!status.has_content || status.page_count === 0 || exporting}
+            onCheckedChange={(value) => (checkPdf = value === true)}
+          />
+          <span class="min-w-0 flex-1">
+            <span class="font-medium">{m.comic_export_pdf_label()}</span>
+            {#if status.has_content && status.page_count > 0}
+              <span class="block text-xs text-muted-foreground">
+                {m.comic_export_pdf_summary({
+                  pages: status.page_count + (includePdfCover && status.has_cover ? 1 : 0),
+                })}
+              </span>
+            {:else}
+              <span class="block text-xs text-muted-foreground">{m.export_missing_txt()}</span>
+            {/if}
+          </span>
+        </label>
+        {#if checkPdf}
+          <div class="flex items-center gap-x-4 py-2">
+            <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_size_label()}</span>
+            <RadioGroup.Root
+              value={pdfPageSize}
+              onValueChange={handlePdfPageSizeChange}
+              class="flex items-center gap-x-4"
+            >
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
+                  value="average"
+                  aria-label={m.comic_export_pdf_size_average()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_size_average()}</span>
+              </label>
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
+                  value="fixed"
+                  aria-label={m.comic_export_pdf_size_fixed()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_size_fixed()}</span>
+              </label>
+            </RadioGroup.Root>
+          </div>
+          {#if pdfPageSize === "fixed"}
+            <div class="flex flex-wrap items-center gap-2 py-2">
+              <label class="flex items-center gap-2 text-sm">
+                <span class="font-medium">{m.comic_export_pdf_width_label()}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={pdfWidthPx}
+                  aria-label={m.comic_export_pdf_width_label()}
+                  aria-invalid={pdfOptions === null}
+                  disabled={exporting}
+                  oninput={(event) => (pdfWidthPx = event.currentTarget.value)}
+                  class="w-28"
+                />
+              </label>
+              <span aria-hidden="true" class="text-muted-foreground">×</span>
+              <label class="flex items-center gap-2 text-sm">
+                <span class="font-medium">{m.comic_export_pdf_height_label()}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={pdfHeightPx}
+                  aria-label={m.comic_export_pdf_height_label()}
+                  aria-invalid={pdfOptions === null}
+                  disabled={exporting}
+                  oninput={(event) => (pdfHeightPx = event.currentTarget.value)}
+                  class="w-28"
+                />
+              </label>
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              {m.comic_export_pdf_average_hint({ pages: status.page_count })}
+            </p>
+          {/if}
+          <div class="flex flex-wrap items-center gap-2 py-2">
+            <label class="flex items-center gap-2 text-sm">
+              <span class="font-medium">{m.comic_export_pdf_dpi_label()}</span>
+              <Input
+                type="number"
+                min={72}
+                max={600}
+                step={1}
+                value={pdfDpi}
+                aria-label={m.comic_export_pdf_dpi_label()}
+                aria-invalid={pdfOptions === null}
+                disabled={exporting}
+                oninput={(event) => (pdfDpi = event.currentTarget.value)}
+                class="w-24"
+              />
+            </label>
+            <span class="text-xs text-muted-foreground">{m.comic_export_pdf_dpi_unit()}</span>
+            <span class="min-w-0 flex-1 text-xs text-muted-foreground">
+              {m.comic_export_pdf_dpi_hint()}
+            </span>
+          </div>
+          <div class="flex items-center gap-x-4 py-2">
+            <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_fill_label()}</span>
+            <RadioGroup.Root
+              value={pdfFillMode}
+              onValueChange={handlePdfFillModeChange}
+              class="flex items-center gap-x-4"
+            >
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
+                  value="contain"
+                  aria-label={m.comic_export_pdf_fill_contain()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_fill_contain()}</span>
+              </label>
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
+                  value="cover"
+                  aria-label={m.comic_export_pdf_fill_cover()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_fill_cover()}</span>
+              </label>
+              <label class="flex cursor-pointer items-center gap-1.5 text-sm">
+                <RadioGroup.Item
+                  value="stretch"
+                  aria-label={m.comic_export_pdf_fill_stretch()}
+                  disabled={exporting}
+                />
+                <span class="whitespace-nowrap">{m.comic_export_pdf_fill_stretch()}</span>
+              </label>
+            </RadioGroup.Root>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 py-2">
+            <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_alignment_label()}</span>
+            <Select
+              type="single"
+              value={pdfHorizontalAlignment}
+              items={pdfHorizontalAlignmentItems}
+              onValueChange={handlePdfHorizontalAlignmentChange}
+            >
+              <SelectTrigger
+                class="w-28"
+                aria-label={m.comic_export_pdf_horizontal_alignment_label()}
+                disabled={exporting || pdfFillMode === "stretch"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {#each pdfHorizontalAlignmentItems as item (item.value)}
+                    <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                  {/each}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              type="single"
+              value={pdfVerticalAlignment}
+              items={pdfVerticalAlignmentItems}
+              onValueChange={handlePdfVerticalAlignmentChange}
+            >
+              <SelectTrigger
+                class="w-28"
+                aria-label={m.comic_export_pdf_vertical_alignment_label()}
+                disabled={exporting || pdfFillMode === "stretch"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {#each pdfVerticalAlignmentItems as item (item.value)}
+                    <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                  {/each}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+          {#if status.has_cover}
+            <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">
+              <Checkbox
+                checked={includePdfCover}
+                disabled={exporting}
+                onCheckedChange={(value) => (includePdfCover = value === true)}
+              />
+              <span>{m.comic_export_pdf_include_cover()}</span>
+            </label>
+          {/if}
+          {#if pdfOptions === null}
+            <p role="alert" class="text-xs text-destructive">
+              {m.comic_export_pdf_settings_invalid()}
+            </p>
+          {/if}
+        {/if}
+      </div>
       <!-- 原图一组：复选 + 文件夹/压缩包 + 标题格式，无分隔线 -->
       <div class="flex flex-col">
         <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">

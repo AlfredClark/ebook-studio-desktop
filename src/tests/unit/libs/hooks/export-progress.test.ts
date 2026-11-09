@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("导出进度跨页状态", () => {
   it("默认空闲，按项目隔离", () => {
-    expect(exportJobOf("uuid-a")).toEqual({ running: false, done_files: 0, total_files: 0 });
+    expect(exportJobOf("uuid-a")).toEqual({ running: false, done_units: 0, total_units: 0 });
     setExportRunning("uuid-a", true);
     expect(exportJobOf("uuid-a").running).toBe(true);
     expect(exportJobOf("uuid-b").running).toBe(false);
@@ -23,20 +23,20 @@ describe("导出进度跨页状态", () => {
   it("结束复位进度", () => {
     setExportRunning("uuid-a", true);
     setExportRunning("uuid-a", false);
-    expect(exportJobOf("uuid-a")).toEqual({ running: false, done_files: 0, total_files: 0 });
+    expect(exportJobOf("uuid-a")).toEqual({ running: false, done_units: 0, total_units: 0 });
   });
 
   it("回填远端运行态", async () => {
     await refreshExportStatus("uuid-a", () =>
-      Promise.resolve({ running: true, done_files: 3, total_files: 10 }),
+      Promise.resolve({ running: true, done_units: 3, total_units: 10 }),
     );
-    expect(exportJobOf("uuid-a")).toEqual({ running: true, done_files: 3, total_files: 10 });
+    expect(exportJobOf("uuid-a")).toEqual({ running: true, done_units: 3, total_units: 10 });
   });
 
   it("回填远端空闲态", async () => {
     setExportRunning("uuid-a", true);
     await refreshExportStatus("uuid-a", () =>
-      Promise.resolve({ running: false, done_files: 0, total_files: 0 }),
+      Promise.resolve({ running: false, done_units: 0, total_units: 0 }),
     );
     expect(exportJobOf("uuid-a").running).toBe(false);
   });

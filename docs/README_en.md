@@ -2,7 +2,7 @@
 
 # Ebook Studio
 
-Ebook editor desktop application. Create novel and comic projects, edit them step by step, and export standard EPUB 3.3 ebooks.
+Ebook editor desktop application. Create novel and comic projects, edit them step by step, and export standard EPUB 3.3 ebooks; comics can also be exported as a single PDF or source images.
 
 ## Screenshots
 
@@ -15,7 +15,7 @@ Ebook editor desktop application. Create novel and comic projects, edit them ste
 - **Project management** — create / rename / delete novel and comic projects, search / filter / sort, recently-active ordering.
 - **Workbench homepage** — continue working (most recent first), per-project pipeline stages (source → parsed → built → packaged), and a shortcut to jump back to where you left off.
 - **Novel pipeline** — metadata → files (import + parse) → edit → build → package → export, six steps with validation and standard EPUB output.
-- **Comic pipeline** — same six steps for image books: import image folders, reorder episodes and pages, convert formats, compress images (scale + grayscale), and build fixed-layout EPUB.
+- **Comic pipeline** — import image folders, reorder episodes and pages, convert formats, compress images (scale + grayscale), and build fixed-layout EPUB; export a single PDF in `content.json` order, source-image folder, or ZIP.
 - **Image tools** — format conversion (JPEG / PNG / WebP, quality + lossless + PNG level) and compression (proportional scaling 25–100%, grayscale, per-format re-encode), transactional with progress.
 - **Standard EPUB 3.3** — reflowable text for novels, pre-paginated fixed layout for comics; cover image support; WebP usage warns on packaging.
 - **Desktop shell** — system tray, autostart, window-state restore, single instance + deep-link, global shortcut to show the app, auto-updater.

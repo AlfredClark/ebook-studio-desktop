@@ -6,6 +6,7 @@ pub mod comic_export;
 pub mod comic_files;
 pub mod comic_images;
 pub mod comic_package;
+pub mod comic_pdf;
 pub mod epub_template;
 pub mod novel_build;
 pub mod novel_export;

@@ -347,6 +347,7 @@ pub fn import_cover(
     id: &str,
     source_path: &str,
 ) -> anyhow::Result<ProjectMetadata> {
+    let _lock = super::comic_images::ProjectImagesGuard::acquire(id)?;
     let dir = super::projects::resolve_project_dir(app, id)?;
     import_cover_in(&dir, Path::new(source_path))
 }
