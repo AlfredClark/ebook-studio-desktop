@@ -49,12 +49,18 @@
     COMIC_VOLUME_TITLE_KINDS,
     DEFAULT_COMIC_PAGE_PATTERN,
     DEFAULT_COMIC_VOLUME_PATTERN,
+    DEFAULT_PDF_HEIGHT_PX,
+    DEFAULT_PDF_WIDTH_PX,
+    PDF_ASPECT_LOCKS,
     buildComicPdfOptions,
     canExport,
     isValidCustomName,
     isValidImageTitles,
+    linkedHeightForWidth,
+    linkedWidthForHeight,
     namingKinds,
     namingValue,
+    type ComicPdfAspectLock,
   } from "./_components/comic-export-form";
 
   const uuid = $derived(page.params.uuid ?? "");
@@ -78,8 +84,9 @@
   let imagesMode = $state<ComicImagesMode>("folder");
   let checkCover = $state(false);
   let pdfPageSize = $state<ComicPdfPageSize>("average");
-  let pdfWidthPx = $state("");
-  let pdfHeightPx = $state("");
+  let pdfWidthPx = $state(DEFAULT_PDF_WIDTH_PX);
+  let pdfHeightPx = $state(DEFAULT_PDF_HEIGHT_PX);
+  let pdfAspectLock = $state<ComicPdfAspectLock>("free");
   let pdfDpi = $state("300");
   let pdfFillMode = $state<ComicPdfFillMode>("contain");
   let pdfHorizontalAlignment = $state<ComicPdfHorizontalAlignment>("center");
@@ -149,6 +156,13 @@
     { value: "center" as const, label: m.comic_export_pdf_align_center() },
     { value: "bottom" as const, label: m.comic_export_pdf_align_bottom() },
   ]);
+  /** 比例锁定候选项：`free` 显示文案，其余直接显示宽高比。 */
+  const pdfAspectLockItems = $derived(
+    PDF_ASPECT_LOCKS.map((value) => ({
+      value,
+      label: value === "free" ? m.comic_export_pdf_aspect_free() : value,
+    })),
+  );
   /** 分话书：多话时展示话标题格式与编号方式，单话两种编号等价故隐藏。 */
   const isEpisodeBook = $derived(status !== null && status.volume_count > 1);
   /** 话目录补零提示：10 话以上且话格式不补零时，原图目录在词法排序下可能错序。 */
@@ -217,8 +231,9 @@
     imagesMode = "folder";
     checkCover = false;
     pdfPageSize = "average";
-    pdfWidthPx = "";
-    pdfHeightPx = "";
+    pdfWidthPx = DEFAULT_PDF_WIDTH_PX;
+    pdfHeightPx = DEFAULT_PDF_HEIGHT_PX;
+    pdfAspectLock = "free";
     pdfDpi = "300";
     pdfFillMode = "contain";
     pdfHorizontalAlignment = "center";
@@ -253,6 +268,45 @@
   function handlePdfPageSizeChange(value: string): void {
     if (value === "average" || value === "fixed" || value === "original") {
       pdfPageSize = value;
+    }
+  }
+
+  /** PDF 比例锁定下拉值收窄；切到具体比例时按宽重算高，宽高皆非法回默认值。 */
+  function handleAspectLockChange(value: string): void {
+    if (!(PDF_ASPECT_LOCKS as string[]).includes(value)) {
+      return;
+    }
+    pdfAspectLock = value as ComicPdfAspectLock;
+    if (pdfAspectLock === "free") {
+      return;
+    }
+    const byWidth = linkedHeightForWidth(pdfWidthPx, pdfAspectLock);
+    if (byWidth !== "") {
+      pdfHeightPx = byWidth;
+      return;
+    }
+    const byHeight = linkedWidthForHeight(pdfHeightPx, pdfAspectLock);
+    if (byHeight !== "") {
+      pdfWidthPx = byHeight;
+      return;
+    }
+    pdfWidthPx = DEFAULT_PDF_WIDTH_PX;
+    pdfHeightPx = DEFAULT_PDF_HEIGHT_PX;
+  }
+
+  /** PDF 宽度输入：锁定比例时按宽联动高度，非法输入清空高度并禁用导出。 */
+  function handlePdfWidthInput(value: string): void {
+    pdfWidthPx = value;
+    if (pdfAspectLock !== "free") {
+      pdfHeightPx = linkedHeightForWidth(value, pdfAspectLock);
+    }
+  }
+
+  /** PDF 高度输入：锁定比例时按高联动宽度，非法输入清空宽度并禁用导出。 */
+  function handlePdfHeightInput(value: string): void {
+    pdfHeightPx = value;
+    if (pdfAspectLock !== "free") {
+      pdfWidthPx = linkedWidthForHeight(value, pdfAspectLock);
     }
   }
 
@@ -548,6 +602,51 @@
               </label>
             </RadioGroup.Root>
           </div>
+          <div class="flex flex-wrap items-center gap-2 py-2">
+            {#if pdfPageSize === "fixed"}
+              <span class="shrink-0 text-sm font-medium">{m.comic_export_pdf_aspect_label()}</span>
+              <Select
+                type="single"
+                value={pdfAspectLock}
+                items={pdfAspectLockItems}
+                onValueChange={handleAspectLockChange}
+              >
+                <SelectTrigger
+                  class="w-28"
+                  aria-label={m.comic_export_pdf_aspect_label()}
+                  disabled={exporting}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {#each pdfAspectLockItems as item (item.value)}
+                      <SelectItem value={item.value} label={item.label}>{item.label}</SelectItem>
+                    {/each}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            {/if}
+            <label class="flex items-center gap-2 text-sm">
+              <span class="font-medium">{m.comic_export_pdf_dpi_label()}</span>
+              <Input
+                type="number"
+                min={72}
+                max={600}
+                step={1}
+                value={pdfDpi}
+                aria-label={m.comic_export_pdf_dpi_label()}
+                aria-invalid={pdfOptions === null}
+                disabled={exporting}
+                oninput={(event) => (pdfDpi = event.currentTarget.value)}
+                class="w-24"
+              />
+            </label>
+            <span class="text-xs text-muted-foreground">{m.comic_export_pdf_dpi_unit()}</span>
+            <span class="min-w-0 flex-1 text-xs text-muted-foreground">
+              {m.comic_export_pdf_dpi_hint()}
+            </span>
+          </div>
           {#if pdfPageSize === "fixed"}
             <div class="flex flex-wrap items-center gap-2 py-2">
               <label class="flex items-center gap-2 text-sm">
@@ -560,7 +659,7 @@
                   aria-label={m.comic_export_pdf_width_label()}
                   aria-invalid={pdfOptions === null}
                   disabled={exporting}
-                  oninput={(event) => (pdfWidthPx = event.currentTarget.value)}
+                  oninput={(event) => handlePdfWidthInput(event.currentTarget.value)}
                   class="w-28"
                 />
               </label>
@@ -575,7 +674,7 @@
                   aria-label={m.comic_export_pdf_height_label()}
                   aria-invalid={pdfOptions === null}
                   disabled={exporting}
-                  oninput={(event) => (pdfHeightPx = event.currentTarget.value)}
+                  oninput={(event) => handlePdfHeightInput(event.currentTarget.value)}
                   class="w-28"
                 />
               </label>

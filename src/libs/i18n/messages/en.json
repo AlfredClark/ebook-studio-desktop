@@ -593,6 +593,8 @@
   "comic_export_pdf_size_fixed": "Fixed",
   "comic_export_pdf_size_original": "Original",
   "comic_export_pdf_original_hint": "Each image gets its own page at its original dimensions; fit and alignment do not apply.",
+  "comic_export_pdf_aspect_label": "Aspect lock",
+  "comic_export_pdf_aspect_free": "Free",
   "comic_export_pdf_average_hint": "All comic pages share the average pixel dimensions; the cover is excluded from the average.",
   "comic_export_pdf_width_label": "Width (px)",
   "comic_export_pdf_height_label": "Height (px)",

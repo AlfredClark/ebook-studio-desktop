@@ -593,6 +593,8 @@
   "comic_export_pdf_size_fixed": "固定尺寸",
   "comic_export_pdf_size_original": "原图尺寸",
   "comic_export_pdf_original_hint": "每张图片独占一页，均采用原图宽高；填充与对齐不生效。",
+  "comic_export_pdf_aspect_label": "比例锁定",
+  "comic_export_pdf_aspect_free": "不锁定",
   "comic_export_pdf_average_hint": "所有漫画页共用平均像素宽高，封面不参与平均。",
   "comic_export_pdf_width_label": "宽度（px）",
   "comic_export_pdf_height_label": "高度（px）",

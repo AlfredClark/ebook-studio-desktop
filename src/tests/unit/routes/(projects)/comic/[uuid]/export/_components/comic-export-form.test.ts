@@ -5,13 +5,19 @@ import {
   COMIC_VOLUME_TITLE_KINDS,
   DEFAULT_COMIC_PAGE_PATTERN,
   DEFAULT_COMIC_VOLUME_PATTERN,
+  DEFAULT_PDF_HEIGHT_PX,
+  DEFAULT_PDF_WIDTH_PX,
+  PDF_ASPECT_LOCKS,
   canExport,
   buildComicPdfOptions,
   isValidCustomName,
   isValidImageTitles,
   isValidTitlePattern,
+  linkedHeightForWidth,
+  linkedWidthForHeight,
   namingKinds,
   namingValue,
+  parseAspectRatio,
 } from "../../../../../../../../routes/(projects)/comic/[uuid]/export/_components/comic-export-form";
 import type { ComicExportStatus } from "#libs/commands/types";
 
@@ -137,6 +143,42 @@ describe("漫画导出表单", () => {
     expect(
       buildComicPdfOptions({ ...base, dpi: "72", width_px: "14401", height_px: "14400" }),
     ).toBeNull();
+  });
+
+  it("PDF 比例锁定：宽高按所选比例联动换算", () => {
+    expect(PDF_ASPECT_LOCKS[0]).toBe("free");
+    expect(PDF_ASPECT_LOCKS).toContain("3:4");
+    expect(parseAspectRatio("free")).toBeNull();
+    expect(parseAspectRatio("3:4")).toEqual([3, 4]);
+    // 默认 1860×2480 恰为 3:4。
+    expect(linkedHeightForWidth("1860", "3:4")).toBe("2480");
+    expect(linkedWidthForHeight("2480", "3:4")).toBe("1860");
+    // 非整除比例四舍五入：1860 在 16:9 下高为 1046。
+    expect(linkedHeightForWidth("1860", "16:9")).toBe("1046");
+    expect(linkedWidthForHeight("1046", "16:9")).toBe("1860");
+    // 不锁定或输入非法时返回空字符串，由调用方清空对端并禁用导出。
+    expect(linkedHeightForWidth("1860", "free")).toBe("");
+    expect(linkedWidthForHeight("2480", "free")).toBe("");
+    expect(linkedHeightForWidth("", "3:4")).toBe("");
+    expect(linkedHeightForWidth("-10", "3:4")).toBe("");
+    expect(linkedWidthForHeight("abc", "1:1")).toBe("");
+  });
+
+  it("PDF 固定尺寸默认值 1860×2480 可直接导出", () => {
+    expect(DEFAULT_PDF_WIDTH_PX).toBe("1860");
+    expect(DEFAULT_PDF_HEIGHT_PX).toBe("2480");
+    expect(
+      buildComicPdfOptions({
+        page_size: "fixed",
+        width_px: DEFAULT_PDF_WIDTH_PX,
+        height_px: DEFAULT_PDF_HEIGHT_PX,
+        dpi: "300",
+        fill_mode: "contain",
+        horizontal_alignment: "center",
+        vertical_alignment: "center",
+        include_cover: false,
+      }),
+    ).not.toBeNull();
   });
 
   it("PDF 原图尺寸透传且忽略宽高", () => {

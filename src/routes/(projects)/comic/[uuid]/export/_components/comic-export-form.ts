@@ -16,6 +16,64 @@ const MIN_PDF_DPI = 72;
 const MAX_PDF_DPI = 600;
 const MAX_PDF_PAGE_SIZE_PT = 14_400;
 
+/** 漫画 PDF 固定尺寸默认值：3:4 竖构图，300DPI 下约 446×595pt。 */
+export const DEFAULT_PDF_WIDTH_PX = "1860";
+export const DEFAULT_PDF_HEIGHT_PX = "2480";
+
+/** 漫画 PDF 宽高比例锁定：`free` 为不锁定，其余为 `宽:高`。 */
+export type ComicPdfAspectLock = "free" | "1:1" | "3:4" | "4:3" | "2:3" | "3:2" | "9:16" | "16:9";
+
+/** 比例锁定候选项（固定顺序）：不锁定首位。 */
+export const PDF_ASPECT_LOCKS: ComicPdfAspectLock[] = [
+  "free",
+  "1:1",
+  "3:4",
+  "4:3",
+  "2:3",
+  "3:2",
+  "9:16",
+  "16:9",
+];
+
+/** 解析比例锁定为宽高比；不锁定或非法返回空值。 */
+export function parseAspectRatio(lock: ComicPdfAspectLock): [number, number] | null {
+  if (lock === "free") {
+    return null;
+  }
+  const [width, height] = lock.split(":").map(Number);
+  if (
+    width === undefined ||
+    height === undefined ||
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null;
+  }
+  return [width, height];
+}
+
+/** 按锁定比例由宽度换算高度；不锁定或宽度非法时返回空字符串。 */
+export function linkedHeightForWidth(widthPx: string, lock: ComicPdfAspectLock): string {
+  const ratio = parseAspectRatio(lock);
+  const width = Number(widthPx);
+  if (ratio === null || !Number.isFinite(width) || width <= 0) {
+    return "";
+  }
+  return String(Math.max(1, Math.round((width * ratio[1]) / ratio[0])));
+}
+
+/** 按锁定比例由高度换算宽度；不锁定或高度非法时返回空字符串。 */
+export function linkedWidthForHeight(heightPx: string, lock: ComicPdfAspectLock): string {
+  const ratio = parseAspectRatio(lock);
+  const height = Number(heightPx);
+  if (ratio === null || !Number.isFinite(height) || height <= 0) {
+    return "";
+  }
+  return String(Math.max(1, Math.round((height * ratio[0]) / ratio[1])));
+}
+
 /** 漫画 PDF 表单字段以字符串接收原始输入。 */
 export type ComicPdfFormValues = {
   page_size: ComicPdfPageSize;
