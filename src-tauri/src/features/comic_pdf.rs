@@ -204,6 +204,22 @@ pub(super) fn validate_pdf_options(options: &ComicPdfOptions) -> anyhow::Result<
     Ok(())
 }
 
+/// 校验解析后的像素画布换算为物理点后未超限；平均模式也需前置拦截，避免写中途才失败。
+fn validate_resolved_page_size(page_size_px: (f64, f64), dpi: u32) -> anyhow::Result<()> {
+    let (width_px, height_px) = page_size_px;
+    anyhow::ensure!(
+        width_px.is_finite() && height_px.is_finite() && width_px > 0.0 && height_px > 0.0,
+        "PDF page dimensions must be finite and positive"
+    );
+    let point_scale = 72.0 / f64::from(dpi);
+    anyhow::ensure!(
+        width_px * point_scale <= MAX_PAGE_DIMENSION_PT
+            && height_px * point_scale <= MAX_PAGE_DIMENSION_PT,
+        "PDF page dimensions exceed the supported limit"
+    );
+    Ok(())
+}
+
 /// 生成多页 PDF；仅保留当前页的解码数据，进度按实际 PDF 页数推进。
 pub(super) fn write_pdf_file(
     destination: &Path,
@@ -216,6 +232,7 @@ pub(super) fn write_pdf_file(
     anyhow::ensure!(!comic_pages.is_empty(), "no comic pages to export as PDF");
 
     let page_size_px = resolve_page_size(comic_pages, options)?;
+    validate_resolved_page_size(page_size_px, options.dpi)?;
     let pages = output_pages(comic_pages, cover, options.include_cover)?;
     let temp_path = temporary_sibling_path(destination)?;
 
@@ -721,22 +738,11 @@ pub(super) fn calculate_page_layout(
     let (image_width_px, image_height_px) = image_size_px;
     let (canvas_width_pixels, canvas_height_pixels) = page_size_px;
     validate_image_dimensions(image_width_px, image_height_px)?;
-    anyhow::ensure!(
-        canvas_width_pixels.is_finite()
-            && canvas_height_pixels.is_finite()
-            && canvas_width_pixels > 0.0
-            && canvas_height_pixels > 0.0,
-        "PDF page dimensions must be finite and positive"
-    );
+    validate_resolved_page_size((canvas_width_pixels, canvas_height_pixels), options.dpi)?;
 
     let point_scale = 72.0 / f64::from(options.dpi);
     let canvas_width_points = canvas_width_pixels * point_scale;
     let canvas_height_points = canvas_height_pixels * point_scale;
-    anyhow::ensure!(
-        canvas_width_points <= MAX_PAGE_DIMENSION_PT
-            && canvas_height_points <= MAX_PAGE_DIMENSION_PT,
-        "PDF page dimensions exceed the supported limit"
-    );
 
     let (draw_width_points, draw_height_points) = image_size_in_points(
         image_width_px,
@@ -962,6 +968,61 @@ mod tests {
     }
 
     #[test]
+    fn page_size_point_limit_covers_fixed_boundary_and_average() {
+        // 固定尺寸边界：300 DPI 下 60000px 恰为 14400pt，通过；任一轴多 1px 即超限。
+        assert!(validate_pdf_options(&fixed_options(60_000, 60_000, 300)).is_ok());
+        for (width_px, height_px) in [(60_001, 60_000), (60_000, 60_001)] {
+            assert!(
+                validate_pdf_options(&fixed_options(width_px, height_px, 300)).is_err(),
+                "fixed {width_px}x{height_px} at 300 DPI must exceed the limit"
+            );
+        }
+        // 72 DPI 下边界为 14400px。
+        assert!(validate_pdf_options(&fixed_options(14_400, 14_400, 72)).is_ok());
+        assert!(validate_pdf_options(&fixed_options(14_401, 14_400, 72)).is_err());
+
+        // 平均模式超限同样拦截：60001px 平均宽在 300 DPI 下约 14400.24pt。
+        assert!(average_page_dimensions(&[(60_001, 1)]).is_ok());
+        assert!(
+            calculate_page_layout((1, 1), (60_001.0, 1.0), &ComicPdfOptions::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn average_page_size_over_limit_fails_before_temp_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "ebook-studio-comic-pdf-average-limit-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let output = dir.join("book.pdf");
+        std::fs::write(&output, b"existing PDF").expect("write existing PDF");
+        let page = PdfPageImage {
+            path: dir.join("dummy.png"),
+            width_px: 60_001,
+            height_px: 1,
+            format: image::ImageFormat::Png,
+            orientation: Orientation::NoTransforms,
+        };
+
+        let result = write_pdf_file(&output, &[page], None, &ComicPdfOptions::default(), None);
+        assert!(
+            result.is_err_and(|error| error.to_string().contains("exceed the supported limit")),
+            "oversize average must fail with a limit error"
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("read existing PDF"),
+            b"existing PDF"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("read test dir").count(),
+            1,
+            "oversize average must fail before creating a temp PDF"
+        );
+        std::fs::remove_dir_all(dir).expect("remove test dir");
+    }
+
+    #[test]
     fn rejects_images_over_the_decoded_pixel_budget() {
         assert!(validate_image_dimensions(5001, 10_000).is_err());
         assert!(validate_image_dimensions(5000, 10_000).is_ok());
@@ -1095,6 +1156,16 @@ mod tests {
 
     fn write_test_png(path: &std::path::Path, pixel: [u8; 3]) {
         write_test_png_size(path, pixel, 1, 1);
+    }
+
+    fn fixed_options(width_px: u32, height_px: u32, dpi: u32) -> ComicPdfOptions {
+        ComicPdfOptions {
+            page_size: ComicPdfPageSize::Fixed,
+            width_px,
+            height_px,
+            dpi,
+            ..ComicPdfOptions::default()
+        }
     }
 
     fn write_test_png_size(path: &std::path::Path, pixel: [u8; 3], width: u32, height: u32) {

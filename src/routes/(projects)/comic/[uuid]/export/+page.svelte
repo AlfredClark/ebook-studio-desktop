@@ -223,7 +223,7 @@
     pdfFillMode = "contain";
     pdfHorizontalAlignment = "center";
     pdfVerticalAlignment = "center";
-    includePdfCover = status.has_cover;
+    includePdfCover = false;
     naming = "project";
     customName = "";
     pageKind = "padded";
@@ -382,7 +382,7 @@
       fill_mode: "contain",
       horizontal_alignment: "center",
       vertical_alignment: "center",
-      include_cover: status.has_cover,
+      include_cover: false,
     };
     setExportRunning(uuid, true);
     const result = await commands
@@ -505,7 +505,8 @@
             {#if status.has_content && status.page_count > 0}
               <span class="block text-xs text-muted-foreground">
                 {m.comic_export_pdf_summary({
-                  pages: status.page_count + (includePdfCover && status.has_cover ? 1 : 0),
+                  pages:
+                    status.page_count + (checkPdf && includePdfCover && status.has_cover ? 1 : 0),
                 })}
               </span>
             {:else}

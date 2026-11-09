@@ -116,6 +116,29 @@ describe("漫画导出表单", () => {
     expect(buildComicPdfOptions({ ...base, dpi: "601" })).toBeNull();
   });
 
+  it("PDF 固定尺寸 14400pt 边界：300DPI 下 60000 通过、60001 拒绝", () => {
+    const base = {
+      page_size: "fixed" as const,
+      width_px: "60000",
+      height_px: "60000",
+      dpi: "300",
+      fill_mode: "contain" as const,
+      horizontal_alignment: "center" as const,
+      vertical_alignment: "center" as const,
+      include_cover: false,
+    };
+    expect(buildComicPdfOptions(base)).not.toBeNull();
+    expect(buildComicPdfOptions({ ...base, width_px: "60001" })).toBeNull();
+    expect(buildComicPdfOptions({ ...base, height_px: "60001" })).toBeNull();
+    // 72DPI 下边界为 14400px。
+    expect(
+      buildComicPdfOptions({ ...base, dpi: "72", width_px: "14400", height_px: "14400" }),
+    ).not.toBeNull();
+    expect(
+      buildComicPdfOptions({ ...base, dpi: "72", width_px: "14401", height_px: "14400" }),
+    ).toBeNull();
+  });
+
   it("话 6 种页 5 种格式，页无原文", () => {
     expect(COMIC_VOLUME_TITLE_KINDS).toContain("original");
     expect(COMIC_PAGE_TITLE_KINDS).not.toContain("original");
