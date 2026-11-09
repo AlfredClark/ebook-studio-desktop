@@ -6,8 +6,9 @@ use crate::features::comic_files::{
     ComicVolumeInput,
 };
 use crate::features::comic_images::{
-    self, ComicCompressStatus, ComicConvertStatus, CompressOptions, CompressOutcome,
-    CompressPreview, ConvertOptions, ConvertPreview, ImageTargetFormat,
+    self, ComicCompressStatus, ComicConvertStatus, ComicResizeStatus, CompressOptions,
+    CompressOutcome, CompressPreview, ConvertOptions, ConvertPreview, ImageTargetFormat,
+    ResizeOptions, ResizeOutcome, ResizePreview,
 };
 
 /// 查询漫画原稿状态；缺目录回落空态，不建文件。
@@ -111,7 +112,7 @@ pub async fn convert_comic_images(
     comic_images::convert_images(&app, &id, target, &options).await
 }
 
-/// 取消图片作业：转换/压缩互斥，任一在跑即置旗，编码循环在文件边界处中断；
+/// 取消图片作业：转换/压缩/尺寸调整互斥，任一在跑即置旗，编码循环在文件边界处中断；
 /// 返回是否有在跑作业，无作业时不做任何事。
 #[tauri::command]
 #[specta::specta]
@@ -173,6 +174,43 @@ pub fn restore_comic_compress_backup(
 #[allow(clippy::needless_pass_by_value)]
 pub fn clear_comic_compress_backup(app: tauri::AppHandle, id: String) -> CommandResult<bool> {
     Ok(comic_images::clear_backup(&app, &id)?)
+}
+
+/// 预览图片尺寸调整：只读 `content.json` + 图片头（不全解码），返回总数、跳过数与总字节。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_comic_image_resize(
+    app: tauri::AppHandle,
+    id: String,
+    options: ResizeOptions,
+) -> CommandResult<ResizePreview> {
+    Ok(comic_images::preview_resize(&app, &id, &options)?)
+}
+
+/// 查询图片尺寸调整进度：切回页面时回填用；从未开始返回空闲零值，备份位实时计算。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_comic_resize_status(
+    app: tauri::AppHandle,
+    id: String,
+) -> CommandResult<ComicResizeStatus> {
+    let dir = crate::features::projects::resolve_project_dir(&app, &id)?;
+    Ok(comic_images::resize_status_of(&dir, &id))
+}
+
+/// 调整全量图片尺寸：原地重编码（重排版 + 按源格式重编码），路径与格式不变；
+/// 成功后清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn resize_comic_images(
+    app: tauri::AppHandle,
+    id: String,
+    options: ResizeOptions,
+) -> CommandResult<ResizeOutcome> {
+    comic_images::resize_images(&app, &id, &options).await
 }
 
 /// 扫描孤儿图片：`content.json` 未引用的落盘图片，删页残留从这里清理。

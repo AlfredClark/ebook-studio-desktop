@@ -8,12 +8,15 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use image::{GenericImageView, ImageEncoder};
+use image::{GenericImageView, ImageDecoder, ImageEncoder};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use super::comic_files::{
     self, BUILD_DIR, CONTENT_NAME, ComicOutline, DIST_DIR, IMAGES_DIR, SOURCES_DIR,
+};
+use super::comic_pdf::{
+    ComicPdfHorizontalAlignment, ComicPdfVerticalAlignment, inspect_page_image,
 };
 
 /// 目标格式：与源格式集合（jpg/jpeg/png/webp）对齐，前端下拉直接用。
@@ -206,9 +209,9 @@ pub fn is_compressing(id: &str) -> bool {
     COMPRESSING.lock().is_ok_and(|jobs| jobs.contains_key(id))
 }
 
-/// 是否有图片作业在跑：转换或压缩任一在跑即忙，两者互斥。
+/// 是否有图片作业在跑：转换、压缩或尺寸调整任一在跑即忙，三者互斥。
 pub fn is_busy(id: &str) -> bool {
-    is_converting(id) || is_compressing(id)
+    is_converting(id) || is_compressing(id) || is_resizing(id)
 }
 
 /// 查询作业状态：未在跑回空闲零值。
@@ -604,7 +607,7 @@ fn map_job_error(err: &anyhow::Error) -> crate::cores::types::CommandError {
     }
 }
 
-/// 请求取消图片作业（`AppHandle` 入口）：转换/压缩互斥，任一在跑即置旗；
+/// 请求取消图片作业（`AppHandle` 入口）：转换/压缩/尺寸调整互斥，任一在跑即置旗；
 /// 返回是否有在跑作业供前端措辞，无作业时不做任何事。
 pub fn cancel_images(app: &tauri::AppHandle, id: &str) -> anyhow::Result<bool> {
     let _dir = super::projects::resolve_project_dir(app, id)?;
@@ -1124,8 +1127,766 @@ fn stage_compress_all(
     })
 }
 
+/// 尺寸调整暂存目录：与转换/压缩暂存区独立，避免互斥作业互相清理。
+const RESIZE_STAGING_DIR: &str = ".tmp-resize";
+
+/// 输出像素预算：与 PDF 解码预算同值，超大画布直接拒绝，防爆内存。
+const RESIZE_MAX_PIXELS: u64 = 50_000_000;
+
+/// 尺寸调整方式：目标尺寸的确定口径；百分比模式归压缩所有，此处不提供。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeMode {
+    /// 宽固定为 `width_px`，高按比例。
+    Width,
+    /// 高固定为 `height_px`，宽按比例。
+    Height,
+    /// 最长边固定为 `width_px`（边长复用宽度字段），短边按比例。
+    LongEdge,
+    /// 输出恰为 `width_px` × `height_px`，比例不一致时按 `fill` 处理。
+    Fixed,
+}
+
+/// 固定画布填充方式：与 PDF 导出同语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeFill {
+    /// 等比适配并补底，完整显示。
+    Contain,
+    /// 等比铺满并裁切，无白边。
+    Cover,
+    /// 宽高各拉满，可能变形。
+    Stretch,
+}
+
+/// 完整适配的补底颜色；JPEG 无透明通道，选透明按白色压平（前端明示）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeBackground {
+    White,
+    Black,
+    Transparent,
+}
+
+/// 尺寸调整参数：原地重编码，保持源格式与路径不变（与压缩同）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ResizeOptions {
+    /// 调整方式。
+    pub mode: ResizeMode,
+    /// 目标宽度；最长边模式下复用为边长。
+    pub width_px: u32,
+    /// 目标高度；宽/最长边模式下忽略。
+    pub height_px: u32,
+    /// 填充方式；仅固定模式生效。
+    pub fill: ResizeFill,
+    /// 补底颜色；仅固定 + 完整适配生效。
+    pub background: ResizeBackground,
+    /// 水平位置：铺满裁切的裁切锚点，或小图在画布上的贴放位。
+    pub horizontal_alignment: ComicPdfHorizontalAlignment,
+    /// 垂直位置：同上。
+    pub vertical_alignment: ComicPdfVerticalAlignment,
+    /// 仅缩小：已小于目标的不放大；铺满/拉伸下无意义，后端忽略（前端禁用）。
+    pub no_upscale: bool,
+    /// JPEG/WebP 有损质量，1-100。
+    pub quality: u8,
+    /// WebP 无损开关（开则忽略质量）。
+    pub webp_lossless: bool,
+    /// PNG 压缩级别，0-9。
+    pub png_level: u8,
+}
+
+impl ResizeOptions {
+    fn validate(&self) -> anyhow::Result<()> {
+        match self.mode {
+            ResizeMode::Width | ResizeMode::LongEdge => {
+                anyhow::ensure!(self.width_px > 0, "resize width must be positive");
+            }
+            ResizeMode::Height => {
+                anyhow::ensure!(self.height_px > 0, "resize height must be positive");
+            }
+            ResizeMode::Fixed => {
+                anyhow::ensure!(
+                    self.width_px > 0 && self.height_px > 0,
+                    "fixed resize dimensions must be positive"
+                );
+                anyhow::ensure!(
+                    u64::from(self.width_px) * u64::from(self.height_px) <= RESIZE_MAX_PIXELS,
+                    "fixed resize dimensions exceed the supported pixel budget"
+                );
+            }
+        }
+        if !(1..=100).contains(&self.quality) {
+            anyhow::bail!("quality must be within 1..=100, got {}", self.quality);
+        }
+        if self.png_level > 9 {
+            anyhow::bail!("png_level must be within 0..=9, got {}", self.png_level);
+        }
+        Ok(())
+    }
+}
+
+/// 单张重排版：绘制尺寸 + 画布 + 偏移；裁切模式偏移为裁切原点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResizeLayout {
+    draw_width: u32,
+    draw_height: u32,
+    canvas_width: u32,
+    canvas_height: u32,
+    offset_x: u32,
+    offset_y: u32,
+    clips: bool,
+}
+
+/// 四舍五入除法（分母必正，调用方保证源尺寸与目标尺寸为正）。
+fn div_round(num: u64, den: u64) -> u32 {
+    u32::try_from((num + den / 2) / den.max(1))
+        .unwrap_or(u32::MAX)
+        .max(1)
+}
+
+/// 上取整除法（铺满模式保证覆盖，调用方保证分母为正）。
+fn div_ceil(num: u64, den: u64) -> u32 {
+    u32::try_from((num + den - 1) / den.max(1)).unwrap_or(u32::MAX)
+}
+
+/// 水平偏移：左贴边、居中平分、右贴边；内外相等时恒零。
+const fn resize_offset_x(outer: u32, inner: u32, alignment: ComicPdfHorizontalAlignment) -> u32 {
+    let spare = outer.saturating_sub(inner);
+    match alignment {
+        ComicPdfHorizontalAlignment::Left => 0,
+        ComicPdfHorizontalAlignment::Center => spare / 2,
+        ComicPdfHorizontalAlignment::Right => spare,
+    }
+}
+
+/// 垂直偏移：上贴边为图顶（像素纵轴从顶部起算），余类推。
+const fn resize_offset_y(outer: u32, inner: u32, alignment: ComicPdfVerticalAlignment) -> u32 {
+    let spare = outer.saturating_sub(inner);
+    match alignment {
+        ComicPdfVerticalAlignment::Top => 0,
+        ComicPdfVerticalAlignment::Center => spare / 2,
+        ComicPdfVerticalAlignment::Bottom => spare,
+    }
+}
+
+impl ResizeLayout {
+    /// 绘制即画布的精确版式（边模式与拉伸共用，无偏移不裁切）。
+    const fn exact(width: u32, height: u32) -> Self {
+        Self {
+            draw_width: width,
+            draw_height: height,
+            canvas_width: width,
+            canvas_height: height,
+            offset_x: 0,
+            offset_y: 0,
+            clips: false,
+        }
+    }
+}
+
+/// 按目标宽度等比换算，高度四舍五入。
+fn scaled_to_width(src_width: u32, src_height: u32, target_width: u32) -> (u32, u32) {
+    (
+        target_width,
+        div_round(
+            u64::from(src_height) * u64::from(target_width),
+            u64::from(src_width),
+        ),
+    )
+}
+
+/// 按目标高度等比换算，宽度四舍五入。
+fn scaled_to_height(src_width: u32, src_height: u32, target_height: u32) -> (u32, u32) {
+    (
+        div_round(
+            u64::from(src_width) * u64::from(target_height),
+            u64::from(src_height),
+        ),
+        target_height,
+    )
+}
+
+/// 固定画布版式：完整适配（小图按对齐贴放）/铺满裁切/拉伸。
+fn fixed_layout(src_width: u32, src_height: u32, options: &ResizeOptions) -> ResizeLayout {
+    let (canvas_width, canvas_height) = (options.width_px, options.height_px);
+    match options.fill {
+        ResizeFill::Stretch => ResizeLayout::exact(canvas_width, canvas_height),
+        ResizeFill::Cover => {
+            // 宽主导当且仅当按宽缩放倍率更大；向上取整保证盖满。
+            let width_driven = u128::from(canvas_width) * u128::from(src_height)
+                >= u128::from(canvas_height) * u128::from(src_width);
+            let (draw_width, draw_height) = if width_driven {
+                (
+                    canvas_width,
+                    div_ceil(
+                        u64::from(canvas_width) * u64::from(src_height),
+                        u64::from(src_width),
+                    ),
+                )
+            } else {
+                (
+                    div_ceil(
+                        u64::from(canvas_height) * u64::from(src_width),
+                        u64::from(src_height),
+                    ),
+                    canvas_height,
+                )
+            };
+            ResizeLayout {
+                draw_width,
+                draw_height,
+                canvas_width,
+                canvas_height,
+                offset_x: resize_offset_x(draw_width, canvas_width, options.horizontal_alignment),
+                offset_y: resize_offset_y(draw_height, canvas_height, options.vertical_alignment),
+                clips: true,
+            }
+        }
+        ResizeFill::Contain => {
+            let fits = canvas_width >= src_width && canvas_height >= src_height;
+            if options.no_upscale && fits {
+                // 不放大：原图按对齐贴放，空白补底，尺寸仍统一。
+                return ResizeLayout {
+                    draw_width: src_width,
+                    draw_height: src_height,
+                    canvas_width,
+                    canvas_height,
+                    offset_x: resize_offset_x(
+                        canvas_width,
+                        src_width,
+                        options.horizontal_alignment,
+                    ),
+                    offset_y: resize_offset_y(
+                        canvas_height,
+                        src_height,
+                        options.vertical_alignment,
+                    ),
+                    clips: false,
+                };
+            }
+            let width_driven = u128::from(canvas_width) * u128::from(src_height)
+                <= u128::from(canvas_height) * u128::from(src_width);
+            let (draw_width, draw_height) = if width_driven {
+                scaled_to_width(src_width, src_height, canvas_width)
+            } else {
+                scaled_to_height(src_width, src_height, canvas_height)
+            };
+            ResizeLayout {
+                draw_width,
+                draw_height,
+                canvas_width,
+                canvas_height,
+                offset_x: resize_offset_x(canvas_width, draw_width, options.horizontal_alignment),
+                offset_y: resize_offset_y(canvas_height, draw_height, options.vertical_alignment),
+                clips: false,
+            }
+        }
+    }
+}
+
+/// 计算单张版式；`None` 表示结果与源像素一致（重编码无意义），调用方记跳过。
+/// 固定 + 完整适配下小图按对齐贴放（不拉伸、尺寸仍统一）；铺满/拉伸恒重采样。
+fn resize_layout(
+    src_width: u32,
+    src_height: u32,
+    options: &ResizeOptions,
+) -> anyhow::Result<Option<ResizeLayout>> {
+    anyhow::ensure!(
+        src_width > 0 && src_height > 0,
+        "image dimensions must be positive"
+    );
+    let layout = match options.mode {
+        ResizeMode::Width => {
+            if options.no_upscale && src_width <= options.width_px {
+                return Ok(None);
+            }
+            let (draw_width, draw_height) =
+                scaled_to_width(src_width, src_height, options.width_px);
+            ResizeLayout::exact(draw_width, draw_height)
+        }
+        ResizeMode::Height => {
+            if options.no_upscale && src_height <= options.height_px {
+                return Ok(None);
+            }
+            let (draw_width, draw_height) =
+                scaled_to_height(src_width, src_height, options.height_px);
+            ResizeLayout::exact(draw_width, draw_height)
+        }
+        ResizeMode::LongEdge => {
+            let edge = src_width.max(src_height);
+            if options.no_upscale && edge <= options.width_px {
+                return Ok(None);
+            }
+            let (draw_width, draw_height) = if src_width >= src_height {
+                scaled_to_width(src_width, src_height, options.width_px)
+            } else {
+                scaled_to_height(src_width, src_height, options.width_px)
+            };
+            ResizeLayout::exact(draw_width, draw_height)
+        }
+        ResizeMode::Fixed => fixed_layout(src_width, src_height, options),
+    };
+    // 输出一致即无操作；预算按最终输出面校验。
+    if layout.draw_width == src_width
+        && layout.draw_height == src_height
+        && layout.canvas_width == src_width
+        && layout.canvas_height == src_height
+    {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        u64::from(layout.canvas_width) * u64::from(layout.canvas_height) <= RESIZE_MAX_PIXELS,
+        "resized image exceeds the supported pixel budget"
+    );
+    Ok(Some(layout))
+}
+
+/// 补底颜色。
+const fn background_pixel(background: ResizeBackground) -> image::Rgba<u8> {
+    match background {
+        ResizeBackground::White => image::Rgba([255, 255, 255, 255]),
+        ResizeBackground::Black => image::Rgba([0, 0, 0, 255]),
+        ResizeBackground::Transparent => image::Rgba([0, 0, 0, 0]),
+    }
+}
+
+/// 重排版变换：已定向 RGBA → 缩放 → 补底/裁切；同尺寸直通，避免无谓重采样。
+fn apply_resize_transform(
+    img: &image::DynamicImage,
+    layout: &ResizeLayout,
+    background: ResizeBackground,
+) -> image::DynamicImage {
+    let rgba = img.to_rgba8();
+    let scaled = if layout.draw_width == rgba.width() && layout.draw_height == rgba.height() {
+        rgba
+    } else {
+        image::imageops::resize(
+            &rgba,
+            layout.draw_width,
+            layout.draw_height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
+    if layout.clips {
+        let cropped = image::imageops::crop_imm(
+            &scaled,
+            layout.offset_x,
+            layout.offset_y,
+            layout.canvas_width,
+            layout.canvas_height,
+        )
+        .to_image();
+        return image::DynamicImage::ImageRgba8(cropped);
+    }
+    if layout.canvas_width == layout.draw_width && layout.canvas_height == layout.draw_height {
+        return image::DynamicImage::ImageRgba8(scaled);
+    }
+    let mut canvas = image::RgbaImage::from_pixel(
+        layout.canvas_width,
+        layout.canvas_height,
+        background_pixel(background),
+    );
+    image::imageops::overlay(
+        &mut canvas,
+        &scaled,
+        i64::from(layout.offset_x),
+        i64::from(layout.offset_y),
+    );
+    image::DynamicImage::ImageRgba8(canvas)
+}
+
+/// 解码并应用 EXIF 方向；与 PDF 导出同口径，避免竖图被横算。
+fn decode_oriented(bytes: &[u8], rel: &str) -> anyhow::Result<image::DynamicImage> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .with_context(|| format!("failed to inspect {rel}"))?;
+    let mut decoder = reader
+        .into_decoder()
+        .with_context(|| format!("failed to decode {rel}"))?;
+    let orientation = decoder
+        .orientation()
+        .with_context(|| format!("failed to read orientation of {rel}"))?;
+    let mut img = image::DynamicImage::from_decoder(decoder)
+        .with_context(|| format!("failed to decode {rel}"))?;
+    img.apply_orientation(orientation);
+    Ok(img)
+}
+
+/// JPEG 压平底色：固定 + 完整适配沿用所选底色（透明选白），其余一律白色。
+fn jpeg_flatten_background(options: &ResizeOptions) -> image::Rgb<u8> {
+    if options.mode == ResizeMode::Fixed
+        && options.fill == ResizeFill::Contain
+        && options.background == ResizeBackground::Black
+    {
+        return image::Rgb([0, 0, 0]);
+    }
+    image::Rgb([255, 255, 255])
+}
+
+/// 按源格式编码：与压缩共用 `encode_image`，JPEG 先压平（`to_rgb8` 直接丢 alpha 会黑底）。
+fn encode_resized(
+    img: &image::DynamicImage,
+    ext: &str,
+    options: &ResizeOptions,
+) -> anyhow::Result<Vec<u8>> {
+    let target = target_of_ext(ext)?;
+    let encode_options = ConvertOptions {
+        quality: options.quality,
+        webp_lossless: options.webp_lossless,
+        png_level: options.png_level,
+        force: true,
+    };
+    if target == ImageTargetFormat::Jpeg {
+        let rgba = img.to_rgba8();
+        let background = jpeg_flatten_background(options);
+        let mut flat = image::RgbImage::new(rgba.width(), rgba.height());
+        for (x, y, pixel) in rgba.enumerate_pixels() {
+            let alpha = u16::from(pixel[3]);
+            let blend = |channel: u8, base: u8| {
+                u8::try_from(
+                    (u16::from(channel) * alpha + u16::from(base) * (255 - alpha) + 127) / 255,
+                )
+                .unwrap_or(255)
+            };
+            flat.put_pixel(
+                x,
+                y,
+                image::Rgb([
+                    blend(pixel[0], background[0]),
+                    blend(pixel[1], background[1]),
+                    blend(pixel[2], background[2]),
+                ]),
+            );
+        }
+        return encode_image(
+            &image::DynamicImage::ImageRgb8(flat),
+            target,
+            &encode_options,
+        );
+    }
+    encode_image(img, target, &encode_options)
+}
+
+/// 尺寸调整预览：只读 `content.json` + 图片头（不全解码），返回总数、跳过数与总字节。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ResizePreview {
+    pub total: u32,
+    pub skipped: u32,
+    pub total_bytes: u32,
+}
+
+/// 尺寸调整结果：原地覆盖后的大纲 + 处理/跳过数（与压缩同形）。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ResizeOutcome {
+    pub outline: ComicOutline,
+    pub processed: u32,
+    pub skipped: u32,
+}
+
+/// 尺寸调整进度事件名：与转换/压缩事件独立，前端 hook 分开订阅。
+pub const RESIZE_PROGRESS_EVENT: &str = "comic-images-resize-progress";
+
+/// 尺寸调整进度载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ComicResizeProgress {
+    pub id: String,
+    pub done_files: u32,
+    pub total_files: u32,
+}
+
+/// 尺寸调整状态探针：供切回页面时回填进度；从未开始返回空闲零值。
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ComicResizeStatus {
+    pub running: bool,
+    pub done_files: u32,
+    pub total_files: u32,
+    /// 是否有可撤销的备份（与压缩共用备份目录）。
+    pub has_backup: bool,
+}
+
+/// 进行中的尺寸调整作业：与转换/压缩作业同构，暂存区独立（`.tmp-resize`）。
+static RESIZING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// 登记尺寸调整作业：转换/压缩/导出互斥，同项目已有在跑任务整单拒绝。
+fn register_resize(id: &str) -> anyhow::Result<()> {
+    lock_project_images(id)?;
+    let result = (|| {
+        let mut jobs = RESIZING
+            .lock()
+            .map_err(|_| anyhow::anyhow!("resize registry poisoned"))?;
+        anyhow::ensure!(
+            !jobs.contains_key(id),
+            "resize already in progress for project {id}"
+        );
+        jobs.insert(id.to_string(), (0, 0));
+        drop(jobs);
+        Ok(())
+    })();
+    if result.is_err() {
+        unlock_project_images(id);
+    }
+    result
+}
+
+/// 更新尺寸调整作业进度：注册表缺失时静默跳过，只写不读，不影响主流程。
+fn update_resize_progress(id: &str, done: u32, total: u32) {
+    if let Ok(mut jobs) = RESIZING.lock()
+        && let Some(entry) = jobs.get_mut(id)
+    {
+        *entry = (done, total);
+    }
+}
+
+/// 注销作业：成功失败取消都走，锁中毒也尽力清理；同时清取消标记。
+fn finish_resize(id: &str) {
+    if let Ok(mut jobs) = RESIZING.lock() {
+        jobs.remove(id);
+    }
+    clear_cancel(id);
+    unlock_project_images(id);
+}
+
+/// 查询尺寸调整作业状态（`AppHandle` 入口仅作透传；注册表是进程级，无需解析项目）。
+pub fn resize_status(id: &str) -> ComicResizeStatus {
+    RESIZING
+        .lock()
+        .ok()
+        .and_then(|jobs| jobs.get(id).copied())
+        .map_or_else(
+            || ComicResizeStatus {
+                running: false,
+                done_files: 0,
+                total_files: 0,
+                has_backup: false,
+            },
+            |(done_files, total_files)| ComicResizeStatus {
+                running: true,
+                done_files,
+                total_files,
+                has_backup: false,
+            },
+        )
+}
+
+/// 是否有尺寸调整在跑（解析 / 导入 / 转换 / 压缩互斥用）。
+pub fn is_resizing(id: &str) -> bool {
+    RESIZING.lock().is_ok_and(|jobs| jobs.contains_key(id))
+}
+
+/// 预览尺寸调整（`&Path` 入口）：逐张读头算目标版式，不解码全图。
+pub fn preview_resize_in(
+    project_dir: &Path,
+    options: &ResizeOptions,
+) -> anyhow::Result<ResizePreview> {
+    options.validate()?;
+    let content = comic_files::read_content(project_dir)?;
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let mut total = 0u32;
+    let mut skipped = 0u32;
+    let mut total_bytes = 0u32;
+    for volume in &content.volumes {
+        for page in &volume.pages {
+            let ext = normalized_ext(&page.path)?;
+            if !matches!(ext.as_str(), "jpg" | "png" | "webp") {
+                anyhow::bail!("unsupported image format: {}", page.path);
+            }
+            let abs = comic_files::join_images_path(&images, &page.path)?;
+            let size = std::fs::metadata(&abs).map_or(0, |meta| meta.len());
+            total_bytes = total_bytes.saturating_add(u32::try_from(size).unwrap_or(u32::MAX));
+            let inspected = inspect_page_image(&abs)?;
+            if resize_layout(inspected.width_px, inspected.height_px, options)?.is_none() {
+                skipped = skipped.saturating_add(1);
+            }
+            total = total.saturating_add(1);
+        }
+    }
+    Ok(ResizePreview {
+        total,
+        skipped,
+        total_bytes,
+    })
+}
+
+/// 预览尺寸调整（`AppHandle` 入口）。
+pub fn preview_resize(
+    app: &tauri::AppHandle,
+    id: &str,
+    options: &ResizeOptions,
+) -> anyhow::Result<ResizePreview> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    preview_resize_in(&dir, options)
+}
+
+/// 查询尺寸调整状态（`AppHandle` 入口）：供切回页面时回填进度；备份位实时计算（与压缩共用）。
+pub fn resize_status_of(project_dir: &Path, id: &str) -> ComicResizeStatus {
+    let mut status = resize_status(id);
+    if !status.running {
+        status.has_backup = has_compress_backup(project_dir);
+    }
+    status
+}
+
+struct ResizeStageOutcome {
+    staged: Vec<Option<PathBuf>>,
+    processed: u32,
+    skipped: u32,
+}
+
+/// 尺寸调整阶段一：逐张解码定向→排版→变换→按源格式编码进暂存区；取消标记在文件边界处检查。
+fn stage_resize_all(
+    images: &Path,
+    staging: &Path,
+    rels: &[String],
+    options: &ResizeOptions,
+    progress: Option<&dyn Fn(u32, u32)>,
+    should_cancel: Option<&dyn Fn() -> bool>,
+) -> anyhow::Result<ResizeStageOutcome> {
+    let total = u32::try_from(rels.len()).unwrap_or(u32::MAX);
+    let mut staged = Vec::with_capacity(rels.len());
+    let mut processed = 0u32;
+    let mut skipped = 0u32;
+    for (index, rel) in rels.iter().enumerate() {
+        if should_cancel.is_some_and(|cancelled| cancelled()) {
+            anyhow::bail!(CANCELLED_MARKER);
+        }
+        let ext = normalized_ext(rel)?;
+        let src = comic_files::join_images_path(images, rel)?;
+        let bytes =
+            std::fs::read(&src).with_context(|| format!("failed to read {}", src.display()))?;
+        let img = decode_oriented(&bytes, rel)?;
+        let (src_width, src_height) = img.dimensions();
+        let Some(layout) = resize_layout(src_width, src_height, options)? else {
+            staged.push(None);
+            skipped = skipped.saturating_add(1);
+            continue;
+        };
+        let transformed = apply_resize_transform(&img, &layout, options.background);
+        let encoded = encode_resized(&transformed, &ext, options)?;
+        let staged_path = staging.join(format!("{index:06}"));
+        std::fs::write(&staged_path, &encoded)
+            .with_context(|| format!("failed to stage {}", staged_path.display()))?;
+        staged.push(Some(staged_path));
+        processed = processed.saturating_add(1);
+        if let Some(report) = progress {
+            let done = u32::try_from(index + 1).unwrap_or(u32::MAX);
+            report(done, total);
+        }
+    }
+    Ok(ResizeStageOutcome {
+        staged,
+        processed,
+        skipped,
+    })
+}
+
+/// 尺寸调整内核：事务性两阶段（暂存区编码→原地覆盖），路径与格式不变故不写 `content.json`；
+/// 备份与压缩共用同一目录（last-write-wins），成功后清空下游 `build/` 与 `dist/`。
+fn resize_images_in(
+    project_dir: &Path,
+    options: &ResizeOptions,
+    progress: Option<&dyn Fn(u32, u32)>,
+    should_cancel: Option<&dyn Fn() -> bool>,
+) -> anyhow::Result<ResizeOutcome> {
+    options.validate()?;
+    let content = comic_files::read_content(project_dir)?;
+    let rels: Vec<String> = content
+        .volumes
+        .iter()
+        .flat_map(|volume| volume.pages.iter().map(|page| page.path.clone()))
+        .collect();
+    if rels.is_empty() {
+        let outline = comic_files::outline_in(project_dir)?
+            .with_context(|| "content.json missing, parse the images first".to_string())?;
+        return Ok(ResizeOutcome {
+            outline,
+            processed: 0,
+            skipped: 0,
+        });
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let staging = project_dir.join(RESIZE_STAGING_DIR);
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).context("failed to create resize staging dir")?;
+    // 新调整开始即失效旧备份：原图集合即将变化，旧快照不再对应当前文件（与压缩共用）。
+    clear_compress_backup(project_dir);
+    let outcome = stage_resize_all(&images, &staging, &rels, options, progress, should_cancel)
+        .inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&staging);
+        })?;
+    for (rel, staged) in rels.iter().zip(outcome.staged.iter()) {
+        let Some(path) = staged else { continue };
+        let dest = comic_files::join_images_path(&images, rel)?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        // 先备份原图再覆盖：撤销时按原路径拷回；跳过的文件不碰，无需备份。
+        let backup = backup_images_path(project_dir, rel)?;
+        if let Some(parent) = backup.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        std::fs::copy(&dest, &backup)
+            .with_context(|| format!("failed to back up {}", dest.display()))?;
+        std::fs::rename(path, &dest)
+            .with_context(|| format!("failed to move {} to {}", path.display(), dest.display()))?;
+    }
+    let _ = std::fs::remove_dir_all(&staging);
+    let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
+    let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    let outline = comic_files::outline_in(project_dir)?
+        .with_context(|| "content.json missing after resize".to_string())?;
+    super::projects::touch_updated(project_dir);
+    Ok(ResizeOutcome {
+        outline,
+        processed: outcome.processed,
+        skipped: outcome.skipped,
+    })
+}
+
+/// 尺寸调整全量图片（`AppHandle` 入口）：阻塞池执行并推送逐文件进度。
+pub async fn resize_images(
+    app: &tauri::AppHandle,
+    id: &str,
+    options: &ResizeOptions,
+) -> Result<ResizeOutcome, crate::cores::types::CommandError> {
+    use tauri::Emitter;
+
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    register_resize(id)?;
+    let options = options.clone();
+    let handle = app.clone();
+    let report_id = id.to_string();
+    let progress_id = id.to_string();
+    let cancel_id = id.to_string();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let on_progress = move |done: u32, total: u32| {
+            update_resize_progress(&progress_id, done, total);
+            let _ = handle.emit(
+                RESIZE_PROGRESS_EVENT,
+                ComicResizeProgress {
+                    id: report_id.clone(),
+                    done_files: done,
+                    total_files: total,
+                },
+            );
+        };
+        let should_cancel = || is_cancel_requested(&cancel_id);
+        resize_images_in(&dir, &options, Some(&on_progress), Some(&should_cancel))
+    })
+    .await;
+    finish_resize(id);
+    match outcome.map_err(|err| crate::cores::types::CommandError::Internal(format!("{err:#}"))) {
+        Ok(result) => result.map_err(|err| map_job_error(&err)),
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
     use std::path::PathBuf;
 
     use super::super::comic_files::{ComicContent, ComicMode, ComicPage, ComicVolume};
@@ -1753,6 +2514,252 @@ mod tests {
             before
         );
         assert!(!dir.join(".tmp-compress").exists());
+        cleanup(&root);
+    }
+
+    fn valid_resize_options() -> ResizeOptions {
+        ResizeOptions {
+            mode: ResizeMode::Width,
+            width_px: 2,
+            height_px: 0,
+            fill: ResizeFill::Contain,
+            background: ResizeBackground::White,
+            horizontal_alignment: ComicPdfHorizontalAlignment::Center,
+            vertical_alignment: ComicPdfVerticalAlignment::Center,
+            no_upscale: true,
+            quality: 85,
+            webp_lossless: false,
+            png_level: 6,
+        }
+    }
+
+    /// 读图宽高（已定向）。
+    fn image_dims(path: &Path) -> (u32, u32) {
+        let page = inspect_page_image(path).expect("inspect image");
+        (page.width_px, page.height_px)
+    }
+
+    #[test]
+    fn resize_options_reject_invalid() {
+        let mut options = valid_resize_options();
+        assert!(options.validate().is_ok());
+        options.width_px = 0;
+        assert!(options.validate().is_err());
+        options.width_px = 2;
+        options.mode = ResizeMode::Height;
+        assert!(options.validate().is_err());
+        options.height_px = 4;
+        assert!(options.validate().is_ok());
+        options.mode = ResizeMode::Fixed;
+        options.width_px = 60_001;
+        options.height_px = 60_001;
+        assert!(options.validate().is_err());
+        options.width_px = 4;
+        options.height_px = 4;
+        assert!(options.validate().is_ok());
+        options.quality = 0;
+        assert!(options.validate().is_err());
+        options.quality = 85;
+        options.png_level = 10;
+        assert!(options.validate().is_err());
+    }
+
+    #[test]
+    fn resize_layout_modes_and_alignment() {
+        // 按宽 + 仅缩小：4px 源取宽 4 即跳过。
+        let skip = ResizeOptions {
+            width_px: 4,
+            ..valid_resize_options()
+        };
+        assert!(resize_layout(4, 2, &skip).expect("layout").is_none());
+        // 按宽缩小：4x2 取宽 3 → 3x2（2*3/4 = 1.5 四舍五入为 2）。
+        let downscale = ResizeOptions {
+            no_upscale: false,
+            width_px: 3,
+            ..valid_resize_options()
+        };
+        let layout = resize_layout(4, 2, &downscale)
+            .expect("layout")
+            .expect("downscale");
+        assert_eq!(
+            (layout.draw_width, layout.draw_height),
+            (3, 2),
+            "4x2 at width 3 keeps aspect"
+        );
+        // 按最长边：2x4 取边 3 → 2x3（短边 1.5 → 2）。
+        let edge = ResizeOptions {
+            mode: ResizeMode::LongEdge,
+            width_px: 3,
+            no_upscale: false,
+            ..valid_resize_options()
+        };
+        let layout = resize_layout(2, 4, &edge).expect("layout").expect("edge");
+        assert_eq!((layout.draw_width, layout.draw_height), (2, 3));
+        // 固定 + 铺满：4x2 进 2x2，高度主导放大到 4x2 再裁，右对齐裁左部。
+        let cover = ResizeOptions {
+            mode: ResizeMode::Fixed,
+            fill: ResizeFill::Cover,
+            width_px: 2,
+            height_px: 2,
+            horizontal_alignment: ComicPdfHorizontalAlignment::Right,
+            vertical_alignment: ComicPdfVerticalAlignment::Bottom,
+            ..valid_resize_options()
+        };
+        let layout = resize_layout(4, 2, &cover).expect("layout").expect("cover");
+        assert_eq!((layout.draw_width, layout.draw_height), (4, 2));
+        assert_eq!((layout.canvas_width, layout.canvas_height), (2, 2));
+        assert_eq!((layout.offset_x, layout.offset_y), (2, 0));
+        assert!(layout.clips);
+        // 固定 + 完整适配：4x2 进 2x2，高主导 2x1，左上对齐留右下白边。
+        let contain = ResizeOptions {
+            fill: ResizeFill::Contain,
+            horizontal_alignment: ComicPdfHorizontalAlignment::Left,
+            vertical_alignment: ComicPdfVerticalAlignment::Top,
+            ..cover
+        };
+        let layout = resize_layout(4, 2, &contain)
+            .expect("layout")
+            .expect("contain");
+        assert_eq!((layout.draw_width, layout.draw_height), (2, 1));
+        assert_eq!((layout.offset_x, layout.offset_y), (0, 0));
+        // 拉伸：直接取画布，对齐无意义。
+        let stretch = ResizeOptions {
+            fill: ResizeFill::Stretch,
+            ..contain
+        };
+        let layout = resize_layout(4, 2, &stretch)
+            .expect("layout")
+            .expect("stretch");
+        assert_eq!((layout.draw_width, layout.draw_height), (2, 2));
+        assert_eq!((layout.offset_x, layout.offset_y), (0, 0));
+    }
+
+    #[test]
+    fn resize_layout_skip_rules() {
+        // 输出一致即跳过：4x4 取宽 4（关仅缩小）。
+        let same = ResizeOptions {
+            no_upscale: false,
+            width_px: 4,
+            ..valid_resize_options()
+        };
+        assert!(resize_layout(4, 4, &same).expect("layout").is_none());
+        // 固定 + 完整适配 + 不放大：2x2 进 4x4 只贴放不拉伸，仍统一故处理。
+        let pad = ResizeOptions {
+            mode: ResizeMode::Fixed,
+            width_px: 4,
+            height_px: 4,
+            ..valid_resize_options()
+        };
+        let layout = resize_layout(2, 2, &pad).expect("layout").expect("pad");
+        assert_eq!((layout.draw_width, layout.draw_height), (2, 2));
+        assert_eq!((layout.canvas_width, layout.canvas_height), (4, 4));
+        assert_eq!((layout.offset_x, layout.offset_y), (1, 1));
+    }
+
+    #[test]
+    fn resize_width_roundtrip_with_backup_and_restore() {
+        let (root, dir) = test_project("resize-width");
+        seed_images(&dir, &["a.png", "b.png"]);
+        let images = dir.join("sources").join("images");
+        let outcome = resize_images_in(&dir, &valid_resize_options(), None, None).expect("resize");
+        assert_eq!((outcome.processed, outcome.skipped), (2, 0));
+        assert_eq!(image_dims(&images.join("a.png")), (2, 2));
+        assert!(has_compress_backup(&dir));
+        assert!(!dir.join(".tmp-resize").exists());
+        restore_compress_backup_in(&dir).expect("restore");
+        assert_eq!(image_dims(&images.join("a.png")), (4, 4));
+        assert!(!has_compress_backup(&dir));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn resize_preview_counts_skipped() {
+        let (root, dir) = test_project("resize-preview");
+        seed_images(&dir, &["a.png", "b.png"]);
+        // 4x4 取宽 4 且仅缩小：两张全跳过。
+        let mut options = valid_resize_options();
+        options.width_px = 4;
+        let preview = preview_resize_in(&dir, &options).expect("preview");
+        assert_eq!((preview.total, preview.skipped), (2, 2));
+        assert!(preview.total_bytes > 0);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn resize_fixed_contain_pads_white_corners() {
+        let (root, dir) = test_project("resize-pad");
+        let images = dir.join("sources").join("images");
+        seed_images(&dir, &["wide.png"]);
+        write_sized_image(&images, "wide.png", 4, 2);
+        let mut options = valid_resize_options();
+        options.mode = ResizeMode::Fixed;
+        options.width_px = 4;
+        options.height_px = 4;
+        options.no_upscale = false;
+        resize_images_in(&dir, &options, None, None).expect("resize");
+        let bytes = std::fs::read(images.join("wide.png")).expect("read resized");
+        let img = image::load_from_memory(&bytes).expect("decode resized");
+        assert_eq!((img.width(), img.height()), (4, 4));
+        let rgba = img.to_rgba8();
+        // 4x2 进 4x4 完整适配比例为 1：原样居中，上下补白；底片为既有 helper 的纯色。
+        assert_eq!(rgba.get_pixel(0, 0).0, [255, 255, 255, 255]);
+        assert_eq!(rgba.get_pixel(0, 3).0, [255, 255, 255, 255]);
+        assert_eq!(rgba.get_pixel(0, 1).0, [20, 120, 200, 255]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn resize_registry_lifecycle() {
+        let id = "resize-registry-lifecycle";
+        assert!(!is_resizing(id));
+        register_resize(id).expect("register");
+        assert!(is_resizing(id));
+        assert!(project_images_locked(id));
+        update_resize_progress(id, 2, 5);
+        let status = resize_status(id);
+        assert!(status.running);
+        assert_eq!((status.done_files, status.total_files), (2, 5));
+        finish_resize(id);
+        assert!(!is_resizing(id));
+        assert!(!project_images_locked(id));
+    }
+
+    #[test]
+    fn resize_registry_rejects_reentrant_run() {
+        let id = "resize-registry-reentrant";
+        register_resize(id).expect("register");
+        assert!(register_resize(id).is_err());
+        finish_resize(id);
+        register_resize(id).expect("register after finish");
+        finish_resize(id);
+    }
+
+    #[test]
+    fn resize_shares_project_lock_with_convert() {
+        let id = "resize-convert-lock";
+        register_resize(id).expect("register resize");
+        assert!(lock_project_images(id).is_err());
+        assert!(register_convert(id).is_err());
+        finish_resize(id);
+        register_convert(id).expect("register convert after finish");
+        assert!(register_resize(id).is_err());
+        finish_convert(id);
+    }
+
+    #[test]
+    fn resize_aborts_on_cancel_before_touching_anything() {
+        let (root, dir) = test_project("cancel-resize");
+        seed_images(&dir, &["a.png", "b.png"]);
+        let images = dir.join("sources").join("images");
+        let before = std::fs::read(images.join("a.png")).expect("read before");
+        let result = resize_images_in(&dir, &valid_resize_options(), None, Some(&|| true));
+        let err = format!("{:#}", result.expect_err("cancelled resize"));
+        assert!(err.contains(CANCELLED_MARKER));
+        assert_eq!(
+            std::fs::read(images.join("a.png")).expect("read after"),
+            before
+        );
+        assert!(!dir.join(".tmp-resize").exists());
         cleanup(&root);
     }
 }

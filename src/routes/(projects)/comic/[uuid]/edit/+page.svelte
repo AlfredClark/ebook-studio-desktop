@@ -11,7 +11,15 @@
   import * as Resizable from "#components/shadcn-svelte/resizable";
   import ConfirmDialog from "#components/common/confirm-dialog.svelte";
   import commands from "#libs/commands";
-  import type { ComicOutline } from "#libs/commands/types";
+  import type {
+    ComicOutline,
+    ComicPdfHorizontalAlignment,
+    ComicPdfVerticalAlignment,
+    ResizeBackground,
+    ResizeFill,
+    ResizeMode,
+    ResizePreview,
+  } from "#libs/commands/types";
   import {
     convertJobOf,
     ensureConvertListener,
@@ -24,6 +32,12 @@
     refreshCompressStatus,
     setCompressRunning,
   } from "#libs/hooks/comic-compress.svelte";
+  import {
+    refreshResizeStatus,
+    resizeJobOf,
+    ensureResizeListener,
+    setResizeRunning,
+  } from "#libs/hooks/comic-resize.svelte";
   import { m } from "#libs/i18n/paraglide/messages";
   import { toast } from "#libs/utils/toast";
   import ComicStepGuide from "../../_components/comic-step-guide.svelte";
@@ -50,6 +64,13 @@
     resolveArrowStep,
   } from "./_components/comic-navigate";
   import ComicToolPanel, { type ComicTool } from "./_components/comic-tool-panel.svelte";
+  import { toolWithRunningJob } from "./_components/comic-tools";
+  import {
+    DEFAULT_RESIZE_HEIGHT_PX,
+    DEFAULT_RESIZE_WIDTH_PX,
+    buildResizeOptions,
+    type ResizeAspectLock,
+  } from "./_components/comic-resize";
   import type { ComicDropOrder } from "./_components/comic-sortable";
   import type { CompressPreview, ConvertPreview, ImageTargetFormat } from "#libs/commands/types";
   import { formatBytes, pageFileName } from "../files/_components/comic-files";
@@ -186,12 +207,29 @@
   let compressPngLevel = $state(6);
   let compressPreview = $state<CompressPreview | null>(null);
   let compressConfirmOpen = $state(false);
-  /** 跨页面图片作业：切页不丢进度，以 Rust 侧注册表为准回填；转换与压缩互斥。 */
+  /** 右栏尺寸调整：统一全量图片尺寸；备份与压缩共用，撤销回到备份时状态。 */
+  let resizeMode = $state<ResizeMode>("width");
+  let resizeWidth = $state(DEFAULT_RESIZE_WIDTH_PX);
+  let resizeHeight = $state(DEFAULT_RESIZE_HEIGHT_PX);
+  let resizeAspectLock = $state<ResizeAspectLock>("free");
+  let resizeFill = $state<ResizeFill>("contain");
+  let resizeBackground = $state<ResizeBackground>("white");
+  let resizeHAlign = $state<ComicPdfHorizontalAlignment>("center");
+  let resizeVAlign = $state<ComicPdfVerticalAlignment>("center");
+  let resizeNoUpscale = $state(true);
+  let resizeQuality = $state(85);
+  let resizeWebpLossless = $state(false);
+  let resizePngLevel = $state(6);
+  let resizePreview = $state<ResizePreview | null>(null);
+  let resizeConfirmOpen = $state(false);
+  let resizePreviewDebounce: ReturnType<typeof setTimeout> | undefined;
+  /** 跨页面图片作业：切页不丢进度，以 Rust 侧注册表为准回填；转换、压缩与尺寸调整互斥。 */
   const convertJob = $derived(convertJobOf(uuid));
   const compressJob = $derived(compressJobOf(uuid));
-  const toolRunning = $derived(convertJob.running || compressJob.running);
+  const resizeJob = $derived(resizeJobOf(uuid));
+  const toolRunning = $derived(convertJob.running || compressJob.running || resizeJob.running);
   const toolProgress = $derived.by(() => {
-    const active = convertJob.running ? convertJob : compressJob;
+    const active = convertJob.running ? convertJob : compressJob.running ? compressJob : resizeJob;
     return active.total === 0 ? null : Math.round((active.done / active.total) * 100);
   });
   /** 图片作业中锁定编辑：除预览翻页外，禁止一切改 content.json 的操作。 */
@@ -211,6 +249,22 @@
         compressPngLevel !== 6
       );
     }
+    if (tool === "resize") {
+      return (
+        resizeMode !== "width" ||
+        resizeWidth !== DEFAULT_RESIZE_WIDTH_PX ||
+        resizeHeight !== DEFAULT_RESIZE_HEIGHT_PX ||
+        resizeAspectLock !== "free" ||
+        resizeFill !== "contain" ||
+        resizeBackground !== "white" ||
+        resizeHAlign !== "center" ||
+        resizeVAlign !== "center" ||
+        resizeNoUpscale !== true ||
+        resizeQuality !== 85 ||
+        resizeWebpLossless !== false ||
+        resizePngLevel !== 6
+      );
+    }
     return (
       convertTarget !== "jpeg" ||
       convertQuality !== 85 ||
@@ -220,6 +274,23 @@
     );
   });
 
+  /** 尺寸调整命令参数：非法输入返回空值并禁用执行。 */
+  const resizeOptions = $derived(
+    buildResizeOptions({
+      mode: resizeMode,
+      width_px: resizeWidth,
+      height_px: resizeHeight,
+      fill: resizeFill,
+      background: resizeBackground,
+      horizontal_alignment: resizeHAlign,
+      vertical_alignment: resizeVAlign,
+      no_upscale: resizeNoUpscale,
+      quality: resizeQuality,
+      webp_lossless: resizeWebpLossless,
+      png_level: resizePngLevel,
+    }),
+  );
+
   /** 开始按钮门禁：脏态、保存中、运行中、无可处理页时禁用。 */
   const toolRunnable = $derived.by(() => {
     if (outline == null || dirty || saving || toolRunning) {
@@ -227,6 +298,9 @@
     }
     if (tool === "compress") {
       return (compressPreview?.total ?? 0) > 0;
+    }
+    if (tool === "resize") {
+      return (resizePreview?.total ?? 0) > 0 && resizeOptions !== null;
     }
     return (convertPreview?.total ?? 0) > 0;
   });
@@ -269,6 +343,28 @@
     })();
   });
 
+  /** 尺寸调整预览跟随：目标尺寸影响跳过集合，输入防抖 400ms 后刷新。 */
+  $effect(() => {
+    const currentTool = tool;
+    const hasOutline = outline != null;
+    const options = resizeOptions;
+    clearTimeout(resizePreviewDebounce);
+    if (currentTool !== "resize" || !hasOutline || options == null) {
+      resizePreview = null;
+      return;
+    }
+    resizePreviewDebounce = setTimeout(() => {
+      const token = (toolPreviewToken += 1);
+      void (async () => {
+        const result = await commands.previewComicImageResize(uuid, options).result();
+        if (token !== toolPreviewToken) {
+          return;
+        }
+        resizePreview = result.status === "ok" ? result.data : null;
+      })();
+    }, 400);
+  });
+
   /** 确认弹窗行：源格式按列对齐，`→` 后统一为目标格式大写。 */
   function convertConfirmLines(preview: ConvertPreview, targetLabel: string): string[] {
     const fromWidth = Math.max(...preview.items.map((item) => item.from.length));
@@ -293,9 +389,57 @@
     ];
   }
 
+  /** 尺寸调整确认行：目标摘要 + 总数逐行展示。 */
+  function resizeConfirmLines(): string[] {
+    const unit = m.comic_edit_convert_count_unit();
+    const count = resizePreview == null ? `0 ${unit}` : `${resizePreview.total} ${unit}`;
+    const target =
+      resizeMode === "fixed"
+        ? `${resizeWidth}×${resizeHeight}`
+        : resizeMode === "height"
+          ? resizeHeight
+          : resizeWidth;
+    return [
+      `${m.comic_edit_tool_resize_mode()}  ${resizeModeLabel()}`,
+      `${m.comic_edit_tool_resize()}  ${target}`,
+      count,
+    ];
+  }
+
+  /** 尺寸调整模式文案（确认行用）。 */
+  function resizeModeLabel(): string {
+    switch (resizeMode) {
+      case "width":
+        return m.comic_edit_tool_resize_mode_width();
+      case "height":
+        return m.comic_edit_tool_resize_mode_height();
+      case "long_edge":
+        return m.comic_edit_tool_resize_mode_long_edge();
+      case "fixed":
+        return m.comic_edit_tool_resize_mode_fixed();
+    }
+  }
   /** 工具执行：刷新预览后弹确认框（无可处理页直接提示）。 */
   async function handleToolRun(): Promise<void> {
     if (toolRunning) {
+      return;
+    }
+    if (tool === "resize") {
+      const options = resizeOptions;
+      if (options == null) {
+        return;
+      }
+      const preview = await commands.previewComicImageResize(uuid, options).result();
+      if (preview.status === "error") {
+        toast.error(m.comic_edit_resize_failed());
+        return;
+      }
+      resizePreview = preview.data;
+      if (resizePreview.total === 0) {
+        toast.info(m.comic_edit_resize_nothing());
+        return;
+      }
+      resizeConfirmOpen = true;
       return;
     }
     if (tool === "compress") {
@@ -337,6 +481,21 @@
       compressPngLevel = 6;
       return;
     }
+    if (tool === "resize") {
+      resizeMode = "width";
+      resizeWidth = DEFAULT_RESIZE_WIDTH_PX;
+      resizeHeight = DEFAULT_RESIZE_HEIGHT_PX;
+      resizeAspectLock = "free";
+      resizeFill = "contain";
+      resizeBackground = "white";
+      resizeHAlign = "center";
+      resizeVAlign = "center";
+      resizeNoUpscale = true;
+      resizeQuality = 85;
+      resizeWebpLossless = false;
+      resizePngLevel = 6;
+      return;
+    }
     convertTarget = "jpeg";
     convertQuality = 85;
     convertWebpLossless = false;
@@ -347,6 +506,10 @@
   /** 确认转换：全局进度监听在 hook 侧常驻，成功后按原全局序号跟随选中。 */
   async function handleToolConfirm(): Promise<void> {
     if (toolRunning) {
+      return;
+    }
+    if (tool === "resize") {
+      await handleResizeConfirm();
       return;
     }
     if (tool === "compress") {
@@ -432,6 +595,42 @@
     }
   }
 
+  /** 确认尺寸调整：原地重编码，路径与格式不变故选中无需跟随；成功提示处理/跳过数。 */
+  async function handleResizeConfirm(): Promise<void> {
+    const options = resizeOptions;
+    if (options == null) {
+      return;
+    }
+    setResizeRunning(uuid, true);
+    try {
+      const result = await commands.resizeComicImages(uuid, options).result();
+      if (result.status === "error") {
+        if (result.error.kind === "Cancelled") {
+          toast.info(m.comic_edit_tool_cancelled());
+          return;
+        }
+        toast.error(m.comic_edit_resize_failed());
+        return;
+      }
+      outline = result.data.outline;
+      working = toWorking(result.data.outline.volumes);
+      saved = toWorking(result.data.outline.volumes);
+      if (selectedPath != null) {
+        void loadPreview(selectedPath);
+      }
+      toast.success(
+        m.comic_edit_resize_success_detail({
+          processed: result.data.processed,
+          skipped: result.data.skipped,
+        }),
+      );
+    } finally {
+      setResizeRunning(uuid, false);
+      void refreshResizeStatus(uuid);
+      void refreshCompressStatus(uuid);
+    }
+  }
+
   /** 取消图片作业：转换/压缩互斥，任一在跑即置旗；在跑的任务随后以取消结算并轻提示。 */
   async function handleToolCancel(): Promise<void> {
     if (!toolRunning) {
@@ -472,6 +671,7 @@
     } finally {
       setCompressRunning(uuid, false);
       void refreshCompressStatus(uuid);
+      void refreshResizeStatus(uuid);
     }
   }
 
@@ -488,6 +688,7 @@
       toast.success(m.comic_edit_tool_clear_backup_success());
     }
     void refreshCompressStatus(uuid);
+    void refreshResizeStatus(uuid);
   }
 
   /** 键盘话重排：选中页所在话整体上移 / 下移一位；转换中锁定。 */
@@ -799,9 +1000,24 @@
   onMount(() => {
     void loadOutline();
     ensureConvertListener();
-    void refreshConvertStatus(uuid);
     ensureCompressListener();
-    void refreshCompressStatus(uuid);
+    ensureResizeListener();
+    // 切页返回：有在跑的长时间作业则直接打开对应工具，仅恢复一次，不跟随。
+    void (async () => {
+      await Promise.all([
+        refreshConvertStatus(uuid),
+        refreshCompressStatus(uuid),
+        refreshResizeStatus(uuid),
+      ]);
+      const running = toolWithRunningJob({
+        convert: convertJobOf(uuid).running,
+        compress: compressJobOf(uuid).running,
+        resize: resizeJobOf(uuid).running,
+      });
+      if (running != null) {
+        tool = running;
+      }
+    })();
   });
 </script>
 
@@ -860,7 +1076,7 @@
               onDeleteRequest={handleDeleteRequest}
             />
           </div>
-          <div class="flex shrink-0 flex-col gap-2 border-t border-border p-3">
+          <div class="flex shrink-0 flex-col gap-2 border-t border-border px-3 py-2">
             {#if creatingVolume}
               <input
                 bind:this={newVolumeInput}
@@ -916,7 +1132,7 @@
             {/if}
           </div>
           {#if dirty}
-            <div class="flex shrink-0 flex-col gap-2 border-t border-border p-3">
+            <div class="flex shrink-0 flex-col gap-2 border-t border-border px-3 py-2">
               <Button
                 class="w-full"
                 disabled={saving || imageLocked}
@@ -1005,7 +1221,7 @@
               />
             {/if}
           </div>
-          <div class="flex shrink-0 items-center gap-2 border-t border-border px-4 py-2">
+          <div class="flex shrink-0 items-center gap-2 border-t border-border px-4 py-3">
             <Button
               variant="outline"
               size="sm"
@@ -1046,6 +1262,18 @@
               bind:compressQuality
               bind:compressWebpLossless
               bind:compressPngLevel
+              bind:resizeMode
+              bind:resizeWidth
+              bind:resizeHeight
+              bind:resizeAspectLock
+              bind:resizeFill
+              bind:resizeBackground
+              bind:resizeHAlign
+              bind:resizeVAlign
+              bind:resizeNoUpscale
+              bind:resizeQuality
+              bind:resizeWebpLossless
+              bind:resizePngLevel
               running={toolRunning}
               canRun={toolRunnable}
               {hasOutcome}
@@ -1101,6 +1329,17 @@
     total: compressPreview?.total ?? 0,
   })}
   details={compressConfirmLines()}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_edit_tool_run()}
+  onConfirm={() => void handleToolConfirm()}
+/>
+<ConfirmDialog
+  bind:open={resizeConfirmOpen}
+  title={m.comic_edit_resize_confirm_title()}
+  description={m.comic_edit_resize_confirm_description({
+    total: resizePreview?.total ?? 0,
+  })}
+  details={resizeConfirmLines()}
   cancelLabel={m.projects_create_cancel()}
   confirmLabel={m.comic_edit_tool_run()}
   onConfirm={() => void handleToolConfirm()}

@@ -25,10 +25,11 @@ const undoMock = vi.hoisted(() => vi.fn());
 const requestClearMock = vi.hoisted(() => vi.fn());
 
 function renderPanel(
-  tool: "convert" | "compress" = "convert",
+  tool: "convert" | "compress" | "resize" = "convert",
   target: "jpeg" | "png" | "webp" = "jpeg",
   running = false,
   backupExists = false,
+  resizeMode: "width" | "height" | "long_edge" | "fixed" = "width",
 ) {
   return render(ComicToolPanel, {
     props: {
@@ -43,6 +44,18 @@ function renderPanel(
       compressQuality: 85,
       compressWebpLossless: false,
       compressPngLevel: 6,
+      resizeMode,
+      resizeWidth: "1860",
+      resizeHeight: "2480",
+      resizeAspectLock: "free",
+      resizeFill: "contain",
+      resizeBackground: "white",
+      resizeHAlign: "center",
+      resizeVAlign: "center",
+      resizeNoUpscale: true,
+      resizeQuality: 85,
+      resizeWebpLossless: false,
+      resizePngLevel: 6,
       running,
       canRun: false,
       hasOutcome: false,
@@ -123,6 +136,23 @@ describe("图片工具面板", () => {
     await user.click(cancel);
     expect(cancelMock).toHaveBeenCalledOnce();
     expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("尺寸调整工具展示模式与目标输入，不展示转换/压缩控件", () => {
+    renderPanel("resize");
+    expect(screen.getByText("Resize mode")).not.toBeNull();
+    expect(screen.getByLabelText("Target width")).not.toBeNull();
+    expect(screen.queryByText("Target format")).toBeNull();
+    expect(screen.queryByText("Scale")).toBeNull();
+    expect(screen.queryByText("×")).toBeNull();
+    expect(screen.queryByText("Aspect lock")).toBeNull();
+    cleanup();
+    vi.clearAllMocks();
+
+    renderPanel("resize", "jpeg", false, false, "fixed");
+    expect(screen.getByText("Aspect lock")).not.toBeNull();
+    expect(screen.getByLabelText("Target width")).not.toBeNull();
+    expect(screen.getByLabelText("Target height")).not.toBeNull();
   });
 
   it("有备份时显示撤销与清除按钮，无备份时隐藏", async () => {

@@ -48,7 +48,7 @@ export const commands = {
 	 */
 	convertComicImages: (id: string, target: ImageTargetFormat, options: ConvertOptions) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("convert_comic_images", { id, target, options })),
 	/**
-	 *  取消图片作业：转换/压缩互斥，任一在跑即置旗，编码循环在文件边界处中断；
+	 *  取消图片作业：转换/压缩/尺寸调整互斥，任一在跑即置旗，编码循环在文件边界处中断；
 	 *  返回是否有在跑作业，无作业时不做任何事。
 	 */
 	cancelComicImages: (id: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("cancel_comic_images", { id })),
@@ -65,6 +65,15 @@ export const commands = {
 	restoreComicCompressBackup: (id: string) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("restore_comic_compress_backup", { id })),
 	/**  清除压缩备份：只删备份目录，当前图片不动；无备份返回假。 */
 	clearComicCompressBackup: (id: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("clear_comic_compress_backup", { id })),
+	/**  预览图片尺寸调整：只读 `content.json` + 图片头（不全解码），返回总数、跳过数与总字节。 */
+	previewComicImageResize: (id: string, options: ResizeOptions) => typedError<ResizePreview, CommandError>(__TAURI_INVOKE("preview_comic_image_resize", { id, options })),
+	/**  查询图片尺寸调整进度：切回页面时回填用；从未开始返回空闲零值，备份位实时计算。 */
+	getComicResizeStatus: (id: string) => typedError<ComicResizeStatus, CommandError>(__TAURI_INVOKE("get_comic_resize_status", { id })),
+	/**
+	 *  调整全量图片尺寸：原地重编码（重排版 + 按源格式重编码），路径与格式不变；
+	 *  成功后清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度。
+	 */
+	resizeComicImages: (id: string, options: ResizeOptions) => typedError<ResizeOutcome, CommandError>(__TAURI_INVOKE("resize_comic_images", { id, options })),
 	/**  扫描孤儿图片：`content.json` 未引用的落盘图片，删页残留从这里清理。 */
 	scanComicOrphans: (id: string) => typedError<ComicOrphans, CommandError>(__TAURI_INVOKE("scan_comic_orphans", { id })),
 	/**  删除孤儿图片：只删扫描命中的无引用图片，返回刷新后的识别大纲。 */
@@ -585,6 +594,15 @@ export type ComicPdfVerticalAlignment =
 "center" | 
 /**  底部对齐。 */
 "bottom";
+
+/**  尺寸调整状态探针：供切回页面时回填进度；从未开始返回空闲零值。 */
+export type ComicResizeStatus = {
+	running: boolean,
+	done_files: number,
+	total_files: number,
+	/**  是否有可撤销的备份（与压缩共用备份目录）。 */
+	has_backup: boolean,
+};
 
 /**  话输入：编辑页全量提交的单话（标题可改、话可增删排序，页须全量覆盖）。 */
 export type ComicVolumeInput = {
@@ -1172,6 +1190,69 @@ export type PunctPreset =
 "SpecialSym" | 
 /**  连续标点：同类标点连发（省略号/破折号 3 连起标，其余 2 连起标）。 */
 "RepeatPunct";
+
+/**  完整适配的补底颜色；JPEG 无透明通道，选透明按白色压平（前端明示）。 */
+export type ResizeBackground = "white" | "black" | "transparent";
+
+/**  固定画布填充方式：与 PDF 导出同语义。 */
+export type ResizeFill = 
+/**  等比适配并补底，完整显示。 */
+"contain" | 
+/**  等比铺满并裁切，无白边。 */
+"cover" | 
+/**  宽高各拉满，可能变形。 */
+"stretch";
+
+/**  尺寸调整方式：目标尺寸的确定口径；百分比模式归压缩所有，此处不提供。 */
+export type ResizeMode = 
+/**  宽固定为 `width_px`，高按比例。 */
+"width" | 
+/**  高固定为 `height_px`，宽按比例。 */
+"height" | 
+/**  最长边固定为 `width_px`（边长复用宽度字段），短边按比例。 */
+"long_edge" | 
+/**  输出恰为 `width_px` × `height_px`，比例不一致时按 `fill` 处理。 */
+"fixed";
+
+/**  尺寸调整参数：原地重编码，保持源格式与路径不变（与压缩同）。 */
+export type ResizeOptions = {
+	/**  调整方式。 */
+	mode: ResizeMode,
+	/**  目标宽度；最长边模式下复用为边长。 */
+	width_px: number,
+	/**  目标高度；宽/最长边模式下忽略。 */
+	height_px: number,
+	/**  填充方式；仅固定模式生效。 */
+	fill: ResizeFill,
+	/**  补底颜色；仅固定 + 完整适配生效。 */
+	background: ResizeBackground,
+	/**  水平位置：铺满裁切的裁切锚点，或小图在画布上的贴放位。 */
+	horizontal_alignment: ComicPdfHorizontalAlignment,
+	/**  垂直位置：同上。 */
+	vertical_alignment: ComicPdfVerticalAlignment,
+	/**  仅缩小：已小于目标的不放大；铺满/拉伸下无意义，后端忽略（前端禁用）。 */
+	no_upscale: boolean,
+	/**  JPEG/WebP 有损质量，1-100。 */
+	quality: number,
+	/**  WebP 无损开关（开则忽略质量）。 */
+	webp_lossless: boolean,
+	/**  PNG 压缩级别，0-9。 */
+	png_level: number,
+};
+
+/**  尺寸调整结果：原地覆盖后的大纲 + 处理/跳过数（与压缩同形）。 */
+export type ResizeOutcome = {
+	outline: ComicOutline,
+	processed: number,
+	skipped: number,
+};
+
+/**  尺寸调整预览：只读 `content.json` + 图片头（不全解码），返回总数、跳过数与总字节。 */
+export type ResizePreview = {
+	total: number,
+	skipped: number,
+	total_bytes: number,
+};
 
 /**  运行平台信息：经 `tauri-plugin-os` 采集，全字段必填，前端逐行展示 */
 export type SystemInfo = {
