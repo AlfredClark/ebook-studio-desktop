@@ -270,6 +270,8 @@
       const nonce = (chapterNonce += 1);
       const result = await commands
         .previewNovelTxtTitle(uuid, kind, kind === "custom" ? pattern : "", false, numbering)
+        // 探针调用：无章节是合法空态，静默隐藏，不走自动上报。
+        .failed(() => {})
         .result();
       if (nonce !== chapterNonce || result.status === "error") {
         return;
@@ -279,6 +281,8 @@
       const nonce = (volumeNonce += 1);
       const result = await commands
         .previewNovelTxtTitle(uuid, kind, kind === "custom" ? pattern : "", true, numbering)
+        // 探针调用：无标题卷是合法空态，静默隐藏，不走自动上报。
+        .failed(() => {})
         .result();
       if (nonce !== volumeNonce || result.status === "error") {
         return;

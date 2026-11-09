@@ -380,6 +380,8 @@
         true,
         numbering,
       )
+      // 探针调用：无标题话是合法空态，静默隐藏，不走自动上报。
+      .failed(() => {})
       .result();
     if (nonce !== pdfVolumeNonce || result.status === "error") {
       return;
@@ -448,6 +450,8 @@
       const nonce = (pageNonce += 1);
       const result = await commands
         .previewComicTxtTitle(uuid, kind, kind === "custom" ? pattern : "", false, numbering)
+        // 探针调用：无页面是合法空态，静默隐藏，不走自动上报。
+        .failed(() => {})
         .result();
       if (nonce !== pageNonce || result.status === "error") {
         return;
@@ -457,6 +461,8 @@
       const nonce = (volumeNonce += 1);
       const result = await commands
         .previewComicTxtTitle(uuid, kind, kind === "custom" ? pattern : "", true, numbering)
+        // 探针调用：无标题话是合法空态，静默隐藏，不走自动上报。
+        .failed(() => {})
         .result();
       if (nonce !== volumeNonce || result.status === "error") {
         return;

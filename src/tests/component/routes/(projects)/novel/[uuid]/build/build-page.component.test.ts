@@ -94,9 +94,13 @@ vi.mock("@codemirror/lang-css", () => ({ css: () => ({}) }));
 type FakeResult =
   { status: "ok"; data: unknown } | { status: "error"; error: { kind: string; message: string } };
 
-/** 与 `EnhancedCommand` 行为一致的替身：只实现本页面用到的 `result()` */
-function fakeCommand(result: FakeResult): { result: () => Promise<FakeResult> } {
-  return { result: () => Promise.resolve(result) };
+/** 与 `EnhancedCommand` 行为一致的替身：实现本页面用到的 `failed()` + `result()` 链 */
+function fakeCommand(result: FakeResult): {
+  failed: () => { result: () => Promise<FakeResult> };
+  result: () => Promise<FakeResult>;
+} {
+  const tail = { result: () => Promise.resolve(result) };
+  return { failed: () => tail, ...tail };
 }
 
 const outcome: BuildOutcome = {
