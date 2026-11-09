@@ -390,6 +390,12 @@ pub fn export_in(
     } else {
         Vec::new()
     };
+    // 文档元数据：开关由所选字段是否为空决定，为空即关闭（字节与此前一致）。
+    let pdf_doc_info = if items.pdf {
+        super::comic_pdf::collect_doc_info(&metadata, &pdf_options.metadata)
+    } else {
+        super::comic_pdf::PdfDocInfo::default()
+    };
 
     // 落盘条目分两组，互不混入：
     // 根直出组（多选进书名目录 <stem>/，单选直出 dest 根）：EPUB 与独立封面；
@@ -556,6 +562,7 @@ pub fn export_in(
             pdf_cover.as_ref(),
             pdf_options,
             &pdf_outline,
+            &pdf_doc_info,
             Some(&report_pdf_progress),
         )?;
         done = done.saturating_add(saturating_u32(pdf_units));
@@ -695,6 +702,7 @@ mod tests {
     use super::super::novel_export::BuildTitleOptions;
     use super::super::novel_export::ChapterNumbering;
     use super::super::novel_export::ExportNaming;
+    use super::super::novel_export::MetadataField;
     use super::super::novel_export::TxtTitleKind;
     use super::super::projects;
     use super::super::projects::ProjectType;
@@ -1306,6 +1314,107 @@ mod tests {
             )
             .is_err()
         );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn exports_pdf_with_doc_info_and_lang() {
+        let (root, dir) = parsed_project("pdf-docinfo", &["01.png"]);
+        super::super::project_metadata::load_or_init_metadata_in(&dir).expect("init metadata");
+        let meta_path = dir.join("metadata.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&meta_path).expect("read metadata"))
+                .expect("parse metadata");
+        meta["title"] = serde_json::json!("测试书");
+        meta["creator"] = serde_json::json!("测试作者");
+        meta["subjects"] = serde_json::json!(["冒险", "", "热血"]);
+        meta["description"] = serde_json::json!(["第一行", "  ", "第二行"]);
+        std::fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(&meta).expect("serialize metadata"),
+        )
+        .expect("write metadata");
+        let dest = root.join("dest");
+        std::fs::create_dir_all(&dest).expect("create destination");
+        let pdf_options = ComicPdfOptions {
+            metadata: vec![
+                MetadataField::Title,
+                MetadataField::Creator,
+                MetadataField::Subjects,
+                MetadataField::Description,
+                MetadataField::Language,
+                MetadataField::Publisher,
+            ],
+            ..ComicPdfOptions::default()
+        };
+
+        export_in(
+            &dir,
+            dest.to_str().expect("utf8 destination"),
+            ExportNaming::Project,
+            "",
+            &ComicExportItems {
+                epub: false,
+                pdf: true,
+                images: false,
+                cover: false,
+            },
+            &default_titles(),
+            &pdf_options,
+            ComicImagesMode::Folder,
+            None,
+        )
+        .expect("export PDF");
+
+        let pdf = std::fs::read(dest.join("雾镇.pdf")).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Lang (zh-CN)"));
+        assert_eq!(
+            super::super::comic_pdf::decoded_text_values(&pdf, "Title"),
+            vec!["测试书".to_string()]
+        );
+        assert_eq!(
+            super::super::comic_pdf::decoded_text_values(&pdf, "Author"),
+            vec!["测试作者".to_string()]
+        );
+        // 空主题词被过滤，无落点字段被忽略。
+        assert_eq!(
+            super::super::comic_pdf::decoded_text_values(&pdf, "Keywords"),
+            vec!["冒险、热血".to_string()]
+        );
+        assert_eq!(
+            super::super::comic_pdf::decoded_text_values(&pdf, "Subject"),
+            vec!["第一行\n第二行".to_string()]
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn exports_pdf_without_doc_info_by_default() {
+        let (root, dir) = parsed_project("pdf-no-docinfo", &["01.png"]);
+        let dest = root.join("dest");
+        std::fs::create_dir_all(&dest).expect("create destination");
+        export_in(
+            &dir,
+            dest.to_str().expect("utf8 destination"),
+            ExportNaming::Project,
+            "",
+            &ComicExportItems {
+                epub: false,
+                pdf: true,
+                images: false,
+                cover: false,
+            },
+            &default_titles(),
+            &ComicPdfOptions::default(),
+            ComicImagesMode::Folder,
+            None,
+        )
+        .expect("export PDF");
+        let pdf = std::fs::read(dest.join("雾镇.pdf")).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(!text.contains("/Info"));
+        assert!(!text.contains("/Lang"));
         cleanup(&root);
     }
 

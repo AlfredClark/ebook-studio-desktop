@@ -15,7 +15,8 @@ use image::metadata::Orientation;
 use pdf_writer::{Chunk, Content, Filter, Name, Rect, Ref, TextStr};
 
 use super::comic_files::ComicContent;
-use super::novel_export::TxtTitleKind;
+use super::novel_export::{MetadataField, TxtTitleKind};
+use super::project_metadata::ProjectMetadata;
 
 const MIN_DPI: u32 = 72;
 const MAX_DPI: u32 = 600;
@@ -95,6 +96,8 @@ pub struct ComicPdfOptions {
     pub volume_kind: TxtTitleKind,
     /// 话标题自定义模板：`volume_kind` 为自定义时生效。
     pub volume_pattern: String,
+    /// 写入文档元数据：为空即关闭；非空时按所选字段写入 Info（为空跳过）。
+    pub metadata: Vec<MetadataField>,
 }
 
 impl Default for ComicPdfOptions {
@@ -110,6 +113,7 @@ impl Default for ComicPdfOptions {
             include_cover: false,
             volume_kind: TxtTitleKind::Arabic,
             volume_pattern: String::new(),
+            metadata: Vec::new(),
         }
     }
 }
@@ -232,13 +236,15 @@ fn validate_resolved_page_size(page_size_px: (f64, f64), dpi: u32) -> anyhow::Re
 }
 
 /// 生成多页 PDF；仅保留当前页的解码数据，进度按实际 PDF 页数推进。
-/// 书签为空时不写 Outline 对象，单话输出与此前字节形态一致。
+/// 书签为空时不写 Outline 对象，文档元数据为空时不写 Info 对象，
+/// 单话无元数据输出与此前字节形态一致。
 pub(super) fn write_pdf_file(
     destination: &Path,
     comic_pages: &[PdfPageImage],
     cover: Option<&PdfPageImage>,
     options: &ComicPdfOptions,
     outline: &[PdfOutlineEntry],
+    doc_info: &PdfDocInfo,
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
     validate_pdf_options(options)?;
@@ -269,6 +275,7 @@ pub(super) fn write_pdf_file(
         shared_page_size_px,
         options,
         outline,
+        doc_info,
         progress,
     ) {
         let _ = fs::remove_file(&temp_path);
@@ -297,6 +304,116 @@ fn output_pages(
     }
     pages.extend_from_slice(comic_pages);
     Ok(pages)
+}
+
+/// PDF 文档元数据：Info 条目与目录语言；两者皆空时不写任何元数据对象。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct PdfDocInfo {
+    /// Info 字典条目：键不含斜杠，值非空。
+    pub entries: Vec<(&'static [u8], String)>,
+    /// 目录语言（BCP 47，如 `zh-CN`）。
+    pub lang: Option<String>,
+}
+
+/// 应用名：文档 Creator/Producer 落款，与打包产物外壳一致。
+const APP_NAME: &str = "Ebook Studio";
+
+/// 解析文档元数据映射：标题/作者/主题词/简介进 Info，语言进目录；
+/// 空值跳过，其余字段无对应项直接忽略。
+pub(super) fn collect_doc_info(metadata: &ProjectMetadata, fields: &[MetadataField]) -> PdfDocInfo {
+    fn push_non_empty(entries: &mut Vec<(&'static [u8], String)>, key: &'static [u8], value: &str) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            entries.push((key, trimmed.to_string()));
+        }
+    }
+
+    let mut info = PdfDocInfo::default();
+    for field in fields {
+        match field {
+            MetadataField::Title => push_non_empty(&mut info.entries, b"Title", &metadata.title),
+            MetadataField::Creator => {
+                push_non_empty(&mut info.entries, b"Author", &metadata.creator);
+            }
+            MetadataField::Subjects => {
+                let joined = metadata
+                    .subjects
+                    .iter()
+                    .map(|subject| subject.trim())
+                    .filter(|subject| !subject.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("、");
+                push_non_empty(&mut info.entries, b"Keywords", &joined);
+            }
+            MetadataField::Description => {
+                let joined = metadata
+                    .description
+                    .iter()
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                push_non_empty(&mut info.entries, b"Subject", &joined);
+            }
+            MetadataField::Language => {
+                let language = metadata.language.trim();
+                if !language.is_empty() && info.lang.is_none() {
+                    info.lang = Some(language.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
+/// PDF 时间戳：`D:年月日时分秒+00'00'`，业务 UTC 口径。
+fn pdf_timestamp(now: chrono::DateTime<chrono::Utc>) -> String {
+    now.format("D:%Y%m%d%H%M%S+00'00'").to_string()
+}
+
+/// 写入文档信息字典；中文自动 UTF-16 编码，软件落款恒写。返回对象编号供 trailer 引用。
+fn write_info_object<W: Write>(
+    sink: &mut PdfObjectSink<'_, W>,
+    reference: Ref,
+    info: &PdfDocInfo,
+    timestamp: &str,
+) -> anyhow::Result<Ref> {
+    let mut chunk = Chunk::new();
+    {
+        let mut dict = chunk.indirect(reference).dict();
+        for (key, value) in &info.entries {
+            dict.pair(Name(key), TextStr(value));
+        }
+        dict.pair(Name(b"Creator"), TextStr(APP_NAME))
+            .pair(Name(b"Producer"), TextStr(APP_NAME))
+            .pair(Name(b"CreationDate"), TextStr(timestamp))
+            .pair(Name(b"ModDate"), TextStr(timestamp));
+    }
+    sink.write_object(&chunk)?;
+    Ok(reference)
+}
+
+/// 是否有可写文档元数据：条目与语言皆空时不写任何元数据对象。
+const fn has_doc_meta(info: &PdfDocInfo) -> bool {
+    !info.entries.is_empty() || info.lang.is_some()
+}
+
+/// 文档信息字典编号：紧随书签对象之后，无书签时紧随页面对象。
+fn info_object_ref(pages_len: usize, outline_len: usize) -> anyhow::Result<Ref> {
+    let first = pages_len
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(3))
+        .context("PDF info object id overflow")?;
+    let id = if outline_len == 0 {
+        first
+    } else {
+        first
+            .checked_add(1 + outline_len)
+            .context("PDF info object id overflow")?
+    };
+    let id = i32::try_from(id).context("PDF info object id exceeds format limit")?;
+    Ok(Ref::new(id))
 }
 
 /// PDF 书签条目：话标题与目标输出页下标（含封面页偏移）。
@@ -387,6 +504,7 @@ fn write_pdf_temp(
     shared_page_size_px: Option<(f64, f64)>,
     options: &ComicPdfOptions,
     outline: &[PdfOutlineEntry],
+    doc_info: &PdfDocInfo,
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
     let file = OpenOptions::new()
@@ -401,6 +519,7 @@ fn write_pdf_temp(
         shared_page_size_px,
         options,
         outline,
+        doc_info,
         progress,
     )?;
     writer.flush().context("failed to flush temporary PDF")?;
@@ -427,6 +546,7 @@ fn write_pdf_to<W: Write>(
     shared_page_size_px: Option<(f64, f64)>,
     options: &ComicPdfOptions,
     outline: &[PdfOutlineEntry],
+    doc_info: &PdfDocInfo,
     progress: Option<&dyn Fn(u32, u32)>,
 ) -> anyhow::Result<()> {
     validate_pdf_options(options)?;
@@ -446,11 +566,13 @@ fn write_pdf_to<W: Write>(
             .checked_add(1)
             .context("PDF outline object count overflow")?
     };
+    let info_objects = usize::from(has_doc_meta(doc_info));
     let object_count = pages
         .len()
         .checked_mul(3)
         .and_then(|count| count.checked_add(2))
         .and_then(|count| count.checked_add(outline_objects))
+        .and_then(|count| count.checked_add(info_objects))
         .context("PDF object count overflow")?;
     anyhow::ensure!(
         i32::try_from(object_count).is_ok(),
@@ -489,9 +611,26 @@ fn write_pdf_to<W: Write>(
             outline_first_ref(pages.len())?,
         )?)
     };
+    let info_ref = if has_doc_meta(doc_info) {
+        let timestamp = pdf_timestamp(chrono::Utc::now());
+        Some(write_info_object(
+            &mut sink,
+            info_object_ref(pages.len(), outline.len())?,
+            doc_info,
+            &timestamp,
+        )?)
+    } else {
+        None
+    };
 
-    write_page_tree(&mut sink, &page_refs, page_count, outline_root)?;
-    sink.finish()
+    write_page_tree(
+        &mut sink,
+        &page_refs,
+        page_count,
+        outline_root,
+        doc_info.lang.as_deref(),
+    )?;
+    sink.finish(info_ref)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -650,12 +789,13 @@ fn write_page_object<W: Write>(
     sink.write_object(&chunk)
 }
 
-/// 写入页树和目录根节点；有书签时目录挂载 Outline 并默认展开目录面板。
+/// 写入页树、目录根节点与文档语言；有书签时目录挂载 Outline 并默认展开目录面板。
 fn write_page_tree<W: Write>(
     sink: &mut PdfObjectSink<'_, W>,
     page_refs: &[Ref],
     page_count: i32,
     outline_root: Option<Ref>,
+    lang: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut pages = Chunk::new();
     pages
@@ -672,6 +812,9 @@ fn write_page_tree<W: Write>(
         if let Some(root) = outline_root {
             dict.pair(Name(b"Outlines"), root)
                 .pair(Name(b"PageMode"), Name(b"UseOutlines"));
+        }
+        if let Some(lang) = lang {
+            dict.pair(Name(b"Lang"), TextStr(lang));
         }
     }
     sink.write_object(&catalog)
@@ -723,7 +866,7 @@ impl<'a, W: Write> PdfObjectSink<'a, W> {
         Ok(())
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
+    fn finish(&mut self, info: Option<Ref>) -> anyhow::Result<()> {
         let xref_offset = self.offset;
         self.write_bytes(format!("xref\n0 {}\n", self.offsets.len()).as_bytes())?;
         self.write_bytes(b"0000000000 65535 f \n")?;
@@ -733,11 +876,20 @@ impl<'a, W: Write> PdfObjectSink<'a, W> {
             anyhow::ensure!(offset <= 9_999_999_999, "PDF file exceeds xref table limit");
             self.write_bytes(format!("{offset:010} 00000 n \n").as_bytes())?;
         }
-        let trailer = format!(
-            "trailer\n<< /Size {} /Root {} 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
-            self.offsets.len(),
-            CATALOG_REF.get()
-        );
+        let trailer = if let Some(info) = info {
+            format!(
+                "trailer\n<< /Size {} /Root {} 0 R /Info {} 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+                self.offsets.len(),
+                CATALOG_REF.get(),
+                info.get()
+            )
+        } else {
+            format!(
+                "trailer\n<< /Size {} /Root {} 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+                self.offsets.len(),
+                CATALOG_REF.get()
+            )
+        };
         self.write_bytes(trailer.as_bytes())
     }
 }
@@ -1027,13 +1179,14 @@ pub(super) fn average_page_dimensions(dimensions: &[(u32, u32)]) -> anyhow::Resu
     Ok((width_sum / count, height_sum / count))
 }
 
-/// 解析 PDF 书签标题：十六进制串按 UTF-16BE 解码，字面串按转义解码，供单测跨模块复用。
+/// 解析 PDF 文本串：十六进制串按 UTF-16BE 解码，字面串按转义解码，供单测跨模块复用。
 #[cfg(test)]
-pub(super) fn decoded_outline_titles(pdf: &[u8]) -> Vec<String> {
-    fn find_title(pdf: &[u8], from: usize) -> Option<usize> {
+pub(super) fn decoded_text_values(pdf: &[u8], key: &str) -> Vec<String> {
+    fn find_key(pdf: &[u8], key: &str, from: usize) -> Option<usize> {
+        let needle = format!("/{key} ");
         pdf.get(from..)?
-            .windows("/Title ".len())
-            .position(|window| window == b"/Title ")
+            .windows(needle.len())
+            .position(|window| window == needle.as_bytes())
             .map(|index| from + index)
     }
 
@@ -1044,8 +1197,8 @@ pub(super) fn decoded_outline_titles(pdf: &[u8]) -> Vec<String> {
 
     let mut titles = Vec::new();
     let mut cursor = 0;
-    while let Some(offset) = find_title(pdf, cursor) {
-        cursor = offset + "/Title ".len();
+    while let Some(offset) = find_key(pdf, key, cursor) {
+        cursor = offset + "/".len() + key.len() + " ".len();
         let title = if pdf[cursor] == b'<' {
             cursor += 1;
             let mut raw = Vec::new();
@@ -1089,11 +1242,17 @@ pub(super) fn decoded_outline_titles(pdf: &[u8]) -> Vec<String> {
     titles
 }
 
+/// 解析 PDF 书签标题（`/Title` 的特化），供单测跨模块复用。
+#[cfg(test)]
+pub(super) fn decoded_outline_titles(pdf: &[u8]) -> Vec<String> {
+    decoded_text_values(pdf, "Title")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ComicPdfFillMode, ComicPdfHorizontalAlignment, ComicPdfOptions, ComicPdfPageSize,
-        ComicPdfVerticalAlignment, Orientation, PdfOutlineEntry, PdfPageImage,
+        ComicPdfVerticalAlignment, Orientation, PdfDocInfo, PdfOutlineEntry, PdfPageImage,
         average_page_dimensions, calculate_page_layout, inspect_page_image,
         validate_image_dimensions, validate_pdf_options, write_pdf_file, write_pdf_to,
     };
@@ -1260,6 +1419,7 @@ mod tests {
             None,
             &ComicPdfOptions::default(),
             &[],
+            &PdfDocInfo::default(),
             None,
         );
         assert!(
@@ -1299,7 +1459,16 @@ mod tests {
             ..ComicPdfOptions::default()
         };
 
-        write_pdf_file(&output, &pages, None, &options, &[], None).expect("write PDF");
+        write_pdf_file(
+            &output,
+            &pages,
+            None,
+            &options,
+            &[],
+            &PdfDocInfo::default(),
+            None,
+        )
+        .expect("write PDF");
 
         let pdf = std::fs::read(&output).expect("read PDF");
         let text = String::from_utf8_lossy(&pdf);
@@ -1339,6 +1508,7 @@ mod tests {
             None,
             &ComicPdfOptions::default(),
             &outline,
+            &PdfDocInfo::default(),
             None,
         )
         .expect("write PDF");
@@ -1354,6 +1524,58 @@ mod tests {
         // 两页均为 1x1：页对象编号为 5 与 8，书签直指对应页。
         assert!(text.contains("/Dest [5 0 R /Fit]"));
         assert!(text.contains("/Dest [8 0 R /Fit]"));
+        std::fs::remove_dir_all(dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn doc_info_writes_info_dict_and_lang() {
+        let dir = std::env::temp_dir().join(format!(
+            "ebook-studio-comic-pdf-docinfo-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let image_path = dir.join("page.png");
+        std::fs::write(&image_path, PIXEL_PNG).expect("write test image");
+        let image = inspect_page_image(&image_path).expect("inspect test image");
+        let info = PdfDocInfo {
+            entries: vec![
+                (&b"Title"[..], "测试书".to_string()),
+                (&b"Author"[..], "测试作者".to_string()),
+            ],
+            lang: Some("zh-CN".to_string()),
+        };
+        let output = dir.join("book.pdf");
+
+        write_pdf_file(
+            &output,
+            &[image],
+            None,
+            &ComicPdfOptions::default(),
+            &[],
+            &info,
+            None,
+        )
+        .expect("write PDF");
+
+        let pdf = std::fs::read(&output).expect("read PDF");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Creator (Ebook Studio)"));
+        assert!(text.contains("/Producer (Ebook Studio)"));
+        assert!(text.contains("/CreationDate (D:"));
+        assert!(text.contains("/ModDate (D:"));
+        assert!(text.contains("/Lang (zh-CN)"));
+        // 单页时信息字典编号为 6，trailer 引用同步。
+        assert!(text.contains("/Info 6 0 R"));
+        // 对象总数 2 + 3 + 1，交叉引用表同步扩容。
+        assert!(text.contains("xref\n0 7\n"));
+        assert_eq!(
+            super::decoded_text_values(&pdf, "Title"),
+            vec!["测试书".to_string()]
+        );
+        assert_eq!(
+            super::decoded_text_values(&pdf, "Author"),
+            vec!["测试作者".to_string()]
+        );
         std::fs::remove_dir_all(dir).expect("remove test dir");
     }
 
@@ -1431,6 +1653,7 @@ mod tests {
             Some((1.0, 1.0)),
             &options,
             &[],
+            &PdfDocInfo::default(),
             Some(&emit_progress),
         )
         .expect("write PDF");
@@ -1470,7 +1693,16 @@ mod tests {
             ..ComicPdfOptions::default()
         };
 
-        write_pdf_file(&output, &pages, Some(&cover), &options, &[], None).expect("write PDF");
+        write_pdf_file(
+            &output,
+            &pages,
+            Some(&cover),
+            &options,
+            &[],
+            &PdfDocInfo::default(),
+            None,
+        )
+        .expect("write PDF");
 
         let pdf = std::fs::read(&output).expect("read PDF");
         assert_eq!(
@@ -1508,6 +1740,7 @@ mod tests {
                 None,
                 &ComicPdfOptions::default(),
                 &[],
+                &PdfDocInfo::default(),
                 None
             )
             .is_err()
@@ -1543,6 +1776,7 @@ mod tests {
             None,
             &ComicPdfOptions::default(),
             &[],
+            &PdfDocInfo::default(),
             None,
         )
         .expect("write PDF");

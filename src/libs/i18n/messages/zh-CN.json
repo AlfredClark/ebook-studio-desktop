@@ -614,6 +614,7 @@
   "comic_export_pdf_align_top": "上",
   "comic_export_pdf_align_bottom": "下",
   "comic_export_pdf_include_cover": "将项目封面作为 PDF 首页",
+  "comic_export_pdf_metadata_hint": "开启后自动写入有内容的标题、作者、主题词、简介与语言，为空跳过。",
   "comic_export_images_label": "原图",
   "comic_export_images_mode_label": "导出形态",
   "comic_export_images_folder": "文件夹",

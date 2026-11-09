@@ -9,12 +9,22 @@ import type {
   ComicPdfVerticalAlignment,
   ComicImagesMode,
   ExportNaming,
+  MetadataField,
   TxtTitleKind,
 } from "#libs/commands/types";
 
 const MIN_PDF_DPI = 72;
 const MAX_PDF_DPI = 600;
 const MAX_PDF_PAGE_SIZE_PT = 14_400;
+
+/** PDF 文档元数据字段：有落点的 5 项（著录序），开启时整体发送，为空跳过。 */
+export const PDF_METADATA_FIELDS: MetadataField[] = [
+  "title",
+  "creator",
+  "subjects",
+  "description",
+  "language",
+];
 
 /** 漫画 PDF 固定尺寸默认值：3:4 竖构图，300DPI 下约 446×595pt。 */
 export const DEFAULT_PDF_WIDTH_PX = "1860";
@@ -86,6 +96,7 @@ export type ComicPdfFormValues = {
   include_cover: boolean;
   volume_kind: TxtTitleKind;
   volume_pattern: string;
+  metadata: MetadataField[];
 };
 
 /** 命名候选：项目名与书名相同合并为一项（取项目名）。 */
@@ -158,6 +169,7 @@ export function buildComicPdfOptions(values: ComicPdfFormValues): ComicPdfOption
     include_cover: values.include_cover,
     volume_kind: values.volume_kind,
     volume_pattern: values.volume_pattern,
+    metadata: values.metadata,
   };
 }
 

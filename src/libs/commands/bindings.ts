@@ -575,6 +575,8 @@ export type ComicPdfOptions = {
 	volume_kind: TxtTitleKind,
 	/**  话标题自定义模板：`volume_kind` 为自定义时生效。 */
 	volume_pattern: string,
+	/**  写入文档元数据：为空即关闭；非空时按所选字段写入 Info（为空跳过）。 */
+	metadata: MetadataField[],
 };
 
 /**  PDF 页面尺寸来源。 */

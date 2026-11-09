@@ -614,6 +614,7 @@
   "comic_export_pdf_align_top": "Top",
   "comic_export_pdf_align_bottom": "Bottom",
   "comic_export_pdf_include_cover": "Use project cover as the first PDF page",
+  "comic_export_pdf_metadata_hint": "Writes title, author, keywords, description, and language when present; empty fields are skipped.",
   "comic_export_images_label": "Source images",
   "comic_export_images_mode_label": "Export as",
   "comic_export_images_folder": "Folder",

@@ -52,6 +52,7 @@
     DEFAULT_PDF_HEIGHT_PX,
     DEFAULT_PDF_WIDTH_PX,
     PDF_ASPECT_LOCKS,
+    PDF_METADATA_FIELDS,
     buildComicPdfOptions,
     canExport,
     isValidCustomName,
@@ -91,6 +92,7 @@
   let pdfDpi = $state("300");
   let pdfVolumeKind = $state<TxtTitleKind>("arabic");
   let pdfVolumePattern = $state("");
+  let includePdfMetadata = $state(false);
   let pdfFillMode = $state<ComicPdfFillMode>("contain");
   let pdfHorizontalAlignment = $state<ComicPdfHorizontalAlignment>("center");
   let pdfVerticalAlignment = $state<ComicPdfVerticalAlignment>("center");
@@ -152,6 +154,7 @@
       include_cover: includePdfCover,
       volume_kind: pdfVolumeKind,
       volume_pattern: pdfVolumePattern,
+      metadata: includePdfMetadata ? PDF_METADATA_FIELDS : [],
     }),
   );
   const pdfHorizontalAlignmentItems = $derived([
@@ -248,8 +251,9 @@
     pdfHorizontalAlignment = "center";
     pdfVerticalAlignment = "center";
     includePdfCover = false;
-    // PDF 书签话标题默认与原图同口径：10 话以上补零，以下保持第n话审美。
-    pdfVolumeKind = status.volume_count >= 10 ? "padded" : "arabic";
+    includePdfMetadata = false;
+    // PDF 书签话标题默认用原文格式（原图导出保持现有口径）。
+    pdfVolumeKind = "original";
     pdfVolumePattern = "";
     pdfVolumePreview = null;
     naming = "project";
@@ -501,6 +505,7 @@
       include_cover: false,
       volume_kind: pdfVolumeKind,
       volume_pattern: pdfVolumePattern,
+      metadata: includePdfMetadata ? [...PDF_METADATA_FIELDS] : [],
     };
     setExportRunning(uuid, true);
     const result = await commands
@@ -907,6 +912,19 @@
                 </div>
               {/if}
             {/if}
+            <label class="flex cursor-pointer items-center gap-2 py-2 text-sm">
+              <Checkbox
+                checked={includePdfMetadata}
+                disabled={exporting}
+                onCheckedChange={(value) => (includePdfMetadata = value === true)}
+              />
+              <span class="min-w-0 flex-1">
+                <span class="font-medium">{m.export_meta_label()}</span>
+                <span class="block text-xs text-muted-foreground">
+                  {m.comic_export_pdf_metadata_hint()}
+                </span>
+              </span>
+            </label>
             {#if pdfOptions === null}
               <p role="alert" class="text-xs text-destructive">
                 {m.comic_export_pdf_settings_invalid()}

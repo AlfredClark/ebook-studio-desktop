@@ -8,6 +8,7 @@ import {
   DEFAULT_PDF_HEIGHT_PX,
   DEFAULT_PDF_WIDTH_PX,
   PDF_ASPECT_LOCKS,
+  PDF_METADATA_FIELDS,
   canExport,
   buildComicPdfOptions,
   isValidCustomName,
@@ -94,6 +95,7 @@ describe("漫画导出表单", () => {
         include_cover: true,
         volume_kind: "arabic",
         volume_pattern: "",
+        metadata: [],
       }),
     ).toEqual({
       page_size: "average",
@@ -106,6 +108,7 @@ describe("漫画导出表单", () => {
       include_cover: true,
       volume_kind: "arabic",
       volume_pattern: "",
+      metadata: [],
     });
   });
 
@@ -121,6 +124,7 @@ describe("漫画导出表单", () => {
       include_cover: false,
       volume_kind: "arabic" as const,
       volume_pattern: "",
+      metadata: [],
     };
     expect(buildComicPdfOptions(base)?.width_px).toBe(2480);
     expect(buildComicPdfOptions({ ...base, width_px: "0" })).toBeNull();
@@ -141,6 +145,7 @@ describe("漫画导出表单", () => {
       include_cover: false,
       volume_kind: "arabic" as const,
       volume_pattern: "",
+      metadata: [],
     };
     expect(buildComicPdfOptions(base)).not.toBeNull();
     expect(buildComicPdfOptions({ ...base, width_px: "60001" })).toBeNull();
@@ -188,8 +193,19 @@ describe("漫画导出表单", () => {
         include_cover: false,
         volume_kind: "arabic",
         volume_pattern: "",
+        metadata: [],
       }),
     ).not.toBeNull();
+  });
+
+  it("PDF 文档元数据字段固定为 5 个有落点项", () => {
+    expect(PDF_METADATA_FIELDS).toEqual([
+      "title",
+      "creator",
+      "subjects",
+      "description",
+      "language",
+    ]);
   });
 
   it("PDF 原图尺寸透传且忽略宽高", () => {
@@ -205,6 +221,7 @@ describe("漫画导出表单", () => {
         include_cover: false,
         volume_kind: "padded",
         volume_pattern: "",
+        metadata: [],
       }),
     ).toEqual({
       page_size: "original",
@@ -217,6 +234,7 @@ describe("漫画导出表单", () => {
       include_cover: false,
       volume_kind: "padded",
       volume_pattern: "",
+      metadata: [],
     });
   });
 
