@@ -46,3 +46,11 @@ pub async fn validate_novel_package(
 ) -> CommandResult<ValidationOutcome> {
     Ok(novel_package::validate_package(&app, &id).await?)
 }
+
+/// 打开打包目录：调系统文件管理器定位 `dist/`，不存在直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_novel_package_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(novel_package::open_dist_dir(&app, &id)?)
+}

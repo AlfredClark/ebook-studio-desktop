@@ -237,6 +237,25 @@ pub fn open_export_dir(app: &tauri::AppHandle, dir: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// 在系统文件管理器中打开项目内已存在的目录；调用方先解析出绝对路径。
+pub fn open_existing_dir(
+    app: &tauri::AppHandle,
+    dir: &std::path::Path,
+    what: &str,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use tauri_plugin_opener::OpenerExt;
+
+    if !dir.is_dir() {
+        anyhow::bail!("{what} directory not found: {}", dir.display());
+    }
+    let dir = dir.to_str().context("directory path is not valid UTF-8")?;
+    app.opener()
+        .open_path(dir, None::<&str>)
+        .with_context(|| format!("failed to open {what} dir"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

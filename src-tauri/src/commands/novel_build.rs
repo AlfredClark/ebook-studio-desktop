@@ -100,3 +100,23 @@ pub fn format_all_novel_build_files(
 ) -> CommandResult<FormatOutcome> {
     Ok(novel_build::format_all_build_files(&app, &id)?)
 }
+
+/// 打开构建目录：调系统文件管理器定位 `build/`，不存在直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_novel_build_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(novel_build::open_build_dir(&app, &id)?)
+}
+
+/// 打开构建文件所在目录：路径经既有校验防穿越，顶层文件的所在目录即构建根。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_novel_build_file_dir(
+    app: tauri::AppHandle,
+    id: String,
+    path: String,
+) -> CommandResult<()> {
+    Ok(novel_build::open_build_file_dir(&app, &id, &path)?)
+}

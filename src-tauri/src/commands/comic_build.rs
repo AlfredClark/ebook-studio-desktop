@@ -119,3 +119,23 @@ pub fn format_all_comic_build_files(
 ) -> CommandResult<FormatOutcome> {
     Ok(novel_build::format_all_build_files(&app, &id)?)
 }
+
+/// 打开构建目录：实现复用小说构建页的通用逻辑。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_comic_build_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(novel_build::open_build_dir(&app, &id)?)
+}
+
+/// 打开构建文件所在目录：实现复用小说构建页的通用逻辑。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_comic_build_file_dir(
+    app: tauri::AppHandle,
+    id: String,
+    path: String,
+) -> CommandResult<()> {
+    Ok(novel_build::open_build_file_dir(&app, &id, &path)?)
+}

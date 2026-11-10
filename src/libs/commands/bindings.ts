@@ -119,6 +119,10 @@ export const commands = {
 	formatComicBuildText: (id: string, path: string, content: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_comic_build_text", { id, path, content })),
 	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
 	formatAllComicBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_comic_build_files", { id })),
+	/**  打开构建目录：实现复用小说构建页的通用逻辑。 */
+	openComicBuildDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_comic_build_dir", { id })),
+	/**  打开构建文件所在目录：实现复用小说构建页的通用逻辑。 */
+	openComicBuildFileDir: (id: string, path: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_comic_build_file_dir", { id, path })),
 	/**
 	 *  打包漫画：落盘 `dist/书名.epub` 后自动校验一次，进度经 `comic-package-progress` 推送。
 	 *  事件名唯一来源是 `features::comic_package::PACKAGE_PROGRESS_EVENT`，改名时前端订阅同步改。
@@ -137,6 +141,8 @@ export const commands = {
 	getComicPackageProgress: (id: string) => typedError<PackagingStatus, CommandError>(__TAURI_INVOKE("get_comic_package_progress", { id })),
 	/**  校验已有产物：无包直接报错，前端引导先打包。 */
 	validateComicPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_comic_package", { id })),
+	/**  打开打包目录：实现复用小说打包页的通用逻辑。 */
+	openComicPackageDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_comic_package_dir", { id })),
 	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
 	getComicExportStatus: (id: string) => typedError<ComicExportStatus, CommandError>(__TAURI_INVOKE("get_comic_export_status", { id })),
 	/**  查询导出作业状态：切回页面时回填进度；从未开始返回空闲零值。 */
@@ -245,6 +251,10 @@ export const commands = {
 	formatNovelBuildText: (id: string, path: string, content: string) => typedError<string, CommandError>(__TAURI_INVOKE("format_novel_build_text", { id, path, content })),
 	/**  批量格式化构建文件：逐个落盘，单个失败不中断。 */
 	formatAllNovelBuildFiles: (id: string) => typedError<FormatOutcome, CommandError>(__TAURI_INVOKE("format_all_novel_build_files", { id })),
+	/**  打开构建目录：调系统文件管理器定位 `build/`，不存在直接报错。 */
+	openNovelBuildDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_novel_build_dir", { id })),
+	/**  打开构建文件所在目录：路径经既有校验防穿越，顶层文件的所在目录即构建根。 */
+	openNovelBuildFileDir: (id: string, path: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_novel_build_file_dir", { id, path })),
 	/**  打包小说：落盘 `dist/书名.epub` 后自动校验一次，进度经 `novel-package-progress` 推送。 */
 	packageNovelContent: (id: string) => typedError<PackageOutcome, CommandError>(__TAURI_INVOKE("package_novel_content", { id })),
 	/**  查询打包状态：无产物回 `None`，前端展示待打包空态。 */
@@ -260,6 +270,8 @@ export const commands = {
 	getNovelPackageProgress: (id: string) => typedError<PackagingStatus, CommandError>(__TAURI_INVOKE("get_novel_package_progress", { id })),
 	/**  校验已有产物：无包直接报错，前端引导先打包。 */
 	validateNovelPackage: (id: string) => typedError<ValidationOutcome, CommandError>(__TAURI_INVOKE("validate_novel_package", { id })),
+	/**  打开打包目录：调系统文件管理器定位 `dist/`，不存在直接报错。 */
+	openNovelPackageDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_novel_package_dir", { id })),
 	/**  查询导出状态：各产物有无一次查全，前端据此渲染表单与禁用态。 */
 	getNovelExportStatus: (id: string) => typedError<ExportStatus, CommandError>(__TAURI_INVOKE("get_novel_export_status", { id })),
 	/**  预览标题格式：按卷章取首个标题渲染一行供下拉后方展示，失败时前端隐藏预览。 */

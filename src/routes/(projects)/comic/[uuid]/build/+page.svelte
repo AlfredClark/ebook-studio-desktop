@@ -9,6 +9,7 @@
   import { page } from "$app/state";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import FileTextIcon from "@lucide/svelte/icons/file-text";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import ImageIcon from "@lucide/svelte/icons/image";
   import { Badge } from "#components/shadcn-svelte/badge";
   import { Button } from "#components/shadcn-svelte/button";
@@ -386,6 +387,37 @@
     void openFile(selectedPath);
   }
 
+  /** 打开构建目录进行中：按钮禁用态。 */
+  let openingBuildDir = $state(false);
+  /** 打开文件所在目录进行中：按钮禁用态。 */
+  let openingFileDir = $state(false);
+
+  /** 打开构建目录：调系统文件管理器定位 `build/`，失败 toast。 */
+  async function openBuildDir(): Promise<void> {
+    if (openingBuildDir) {
+      return;
+    }
+    openingBuildDir = true;
+    const result = await commands.openComicBuildDir(uuid).result();
+    openingBuildDir = false;
+    if (result.status === "error") {
+      toast.error(m.build_open_dir_failed());
+    }
+  }
+
+  /** 打开文件所在目录：按选中文件解析父目录，失败 toast。 */
+  async function openFileDir(): Promise<void> {
+    if (selectedPath == null || openingFileDir) {
+      return;
+    }
+    openingFileDir = true;
+    const result = await commands.openComicBuildFileDir(uuid, selectedPath).result();
+    openingFileDir = false;
+    if (result.status === "error") {
+      toast.error(m.build_open_dir_failed());
+    }
+  }
+
   /** 全局保存快捷键：Ctrl/Cmd+S 与保存按钮同等效果，门禁由 handleSave 统一把守。 */
   function handleGlobalKeydown(event: KeyboardEvent): void {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -625,6 +657,17 @@
           <div class="flex shrink-0 items-center justify-between gap-2 px-3 pt-3">
             <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{m.build_tree_title()}</h2>
             <Button
+              variant="ghost"
+              size="icon"
+              class="shrink-0"
+              aria-label={m.build_open_dir()}
+              title={m.build_open_dir()}
+              disabled={openingBuildDir || building || clearing}
+              onclick={() => void openBuildDir()}
+            >
+              <FolderOpenIcon class="size-4" />
+            </Button>
+            <Button
               variant="outline"
               size="sm"
               disabled={!canFormatAll}
@@ -679,6 +722,17 @@
               <section aria-label={selectedPath} class="flex h-full min-h-0 flex-col">
                 <div class="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
                   <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{selectedPath}</h2>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="shrink-0"
+                    aria-label={m.build_open_file_dir()}
+                    title={m.build_open_file_dir()}
+                    disabled={openingFileDir}
+                    onclick={() => void openFileDir()}
+                  >
+                    <FolderOpenIcon class="size-4" />
+                  </Button>
                   <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
                     {formatImageSize(preview.size)}
                   </span>
@@ -705,6 +759,17 @@
             <section aria-label={selectedPath} class="flex h-full min-h-0 flex-col">
               <div class="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
                 <h2 class="min-w-0 flex-1 truncate text-sm font-medium">{selectedPath}</h2>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="shrink-0"
+                  aria-label={m.build_open_file_dir()}
+                  title={m.build_open_file_dir()}
+                  disabled={openingFileDir}
+                  onclick={() => void openFileDir()}
+                >
+                  <FolderOpenIcon class="size-4" />
+                </Button>
                 {#if fileEditable}
                   <Button
                     variant="outline"

@@ -50,3 +50,11 @@ pub async fn validate_comic_package(
 ) -> CommandResult<ValidationOutcome> {
     Ok(novel_package::validate_package(&app, &id).await?)
 }
+
+/// 打开打包目录：实现复用小说打包页的通用逻辑。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_comic_package_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(novel_package::open_dist_dir(&app, &id)?)
+}

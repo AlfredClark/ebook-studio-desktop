@@ -71,6 +71,8 @@
   let validating = $state(false);
   let validateFailed = $state(false);
   let confirmRepack = $state(false);
+  /** 打开打包目录进行中：按钮禁用态。 */
+  let openingDir = $state(false);
 
   /** 校验计数：汇总行展示用，无结果时不展示。 */
   const counts = $derived(validation == null ? null : countValidation(validation.messages));
@@ -166,6 +168,19 @@
     validation = result.data;
     if (pkg != null) {
       writeCachedValidation(uuid, pkg, validation);
+    }
+  }
+
+  /** 打开打包目录：调系统文件管理器定位 `dist/`，失败 toast。 */
+  async function openPackageDir(): Promise<void> {
+    if (openingDir) {
+      return;
+    }
+    openingDir = true;
+    const result = await commands.openComicPackageDir(uuid).result();
+    openingDir = false;
+    if (result.status === "error") {
+      toast.error(m.package_open_dir_failed());
     }
   }
 
@@ -265,6 +280,14 @@
         onclick={() => void runValidate()}
       >
         {validating ? m.package_validating() : m.package_revalidate()}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={openingDir || packaging}
+        onclick={() => void openPackageDir()}
+      >
+        {m.package_open_dir()}
       </Button>
       <div class="ml-auto">
         {#if validation == null || validation.valid}

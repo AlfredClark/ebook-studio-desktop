@@ -568,6 +568,12 @@ pub fn package_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<Option
     status_in(&dir)
 }
 
+/// 打开打包目录（`AppHandle` 入口，漫画打包页共用）；不存在直接报错。
+pub fn open_dist_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    crate::cores::system::open_existing_dir(app, &dir.join(DIST_DIR), "package")
+}
+
 /// 清空打包产物：删除 `dist/` 目录（不存在视为成功），重构建后下游回到空态。
 pub fn clear_dist_in(project_dir: &Path) -> anyhow::Result<()> {
     use anyhow::Context;

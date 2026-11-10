@@ -1069,6 +1069,24 @@ pub fn build_image_path(
     image_path_in(&dir, path)
 }
 
+/// 打开构建目录（`AppHandle` 入口，漫画构建页共用）；不存在直接报错。
+pub fn open_build_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    crate::cores::system::open_existing_dir(app, &dir.join(BUILD_DIR), "build")
+}
+
+/// 打开构建文件所在目录（`AppHandle` 入口，漫画构建页共用）；
+/// 路径经既有校验防穿越，顶层文件的所在目录即构建根。
+pub fn open_build_file_dir(app: &tauri::AppHandle, id: &str, path: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    let build_dir = dir.join(BUILD_DIR);
+    let file = resolve_build_path(&build_dir, path)?;
+    let parent = file
+        .parent()
+        .with_context(|| format!("build file has no parent dir: {path}"))?;
+    crate::cores::system::open_existing_dir(app, parent, "build file")
+}
+
 /// 写构建文件（`AppHandle` 入口）：固定与二进制拒绝。
 /// 写构建文件（`AppHandle` 入口）：固定与二进制拒绝。
 pub fn write_build_file(
