@@ -8,7 +8,7 @@ use crate::features::comic_files::{
 use crate::features::comic_images::{
     self, ComicCompressStatus, ComicConvertStatus, ComicResizeStatus, CompressOptions,
     CompressOutcome, CompressPreview, ConvertOptions, ConvertPreview, ImageTargetFormat,
-    ResizeOptions, ResizeOutcome, ResizePreview,
+    ResizeOptions, ResizeOutcome, ResizePreview, SingleImageOptions, SinglePreview,
 };
 
 /// 查询漫画原稿状态；缺目录回落空态，不建文件。
@@ -211,6 +211,34 @@ pub async fn resize_comic_images(
     options: ResizeOptions,
 ) -> CommandResult<ResizeOutcome> {
     comic_images::resize_images(&app, &id, &options).await
+}
+
+/// 预览单图处理：只读源文件，真编码写预览槽位，不碰源文件与下游；
+/// 批量作业进行中直接拒绝，避免读到写一半的文件。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_single_comic_image(
+    app: tauri::AppHandle,
+    id: String,
+    path: String,
+    options: SingleImageOptions,
+) -> CommandResult<SinglePreview> {
+    Ok(comic_images::preview_single(&app, &id, &path, &options)?)
+}
+
+/// 应用单图处理：变换后原子替换源文件，路径与格式不变；
+/// 成功后清空下游 `build/` 与 `dist/`；与批量作业共用项目锁。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn apply_single_comic_image(
+    app: tauri::AppHandle,
+    id: String,
+    path: String,
+    options: SingleImageOptions,
+) -> CommandResult<ComicOutline> {
+    comic_images::apply_single(&app, &id, &path, &options).await
 }
 
 /// 扫描孤儿图片：`content.json` 未引用的落盘图片，删页残留从这里清理。

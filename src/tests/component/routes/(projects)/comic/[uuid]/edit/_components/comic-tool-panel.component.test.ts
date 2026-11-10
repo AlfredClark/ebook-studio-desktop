@@ -25,11 +25,12 @@ const undoMock = vi.hoisted(() => vi.fn());
 const requestClearMock = vi.hoisted(() => vi.fn());
 
 function renderPanel(
-  tool: "convert" | "compress" | "resize" = "convert",
+  tool: "single" | "convert" | "compress" | "resize" = "convert",
   target: "jpeg" | "png" | "webp" = "jpeg",
   running = false,
   backupExists = false,
   resizeMode: "width" | "height" | "long_edge" | "fixed" = "width",
+  singleHasSelection = false,
 ) {
   return render(ComicToolPanel, {
     props: {
@@ -56,11 +57,29 @@ function renderPanel(
       resizeQuality: 85,
       resizeWebpLossless: false,
       resizePngLevel: 6,
+      singleRotate: 0,
+      singleFlipH: false,
+      singleFlipV: false,
+      singleAutoTrim: false,
+      singleTrimThreshold: 10,
+      singleTrimMargin: "0",
+      singleBrightness: 0,
+      singleContrast: 0,
+      singleGrayscale: false,
+      singleScale: 100,
+      singleQuality: 85,
+      singleWebpLossless: false,
+      singlePngLevel: 6,
       running,
       canRun: false,
       hasOutcome: false,
       progress: null,
       backupExists,
+      singleHasSelection,
+      singlePreview: "idle",
+      singleApplying: false,
+      singleLocked: false,
+      runLabel: null,
       onRun: runMock,
       onClear: clearMock,
       onCancel: cancelMock,
@@ -153,6 +172,17 @@ describe("图片工具面板", () => {
     expect(screen.getByText("Aspect lock")).not.toBeNull();
     expect(screen.getByLabelText("Target width")).not.toBeNull();
     expect(screen.getByLabelText("Target height")).not.toBeNull();
+  });
+
+  it("单图工具展示旋转与色彩参数控件，不展示批量控件", () => {
+    renderPanel("single", "jpeg", false, false, "width", true);
+    expect(screen.getByText("Rotate")).not.toBeNull();
+    expect(screen.getByText("Flip horizontal")).not.toBeNull();
+    expect(screen.getByText("Brightness")).not.toBeNull();
+    expect(screen.queryByText("Target format")).toBeNull();
+    expect(screen.queryByText("Resize mode")).toBeNull();
+    cleanup();
+    vi.clearAllMocks();
   });
 
   it("有备份时显示撤销与清除按钮，无备份时隐藏", async () => {

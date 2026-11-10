@@ -74,6 +74,16 @@ export const commands = {
 	 *  成功后清空下游 `build/` 与 `dist/`；阻塞池执行并推送逐文件进度。
 	 */
 	resizeComicImages: (id: string, options: ResizeOptions) => typedError<ResizeOutcome, CommandError>(__TAURI_INVOKE("resize_comic_images", { id, options })),
+	/**
+	 *  预览单图处理：只读源文件，真编码写预览槽位，不碰源文件与下游；
+	 *  批量作业进行中直接拒绝，避免读到写一半的文件。
+	 */
+	previewSingleComicImage: (id: string, path: string, options: SingleImageOptions) => typedError<SinglePreview, CommandError>(__TAURI_INVOKE("preview_single_comic_image", { id, path, options })),
+	/**
+	 *  应用单图处理：变换后原子替换源文件，路径与格式不变；
+	 *  成功后清空下游 `build/` 与 `dist/`；与批量作业共用项目锁。
+	 */
+	applySingleComicImage: (id: string, path: string, options: SingleImageOptions) => typedError<ComicOutline, CommandError>(__TAURI_INVOKE("apply_single_comic_image", { id, path, options })),
 	/**  扫描孤儿图片：`content.json` 未引用的落盘图片，删页残留从这里清理。 */
 	scanComicOrphans: (id: string) => typedError<ComicOrphans, CommandError>(__TAURI_INVOKE("scan_comic_orphans", { id })),
 	/**  删除孤儿图片：只删扫描命中的无引用图片，返回刷新后的识别大纲。 */
@@ -1254,6 +1264,57 @@ export type ResizePreview = {
 	total: number,
 	skipped: number,
 	total_bytes: number,
+};
+
+/**
+ *  单图处理参数：只改像素，锁定源格式与路径不变（`content.json` 的 path 不动）。
+ *  开关量多为独立语义，结构体收敛优于位标记。
+ */
+export type SingleImageOptions = {
+	/**  旋转角度，仅允许 0 / 90 / 180 / 270。 */
+	rotate_deg: number,
+	/**  水平翻转。 */
+	flip_h: boolean,
+	/**  垂直翻转。 */
+	flip_v: boolean,
+	/**  自动去白边开关。 */
+	auto_trim: boolean,
+	/**  去白边容差 1-100：通道值 ≥ `255 - threshold` 即视为背景。 */
+	trim_threshold: number,
+	/**  去白边后保留的留白像素 0-500。 */
+	trim_margin: number,
+	/**  亮度 -100-100，直接叠加到各通道。 */
+	brightness: number,
+	/**  对比度 -100-100，相对 128 线性拉伸。 */
+	contrast: number,
+	/**  灰度转换开关。 */
+	grayscale: boolean,
+	/**  等比缩放 10-300（相对当前文件）。 */
+	scale_percent: number,
+	/**  JPEG/WebP 有损质量 1-100。 */
+	quality: number,
+	/**  WebP 无损开关（开则忽略质量）。 */
+	webp_lossless: boolean,
+	/**  PNG 压缩级别 0-9。 */
+	png_level: number,
+};
+
+/**  单图预览结果：预览槽位文件的绝对路径与尺寸，供前端转 `asset:` 展示。 */
+export type SinglePreview = {
+	/**  预览文件的绝对路径。 */
+	path: string,
+	/**  预览文件字节数。 */
+	size_bytes: number,
+	/**  预览图宽度。 */
+	width_px: number,
+	/**  预览图高度。 */
+	height_px: number,
+	/**  原图宽度。 */
+	original_width_px: number,
+	/**  原图高度。 */
+	original_height_px: number,
+	/**  原图字节数。 */
+	original_bytes: number,
 };
 
 /**  运行平台信息：经 `tauri-plugin-os` 采集，全字段必填，前端逐行展示 */

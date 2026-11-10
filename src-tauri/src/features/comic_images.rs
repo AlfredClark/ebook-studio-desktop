@@ -1884,6 +1884,386 @@ pub async fn resize_images(
     }
 }
 
+/// 单图预览暂存目录：项目根下的普通目录，单槽位覆写；各扫描只看 `sources/images`，故不污染解析。
+/// 刻意不用点开头：asset 协议作用域 `$APPDATA/**/*` 的 glob 匹配不到隐藏路径，前端会加载失败。
+const SINGLE_PREVIEW_DIR: &str = "tmp-single-preview";
+
+/// 单图处理参数：只改像素，锁定源格式与路径不变（`content.json` 的 path 不动）。
+/// 开关量多为独立语义，结构体收敛优于位标记。
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SingleImageOptions {
+    /// 旋转角度，仅允许 0 / 90 / 180 / 270。
+    pub rotate_deg: u16,
+    /// 水平翻转。
+    pub flip_h: bool,
+    /// 垂直翻转。
+    pub flip_v: bool,
+    /// 自动去白边开关。
+    pub auto_trim: bool,
+    /// 去白边容差 1-100：通道值 ≥ `255 - threshold` 即视为背景。
+    pub trim_threshold: u8,
+    /// 去白边后保留的留白像素 0-500。
+    pub trim_margin: u32,
+    /// 亮度 -100-100，直接叠加到各通道。
+    pub brightness: i8,
+    /// 对比度 -100-100，相对 128 线性拉伸。
+    pub contrast: i8,
+    /// 灰度转换开关。
+    pub grayscale: bool,
+    /// 等比缩放 10-300（相对当前文件）。
+    pub scale_percent: u16,
+    /// JPEG/WebP 有损质量 1-100。
+    pub quality: u8,
+    /// WebP 无损开关（开则忽略质量）。
+    pub webp_lossless: bool,
+    /// PNG 压缩级别 0-9。
+    pub png_level: u8,
+}
+
+impl SingleImageOptions {
+    /// 是否直通：全默认时预览与源一致，前端据此禁用应用。
+    pub const fn is_default(&self) -> bool {
+        self.rotate_deg == 0
+            && !self.flip_h
+            && !self.flip_v
+            && !self.auto_trim
+            && self.brightness == 0
+            && self.contrast == 0
+            && !self.grayscale
+            && self.scale_percent == 100
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        let rotate = self.rotate_deg;
+        anyhow::ensure!(
+            matches!(rotate, 0 | 90 | 180 | 270),
+            "rotate_deg must be one of 0/90/180/270, got {rotate}"
+        );
+        let scale = self.scale_percent;
+        anyhow::ensure!(
+            (10..=300).contains(&scale),
+            "scale_percent must be within 10..=300, got {scale}"
+        );
+        anyhow::ensure!(
+            (-100..=100).contains(&i16::from(self.brightness)),
+            "brightness must be within -100..=100"
+        );
+        anyhow::ensure!(
+            (-100..=100).contains(&i16::from(self.contrast)),
+            "contrast must be within -100..=100"
+        );
+        anyhow::ensure!(
+            (1..=100).contains(&self.trim_threshold),
+            "trim_threshold must be within 1..=100, got {}",
+            self.trim_threshold
+        );
+        let margin = self.trim_margin;
+        anyhow::ensure!(
+            margin <= 500,
+            "trim_margin must be within 0..=500, got {margin}"
+        );
+        let quality = self.quality;
+        if !(1..=100).contains(&quality) {
+            anyhow::bail!("quality must be within 1..=100, got {quality}");
+        }
+        let png_level = self.png_level;
+        if png_level > 9 {
+            anyhow::bail!("png_level must be within 0..=9, got {png_level}");
+        }
+        Ok(())
+    }
+}
+
+/// 单图预览结果：预览槽位文件的绝对路径与尺寸，供前端转 `asset:` 展示。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SinglePreview {
+    /// 预览文件的绝对路径。
+    pub path: String,
+    /// 预览文件字节数。
+    pub size_bytes: u32,
+    /// 预览图宽度。
+    pub width_px: u32,
+    /// 预览图高度。
+    pub height_px: u32,
+    /// 原图宽度。
+    pub original_width_px: u32,
+    /// 原图高度。
+    pub original_height_px: u32,
+    /// 原图字节数。
+    pub original_bytes: u32,
+}
+
+/// 背景判定：三通道都接近白即背景（容差口径与阈值同义）。
+fn is_single_background(pixel: image::Rgba<u8>, threshold: u8) -> bool {
+    let floor = 255u8.saturating_sub(threshold);
+    pixel[0] >= floor && pixel[1] >= floor && pixel[2] >= floor
+}
+
+/// 自动去白边：找非背景像素包围盒，外扩留白后裁剪；全背景直接报错。
+fn apply_single_trim(
+    img: &image::DynamicImage,
+    threshold: u8,
+    margin: u32,
+) -> anyhow::Result<image::DynamicImage> {
+    let rgba = img.to_rgba8();
+    let (width, height) = (rgba.width(), rgba.height());
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    for (x, y, pixel) in rgba.enumerate_pixels() {
+        if !is_single_background(*pixel, threshold) {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if max_x < min_x || max_y < min_y {
+        anyhow::bail!("auto trim found only background, adjust the tolerance");
+    }
+    min_x = min_x.saturating_sub(margin);
+    min_y = min_y.saturating_sub(margin);
+    max_x = (max_x + margin).min(width.saturating_sub(1));
+    max_y = (max_y + margin).min(height.saturating_sub(1));
+    let crop_width = max_x - min_x + 1;
+    let crop_height = max_y - min_y + 1;
+    let cropped =
+        image::imageops::crop_imm(&rgba, min_x, min_y, crop_width, crop_height).to_image();
+    Ok(image::DynamicImage::ImageRgba8(cropped))
+}
+
+/// 亮度/对比度：相对 128 线性变换后叠加亮度，alpha 通道保持不动；全整数防浮点门禁。
+fn apply_single_color(
+    img: image::DynamicImage,
+    brightness: i8,
+    contrast: i8,
+) -> image::DynamicImage {
+    if brightness == 0 && contrast == 0 {
+        return img;
+    }
+    let gain = 100i32 + i32::from(contrast);
+    let shift = i32::from(brightness);
+    let mut rgba = img.to_rgba8();
+    for pixel in rgba.pixels_mut() {
+        for channel in &mut pixel.0[..3] {
+            let delta = i32::from(*channel) - 128;
+            // 四舍五入到最近整数，正负对称。
+            let scaled = (delta * gain + if delta >= 0 { 50 } else { -50 }) / 100;
+            let adjusted = (scaled + 128 + shift).clamp(0, 255);
+            *channel = u8::try_from(adjusted).unwrap_or(0);
+        }
+    }
+    image::DynamicImage::ImageRgba8(rgba)
+}
+
+/// 单图变换内核：去白边 → 旋转/翻转 → 缩放 → 灰度/色彩；预览与应用共用。
+fn apply_single_transform(
+    img: image::DynamicImage,
+    options: &SingleImageOptions,
+) -> anyhow::Result<image::DynamicImage> {
+    let mut current = img;
+    if options.auto_trim {
+        current = apply_single_trim(&current, options.trim_threshold, options.trim_margin)?;
+    }
+    current = match options.rotate_deg {
+        0 => current,
+        90 => current.rotate90(),
+        180 => current.rotate180(),
+        270 => current.rotate270(),
+        _ => anyhow::bail!("rotate_deg must be one of 0/90/180/270"),
+    };
+    if options.flip_h {
+        current = current.fliph();
+    }
+    if options.flip_v {
+        current = current.flipv();
+    }
+    if options.scale_percent != 100 {
+        let (width, height) = current.dimensions();
+        let scale = u64::from(options.scale_percent);
+        let new_width =
+            u32::try_from(((u64::from(width) * scale + 50) / 100).max(1)).unwrap_or(u32::MAX);
+        let new_height =
+            u32::try_from(((u64::from(height) * scale + 50) / 100).max(1)).unwrap_or(u32::MAX);
+        anyhow::ensure!(
+            u64::from(new_width) * u64::from(new_height) <= RESIZE_MAX_PIXELS,
+            "scaled image exceeds the supported pixel budget"
+        );
+        if new_width != width || new_height != height {
+            current = current.resize(new_width, new_height, image::imageops::FilterType::Lanczos3);
+        }
+    }
+    if options.grayscale {
+        current = current.grayscale();
+    }
+    current = apply_single_color(current, options.brightness, options.contrast);
+    Ok(current)
+}
+
+/// 单图渲染：解码定向 → 变换 → 按源格式编码；返回字节与变换后尺寸。
+fn render_single(
+    source_bytes: &[u8],
+    rel: &str,
+    ext: &str,
+    options: &SingleImageOptions,
+) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+    let img = decode_oriented(source_bytes, rel)?;
+    let transformed = apply_single_transform(img, options)?;
+    let (width, height) = transformed.dimensions();
+    let target = target_of_ext(ext)?;
+    let encoded = encode_image(
+        &transformed,
+        target,
+        &ConvertOptions {
+            quality: options.quality,
+            webp_lossless: options.webp_lossless,
+            png_level: options.png_level,
+            force: true,
+        },
+    )?;
+    Ok((encoded, width, height))
+}
+
+/// 断言页在 `content.json` 中被引用：孤儿文件不允许单图处理。
+fn ensure_single_page_referenced(project_dir: &Path, rel: &str) -> anyhow::Result<()> {
+    let content = comic_files::read_content(project_dir)?;
+    let found = content
+        .volumes
+        .iter()
+        .flat_map(|volume| volume.pages.iter())
+        .any(|page| page.path == rel);
+    anyhow::ensure!(found, "page is not in content.json: {rel}");
+    Ok(())
+}
+
+/// 预览槽位路径：单槽位覆写，扩展名随源格式。
+fn single_preview_slot(project_dir: &Path, ext: &str) -> PathBuf {
+    project_dir
+        .join(SINGLE_PREVIEW_DIR)
+        .join(format!("preview.{ext}"))
+}
+
+/// 预览单图（`&Path` 入口）：只读源文件，编码写预览槽位，不碰源文件与下游。
+pub fn preview_single_in(
+    project_dir: &Path,
+    rel: &str,
+    options: &SingleImageOptions,
+) -> anyhow::Result<SinglePreview> {
+    options.validate()?;
+    ensure_single_page_referenced(project_dir, rel)?;
+    let ext = normalized_ext(rel)?;
+    if !matches!(ext.as_str(), "jpg" | "png" | "webp") {
+        anyhow::bail!("unsupported image format: {rel}");
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let abs = comic_files::join_images_path(&images, rel)?;
+    let source_bytes =
+        std::fs::read(&abs).with_context(|| format!("failed to read {}", abs.display()))?;
+    let original_bytes = u32::try_from(source_bytes.len()).unwrap_or(u32::MAX);
+    let (encoded, width, height) = render_single(&source_bytes, rel, &ext, options)?;
+    let slot = single_preview_slot(project_dir, &ext);
+    if let Some(parent) = slot.parent() {
+        std::fs::create_dir_all(parent).context("failed to create single preview dir")?;
+    }
+    // 槽位扩展名随源格式：清理其它扩展名的 stale 槽位，避免前端拿到旧图。
+    if let Some(parent) = slot.parent()
+        && let Ok(entries) = std::fs::read_dir(parent)
+    {
+        for entry in entries.flatten() {
+            if entry.path() != slot {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    std::fs::write(&slot, &encoded).context("failed to write single preview")?;
+    let original = decode_oriented(&source_bytes, rel)?;
+    let (original_width, original_height) = original.dimensions();
+    Ok(SinglePreview {
+        path: slot
+            .to_str()
+            .with_context(|| format!("bad preview path {}", slot.display()))?
+            .to_string(),
+        size_bytes: u32::try_from(encoded.len()).unwrap_or(u32::MAX),
+        width_px: width,
+        height_px: height,
+        original_width_px: original_width,
+        original_height_px: original_height,
+        original_bytes,
+    })
+}
+
+/// 预览单图（`AppHandle` 入口）：忙时直接拒绝，避免读到批量作业写一半的文件。
+pub fn preview_single(
+    app: &tauri::AppHandle,
+    id: &str,
+    path: &str,
+    options: &SingleImageOptions,
+) -> anyhow::Result<SinglePreview> {
+    anyhow::ensure!(
+        !is_busy(id),
+        "comic project operation already in progress for {id}"
+    );
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    preview_single_in(&dir, path, options)
+}
+
+/// 应用单图内核：变换后经暂存文件原子替换源文件，路径与格式不变故不写 `content.json`；
+/// 成功后清空下游 `build/` 与 `dist/`。
+fn apply_single_in(
+    project_dir: &Path,
+    rel: &str,
+    options: &SingleImageOptions,
+) -> anyhow::Result<ComicOutline> {
+    options.validate()?;
+    anyhow::ensure!(
+        !options.is_default(),
+        "no single-image adjustments to apply"
+    );
+    ensure_single_page_referenced(project_dir, rel)?;
+    let ext = normalized_ext(rel)?;
+    if !matches!(ext.as_str(), "jpg" | "png" | "webp") {
+        anyhow::bail!("unsupported image format: {rel}");
+    }
+    let images = project_dir.join(SOURCES_DIR).join(IMAGES_DIR);
+    let abs = comic_files::join_images_path(&images, rel)?;
+    let source_bytes =
+        std::fs::read(&abs).with_context(|| format!("failed to read {}", abs.display()))?;
+    let (encoded, _, _) = render_single(&source_bytes, rel, &ext, options)?;
+    let staging_dir = project_dir.join(SINGLE_PREVIEW_DIR);
+    std::fs::create_dir_all(&staging_dir).context("failed to create single staging dir")?;
+    let staged = staging_dir.join("stage");
+    std::fs::write(&staged, &encoded).context("failed to stage single image")?;
+    std::fs::rename(&staged, &abs)
+        .with_context(|| format!("failed to move {} to {}", staged.display(), abs.display()))?;
+    let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
+    let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
+    super::projects::touch_updated(project_dir);
+    comic_files::outline_in(project_dir)?
+        .with_context(|| "content.json missing after single apply".to_string())
+}
+
+/// 应用单图（`AppHandle` 入口）：阻塞池执行；与批量作业共用项目锁，忙时整单拒绝。
+pub async fn apply_single(
+    app: &tauri::AppHandle,
+    id: &str,
+    path: &str,
+    options: &SingleImageOptions,
+) -> Result<ComicOutline, crate::cores::types::CommandError> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    lock_project_images(id)?;
+    let rel = path.to_string();
+    let options = options.clone();
+    let outcome =
+        tauri::async_runtime::spawn_blocking(move || apply_single_in(&dir, &rel, &options)).await;
+    unlock_project_images(id);
+    match outcome.map_err(|err| crate::cores::types::CommandError::Internal(format!("{err:#}"))) {
+        Ok(result) => result.map_err(|err| map_job_error(&err)),
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -2760,6 +3140,178 @@ mod tests {
             before
         );
         assert!(!dir.join(".tmp-resize").exists());
+        cleanup(&root);
+    }
+
+    fn valid_single_options() -> SingleImageOptions {
+        SingleImageOptions {
+            rotate_deg: 0,
+            flip_h: false,
+            flip_v: false,
+            auto_trim: false,
+            trim_threshold: 10,
+            trim_margin: 0,
+            brightness: 0,
+            contrast: 0,
+            grayscale: false,
+            scale_percent: 100,
+            quality: 85,
+            webp_lossless: false,
+            png_level: 6,
+        }
+    }
+
+    #[test]
+    fn single_options_reject_invalid() {
+        let mut options = valid_single_options();
+        assert!(options.validate().is_ok());
+        assert!(options.is_default());
+        options.rotate_deg = 45;
+        assert!(options.validate().is_err());
+        options.rotate_deg = 90;
+        assert!(!options.is_default());
+        assert!(options.validate().is_ok());
+        options.scale_percent = 9;
+        assert!(options.validate().is_err());
+        options.scale_percent = 301;
+        assert!(options.validate().is_err());
+        options.scale_percent = 100;
+        options.brightness = 100;
+        options.contrast = -100;
+        assert!(options.validate().is_ok());
+        options.trim_threshold = 0;
+        assert!(options.validate().is_err());
+        options.trim_threshold = 10;
+        options.trim_margin = 501;
+        assert!(options.validate().is_err());
+        options.trim_margin = 0;
+        options.quality = 0;
+        assert!(options.validate().is_err());
+        options.quality = 85;
+        options.png_level = 10;
+        assert!(options.validate().is_err());
+    }
+
+    /// 写一张 8x6 半白半色图：左半白、右半彩，供去白边断言用。
+    fn write_half_white_image(dir: &Path, rel: &str) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create image parent");
+        }
+        let mut img = image::RgbImage::new(8, 6);
+        for (x, _y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = if x < 4 {
+                image::Rgb([255, 255, 255])
+            } else {
+                image::Rgb([20, 120, 200])
+            };
+        }
+        image::DynamicImage::ImageRgb8(img)
+            .save(&path)
+            .expect("save test image");
+    }
+
+    #[test]
+    fn single_transform_rotate_flip_and_scale() {
+        let (root, dir) = test_project("single-transform");
+        let images = dir.join("sources").join("images");
+        seed_images(&dir, &["a.png"]);
+        write_sized_image(&images, "a.png", 8, 4);
+        // 旋转 90°：8x4 → 4x8。
+        let mut options = valid_single_options();
+        options.rotate_deg = 90;
+        let preview = preview_single_in(&dir, "a.png", &options).expect("preview");
+        assert_eq!((preview.width_px, preview.height_px), (4, 8));
+        assert_eq!(
+            (preview.original_width_px, preview.original_height_px),
+            (8, 4)
+        );
+        // 翻转不改尺寸，亮度/对比度/灰度不改尺寸。
+        options.rotate_deg = 0;
+        options.flip_h = true;
+        options.flip_v = true;
+        options.grayscale = true;
+        options.brightness = 10;
+        options.contrast = -10;
+        let preview = preview_single_in(&dir, "a.png", &options).expect("preview");
+        assert_eq!((preview.width_px, preview.height_px), (8, 4));
+        let bytes =
+            std::fs::read(dir.join("tmp-single-preview").join("preview.png")).expect("read slot");
+        let img = image::load_from_memory(&bytes).expect("decode preview");
+        assert!(is_grayscale(&img));
+        // 缩放 50%：8x4 → 4x2。
+        options = valid_single_options();
+        options.scale_percent = 50;
+        let preview = preview_single_in(&dir, "a.png", &options).expect("preview");
+        assert_eq!((preview.width_px, preview.height_px), (4, 2));
+        // 预览不碰源文件。
+        let after =
+            image::load_from_memory(&std::fs::read(images.join("a.png")).expect("read source"))
+                .expect("decode source");
+        assert_eq!(after.dimensions(), (8, 4));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn single_trim() {
+        let (root, dir) = test_project("single-trim");
+        let images = dir.join("sources").join("images");
+        seed_images(&dir, &["half.png"]);
+        write_half_white_image(&images, "half.png");
+        // 去白边：左半白被裁掉 → 4x6。
+        let mut options = valid_single_options();
+        options.auto_trim = true;
+        let preview = preview_single_in(&dir, "half.png", &options).expect("preview");
+        assert_eq!((preview.width_px, preview.height_px), (4, 6));
+        // 全背景去白边报错：纯白图（种子之后再覆盖，避免被种子重写）。
+        seed_images(&dir, &["half.png", "white.png"]);
+        let white = image::RgbImage::from_pixel(4, 4, image::Rgb([255, 255, 255]));
+        image::DynamicImage::ImageRgb8(white)
+            .save(images.join("white.png"))
+            .expect("save white");
+        let mut trim_only = valid_single_options();
+        trim_only.auto_trim = true;
+        assert!(preview_single_in(&dir, "white.png", &trim_only).is_err());
+        cleanup(&root);
+    }
+
+    #[test]
+    fn single_apply_replaces_source_and_clears_downstream() {
+        let (root, dir) = test_project("single-apply");
+        let images = dir.join("sources").join("images");
+        seed_images(&dir, &["a.png"]);
+        write_sized_image(&images, "a.png", 8, 8);
+        std::fs::create_dir_all(dir.join("build")).expect("create build");
+        std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+        // 直通参数拒绝应用。
+        assert!(apply_single_in(&dir, "a.png", &valid_single_options()).is_err());
+        // 未引用页拒绝应用。
+        let mut options = valid_single_options();
+        options.rotate_deg = 180;
+        assert!(apply_single_in(&dir, "ghost.png", &options).is_err());
+        let outline = apply_single_in(&dir, "a.png", &options).expect("apply");
+        assert_eq!(outline.page_count, 1);
+        // 路径不变（锁定格式），下游清空。
+        assert_eq!(read_paths(&dir), vec!["a.png"]);
+        assert!(!dir.join("build").exists());
+        assert!(!dir.join("dist").exists());
+        // 旋转 180° 不改尺寸；换缩放参数验证尺寸变化。
+        let mut scaled = valid_single_options();
+        scaled.scale_percent = 50;
+        apply_single_in(&dir, "a.png", &scaled).expect("apply scale");
+        let bytes = std::fs::read(images.join("a.png")).expect("read applied");
+        let img = image::load_from_memory(&bytes).expect("decode applied");
+        assert_eq!(img.dimensions(), (4, 4));
+        cleanup(&root);
+    }
+
+    #[test]
+    fn single_preview_rejects_unknown_page() {
+        let (root, dir) = test_project("single-unknown");
+        seed_images(&dir, &["a.png"]);
+        let mut options = valid_single_options();
+        options.rotate_deg = 90;
+        assert!(preview_single_in(&dir, "missing.png", &options).is_err());
         cleanup(&root);
     }
 }

@@ -47,6 +47,8 @@ macro_rules! collect_commands {
             $crate::commands::comic_files::preview_comic_image_resize,
             $crate::commands::comic_files::get_comic_resize_status,
             $crate::commands::comic_files::resize_comic_images,
+            $crate::commands::comic_files::preview_single_comic_image,
+            $crate::commands::comic_files::apply_single_comic_image,
             $crate::commands::comic_files::scan_comic_orphans,
             $crate::commands::comic_files::delete_comic_orphans,
             $crate::commands::comic_files::append_comic_images,

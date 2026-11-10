@@ -19,6 +19,7 @@
     ResizeFill,
     ResizeMode,
     ResizePreview,
+    SinglePreview,
   } from "#libs/commands/types";
   import {
     convertJobOf,
@@ -71,6 +72,12 @@
     buildResizeOptions,
     type ResizeAspectLock,
   } from "./_components/comic-resize";
+  import {
+    buildSingleOptions,
+    defaultSingleForm,
+    isSingleDefault,
+    type SingleFormValues,
+  } from "./_components/single-image";
   import type { ComicDropOrder } from "./_components/comic-sortable";
   import type { CompressPreview, ConvertPreview, ImageTargetFormat } from "#libs/commands/types";
   import { formatBytes, pageFileName } from "../files/_components/comic-files";
@@ -223,6 +230,29 @@
   let resizePreview = $state<ResizePreview | null>(null);
   let resizeConfirmOpen = $state(false);
   let resizePreviewDebounce: ReturnType<typeof setTimeout> | undefined;
+  /** 单图处理表单：右栏哑组件双向绑定，本页只读组装。 */
+  let singleRotate = $state(0);
+  let singleFlipH = $state(false);
+  let singleFlipV = $state(false);
+  let singleAutoTrim = $state(false);
+  let singleTrimThreshold = $state(10);
+  let singleTrimMargin = $state("0");
+  let singleBrightness = $state(0);
+  let singleContrast = $state(0);
+  let singleGrayscale = $state(false);
+  let singleScale = $state(100);
+  let singleQuality = $state(85);
+  let singleWebpLossless = $state(false);
+  let singlePngLevel = $state(6);
+  /** 单图预览：中栏原图/预览切换，真编码落临时槽位；确认后替换源文件（无撤销）。 */
+  let singleView = $state<"original" | "preview">("preview");
+  let singlePreview = $state<SinglePreview | null>(null);
+  let singlePreviewUrl = $state<string | null>(null);
+  let singleState = $state<"idle" | "loading" | "ready" | "failed">("idle");
+  let singleApplying = $state(false);
+  let singleConfirmOpen = $state(false);
+  let singleToken = 0;
+  let singleDebounce: ReturnType<typeof setTimeout> | undefined;
   /** 跨页面图片作业：切页不丢进度，以 Rust 侧注册表为准回填；转换、压缩与尺寸调整互斥。 */
   const convertJob = $derived(convertJobOf(uuid));
   const compressJob = $derived(compressJobOf(uuid));
@@ -232,11 +262,11 @@
     const active = convertJob.running ? convertJob : compressJob.running ? compressJob : resizeJob;
     return active.total === 0 ? null : Math.round((active.done / active.total) * 100);
   });
-  /** 图片作业中锁定编辑：除预览翻页外，禁止一切改 content.json 的操作。 */
-  const imageLocked = $derived(toolRunning);
+  /** 图片作业中锁定编辑：除预览翻页外，禁止一切改 content.json 的操作（含单图应用）。 */
+  const imageLocked = $derived(toolRunning || singleApplying);
 
-  /** 右栏工具：当前所选工具。 */
-  let tool: ComicTool = $state("convert");
+  /** 右栏工具：当前所选工具，单图处理首位。 */
+  let tool: ComicTool = $state("single");
 
   /** 参数是否偏离默认值：重置按钮门禁（按当前工具判定）。 */
   const hasOutcome = $derived.by(() => {
@@ -291,9 +321,43 @@
     }),
   );
 
+  /** 单图表单值：右栏输入的原始值组装，非法由组装函数收敛为空。 */
+  const singleForm = $derived<SingleFormValues>({
+    rotate_deg: singleRotate,
+    flip_h: singleFlipH,
+    flip_v: singleFlipV,
+    auto_trim: singleAutoTrim,
+    trim_threshold: singleTrimThreshold,
+    trim_margin: singleTrimMargin,
+    brightness: singleBrightness,
+    contrast: singleContrast,
+    grayscale: singleGrayscale,
+    scale_percent: singleScale,
+    quality: singleQuality,
+    webp_lossless: singleWebpLossless,
+    png_level: singlePngLevel,
+  });
+
+  /** 单图命令参数：非法输入返回空值并禁用执行。 */
+  const singleOptions = $derived(buildSingleOptions(singleForm));
+
+  /** 单图是否直通：全默认时应用无意义。 */
+  const singleIsDefault = $derived(isSingleDefault(singleForm));
+
+  /** 单图可应用：预览就绪、选中页在、空闲中；批量作业进行时锁定。 */
+  const singleCanApply = $derived(
+    tool === "single" &&
+      singleOptions !== null &&
+      !singleIsDefault &&
+      singleState === "ready" &&
+      selectedPath !== null &&
+      !singleApplying &&
+      !toolRunning,
+  );
+
   /** 开始按钮门禁：脏态、保存中、运行中、无可处理页时禁用。 */
   const toolRunnable = $derived.by(() => {
-    if (outline == null || dirty || saving || toolRunning) {
+    if (outline == null || dirty || saving || toolRunning || singleApplying) {
       return false;
     }
     if (tool === "compress") {
@@ -304,6 +368,27 @@
     }
     return (convertPreview?.total ?? 0) > 0;
   });
+
+  /** 面板执行门禁：单图走预览就绪口径，批量走原口径。 */
+  const panelCanRun = $derived(tool === "single" ? singleCanApply : toolRunnable);
+
+  /** 面板重置门禁：单图偏离默认即允许重置。 */
+  const panelHasOutcome = $derived(tool === "single" ? !singleIsDefault : hasOutcome);
+
+  /** 中栏是否在看预览：单图工具 + 预览就绪 + 切到预览档。 */
+  const viewingPreview = $derived(
+    tool === "single" && singleView === "preview" && singlePreview !== null,
+  );
+
+  /** 中栏展示尺寸/体积：看预览时用预览值，否则用原图值。 */
+  const displayedDims = $derived(
+    viewingPreview && singlePreview !== null
+      ? { width: singlePreview.width_px, height: singlePreview.height_px }
+      : previewDims,
+  );
+  const displayedSize = $derived(
+    viewingPreview && singlePreview !== null ? singlePreview.size_bytes : previewSize,
+  );
 
   /** 转换预览跟随：工具 / 目标格式 / 强制开关 / 大纲变化时刷新分组。 */
   $effect(() => {
@@ -365,6 +450,42 @@
     }, 400);
   });
 
+  /** 单图预览跟随：工具 / 选中页 / 参数变化时防抖刷新真编码预览；直通参数与锁定态下清空。 */
+  $effect(() => {
+    const isSingle = tool === "single";
+    const target = selectedPath;
+    const options = singleOptions;
+    const isDefault = singleIsDefault;
+    const locked = toolRunning || singleApplying;
+    clearTimeout(singleDebounce);
+    if (!isSingle || target == null || locked || options == null || isDefault) {
+      singlePreview = null;
+      singlePreviewUrl = null;
+      singleState = "idle";
+      return;
+    }
+    singleState = "loading";
+    singleDebounce = setTimeout(() => {
+      const token = (singleToken += 1);
+      void (async () => {
+        const result = await commands.previewSingleComicImage(uuid, target, options).result();
+        if (token !== singleToken) {
+          return;
+        }
+        if (result.status === "error" || selectedPath !== target) {
+          if (selectedPath === target) {
+            singlePreview = null;
+            singlePreviewUrl = null;
+            singleState = "failed";
+          }
+          return;
+        }
+        singlePreview = result.data;
+        singlePreviewUrl = `${convertFileSrc(result.data.path)}?v=${result.data.size_bytes}-${Date.now()}`;
+        singleState = "ready";
+      })();
+    }, 350);
+  });
   /** 确认弹窗行：源格式按列对齐，`→` 后统一为目标格式大写。 */
   function convertConfirmLines(preview: ConvertPreview, targetLabel: string): string[] {
     const fromWidth = Math.max(...preview.items.map((item) => item.from.length));
@@ -419,9 +540,16 @@
         return m.comic_edit_tool_resize_mode_fixed();
     }
   }
-  /** 工具执行：刷新预览后弹确认框（无可处理页直接提示）。 */
+  /** 工具执行：单图走确认后替换，批量刷新预览后弹确认框（无可处理页直接提示）。 */
   async function handleToolRun(): Promise<void> {
-    if (toolRunning) {
+    if (toolRunning || singleApplying) {
+      return;
+    }
+    if (tool === "single") {
+      if (!singleCanApply) {
+        return;
+      }
+      singleConfirmOpen = true;
       return;
     }
     if (tool === "resize") {
@@ -471,8 +599,12 @@
     convertConfirmOpen = true;
   }
 
-  /** 工具重置：当前工具参数回到默认值。 */
+  /** 工具重置：单图回全直通并清空预览，批量回各自默认值。 */
   function handleToolReset(): void {
+    if (tool === "single") {
+      resetSingleForm();
+      return;
+    }
     if (tool === "compress") {
       compressScale = 100;
       compressGrayscale = false;
@@ -501,6 +633,117 @@
     convertWebpLossless = false;
     convertPngLevel = 6;
     convertForce = false;
+  }
+
+  /** 单图重置：全直通并清空预览，中栏回原图。 */
+  function resetSingleForm(): void {
+    const defaults = defaultSingleForm();
+    singleRotate = defaults.rotate_deg;
+    singleFlipH = defaults.flip_h;
+    singleFlipV = defaults.flip_v;
+    singleAutoTrim = defaults.auto_trim;
+    singleTrimThreshold = defaults.trim_threshold;
+    singleTrimMargin = defaults.trim_margin;
+    singleBrightness = defaults.brightness;
+    singleContrast = defaults.contrast;
+    singleGrayscale = defaults.grayscale;
+    singleScale = defaults.scale_percent;
+    singleQuality = defaults.quality;
+    singleWebpLossless = defaults.webp_lossless;
+    singlePngLevel = defaults.png_level;
+    singlePreview = null;
+    singlePreviewUrl = null;
+    singleState = "idle";
+    singleView = "preview";
+  }
+
+  /** 单图确认行：参数摘要逐行展示。 */
+  function singleConfirmLines(): string[] {
+    const lines: string[] = [];
+    if (singleRotate !== 0) {
+      lines.push(`${m.comic_edit_tool_single_rotate()}  ${singleRotate}°`);
+    }
+    if (singleFlipH) {
+      lines.push(m.comic_edit_tool_single_flip_h());
+    }
+    if (singleFlipV) {
+      lines.push(m.comic_edit_tool_single_flip_v());
+    }
+    if (singleAutoTrim) {
+      lines.push(
+        `${m.comic_edit_tool_single_auto_trim()}  ${m.comic_edit_tool_single_trim_threshold()} ${singleTrimThreshold} · ${m.comic_edit_tool_single_trim_margin()} ${singleTrimMargin}px`,
+      );
+    }
+    if (singleBrightness !== 0 || singleContrast !== 0) {
+      lines.push(
+        `${m.comic_edit_tool_single_brightness()} ${singleBrightness} · ${m.comic_edit_tool_single_contrast()} ${singleContrast}`,
+      );
+    }
+    if (singleGrayscale) {
+      lines.push(m.comic_edit_tool_grayscale());
+    }
+    if (singleScale !== 100) {
+      lines.push(`${m.comic_edit_tool_single_scale()}  ${singleScale}%`);
+    }
+    if (singlePreview !== null) {
+      lines.push(
+        `${singlePreview.original_width_px}×${singlePreview.original_height_px} → ${singlePreview.width_px}×${singlePreview.height_px}`,
+      );
+    }
+    return lines;
+  }
+
+  /** 单图预览重试：失败后按当前参数即时重跑一次。 */
+  async function retrySinglePreview(): Promise<void> {
+    const options = singleOptions;
+    if (tool !== "single" || selectedPath === null || options === null || singleIsDefault) {
+      return;
+    }
+    const target = selectedPath;
+    const token = (singleToken += 1);
+    singleState = "loading";
+    const result = await commands.previewSingleComicImage(uuid, target, options).result();
+    if (token !== singleToken || selectedPath !== target) {
+      return;
+    }
+    if (result.status === "error") {
+      singlePreview = null;
+      singlePreviewUrl = null;
+      singleState = "failed";
+      return;
+    }
+    singlePreview = result.data;
+    singlePreviewUrl = `${convertFileSrc(result.data.path)}?v=${result.data.size_bytes}-${Date.now()}`;
+    singleState = "ready";
+  }
+
+  /** 确认单图应用：变换后原子替换源文件（不可撤销），成功后重置表单并刷新中栏。 */
+  async function handleSingleApply(): Promise<void> {
+    const options = singleOptions;
+    if (
+      options === null ||
+      singleIsDefault ||
+      selectedPath === null ||
+      singleApplying ||
+      toolRunning
+    ) {
+      return;
+    }
+    const target = selectedPath;
+    singleApplying = true;
+    try {
+      const result = await commands.applySingleComicImage(uuid, target, options).result();
+      if (result.status === "error") {
+        toast.error(m.comic_edit_tool_single_failed());
+        return;
+      }
+      outline = result.data;
+      resetSingleForm();
+      void loadPreview(target);
+      toast.success(m.comic_edit_tool_single_success());
+    } finally {
+      singleApplying = false;
+    }
   }
 
   /** 确认转换：全局进度监听在 hook 侧常驻，成功后按原全局序号跟随选中。 */
@@ -1164,13 +1407,13 @@
                 {location.serial} - {selectedPath}
               </span>
               <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
-                {previewDims == null
+                {displayedDims == null
                   ? m.comic_files_preview_loading()
-                  : `${previewDims.width} × ${previewDims.height}`}
+                  : `${displayedDims.width} × ${displayedDims.height}`}
               </span>
-              {#if previewSize != null}
+              {#if displayedSize != null}
                 <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {formatBytes(previewSize)}
+                  {formatBytes(displayedSize)}
                 </span>
               {/if}
             {:else}
@@ -1187,6 +1430,39 @@
               <TrashIcon class="size-4" />
             </Button>
           </div>
+          {#if tool === "single" && selectedPath != null && singleState !== "idle"}
+            <div class="flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5">
+              <Button
+                variant={singleView === "original" ? "secondary" : "ghost"}
+                size="sm"
+                onclick={() => (singleView = "original")}
+              >
+                {m.comic_edit_tool_single_view_original()}
+              </Button>
+              <Button
+                variant={singleView === "preview" ? "secondary" : "ghost"}
+                size="sm"
+                disabled={singlePreview == null}
+                onclick={() => (singleView = "preview")}
+              >
+                {m.comic_edit_tool_single_view_preview()}
+              </Button>
+              {#if singleState === "loading"}
+                <span class="text-xs text-muted-foreground" aria-busy="true">
+                  {m.comic_edit_tool_single_preview_loading()}
+                </span>
+              {:else if singleState === "failed"}
+                <Button variant="ghost" size="sm" onclick={() => void retrySinglePreview()}>
+                  {m.files_retry()}
+                </Button>
+              {:else if singlePreview != null}
+                <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground tabular-nums">
+                  {singlePreview.original_width_px} × {singlePreview.original_height_px} → {singlePreview.width_px}
+                  × {singlePreview.height_px}
+                </span>
+              {/if}
+            </div>
+          {/if}
           <div
             bind:this={previewBox}
             class="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4"
@@ -1209,9 +1485,13 @@
               </div>
             {:else}
               <img
-                src={previewUrl}
+                src={viewingPreview && singlePreviewUrl != null ? singlePreviewUrl : previewUrl}
                 alt={pageFileName(selectedPath)}
                 onload={(event) => {
+                  // 看预览时自然尺寸即预览尺寸，原图尺寸保持不动。
+                  if (viewingPreview) {
+                    return;
+                  }
                   const img = event.currentTarget as HTMLImageElement | null;
                   if (img != null) {
                     previewDims = { width: img.naturalWidth, height: img.naturalHeight };
@@ -1274,11 +1554,33 @@
               bind:resizeQuality
               bind:resizeWebpLossless
               bind:resizePngLevel
+              bind:singleRotate
+              bind:singleFlipH
+              bind:singleFlipV
+              bind:singleAutoTrim
+              bind:singleTrimThreshold
+              bind:singleTrimMargin
+              bind:singleBrightness
+              bind:singleContrast
+              bind:singleGrayscale
+              bind:singleScale
+              bind:singleQuality
+              bind:singleWebpLossless
+              bind:singlePngLevel
               running={toolRunning}
-              canRun={toolRunnable}
-              {hasOutcome}
+              canRun={panelCanRun}
+              hasOutcome={panelHasOutcome}
               progress={toolProgress}
               backupExists={compressJob.backup}
+              singleHasSelection={selectedPath !== null}
+              singlePreview={singleState}
+              {singleApplying}
+              singleLocked={toolRunning}
+              runLabel={tool === "single"
+                ? singleApplying
+                  ? m.comic_edit_tool_running()
+                  : m.comic_edit_tool_single_apply()
+                : null}
               onRun={() => void handleToolRun()}
               onClear={handleToolReset}
               onCancel={() => void handleToolCancel()}
@@ -1343,6 +1645,15 @@
   cancelLabel={m.projects_create_cancel()}
   confirmLabel={m.comic_edit_tool_run()}
   onConfirm={() => void handleToolConfirm()}
+/>
+<ConfirmDialog
+  bind:open={singleConfirmOpen}
+  title={m.comic_edit_tool_single_confirm_title()}
+  description={m.comic_edit_tool_single_confirm_description()}
+  details={singleConfirmLines()}
+  cancelLabel={m.projects_create_cancel()}
+  confirmLabel={m.comic_edit_tool_single_apply()}
+  onConfirm={() => void handleSingleApply()}
 />
 <ConfirmDialog
   bind:open={clearBackupConfirmOpen}
