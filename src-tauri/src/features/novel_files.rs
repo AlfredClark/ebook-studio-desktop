@@ -1173,6 +1173,12 @@ pub fn rename_chapter(
     )
 }
 
+/// 打开原文目录（`AppHandle` 入口）：`sources/` 不存在直接报错。
+pub fn open_sources_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    crate::cores::system::open_existing_dir(app, &dir.join(SOURCES_DIR), "sources")
+}
+
 /// 筛选种类编译为正则：关键词转义后统一走正则引擎，命中字节区间落在原文上，
 /// 大小写不敏感经 `(?i)` 由引擎处理，不挪动原文索引。
 /// 垃圾清理按固定优先级（网址 → 联系方式 → 宣传）拼 alternation，同一起点更具体的优先。

@@ -43,6 +43,8 @@
   let saving = $state(false);
   /** 改名落盘中：与正文保存互斥防并发覆盖，正文脏态不阻塞改名。 */
   let renamingTitle = $state(false);
+  /** 打开解析目录进行中：按钮禁用态。 */
+  let openingContentDir = $state(false);
 
   /** 脏态：编辑器文本与落盘快照不一致时保存可用。 */
   const dirty = $derived(draft !== savedContent);
@@ -336,6 +338,19 @@
     toast.success(m.edit_rename_success());
   }
 
+  /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast。 */
+  async function openContentDir(): Promise<void> {
+    if (openingContentDir) {
+      return;
+    }
+    openingContentDir = true;
+    const result = await commands.openProjectDir(uuid).result();
+    openingContentDir = false;
+    if (result.status === "error") {
+      toast.error(m.files_open_dir_failed());
+    }
+  }
+
   /** 全局保存快捷键：Ctrl/Cmd+S 与保存按钮同等效果，门禁由 handleSave 统一把守。 */
   function handleGlobalKeydown(event: KeyboardEvent): void {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -468,6 +483,7 @@
               {dirty}
               {saving}
               renaming={renamingTitle}
+              openingDir={openingContentDir}
               {autoSave}
               matches={selectedMatches}
               {stale}
@@ -475,6 +491,7 @@
               onEdit={(text) => (draft = text)}
               onSave={() => void handleSave()}
               onRename={(fullTitle) => void handleRenameTitle(fullTitle)}
+              onOpenDir={() => void openContentDir()}
               onToggleAutoSave={toggleAutoSave}
               onJump={(line) => (jumpTo = { line, nonce: Date.now() })}
             />

@@ -53,6 +53,14 @@ pub fn get_comic_content_outline(
     Ok(comic_files::content_outline(&app, &id)?)
 }
 
+/// 打开原稿目录：调系统文件管理器定位 `sources/images/`，缺目录直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_comic_images_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(comic_files::open_images_dir(&app, &id)?)
+}
+
 /// 查询漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。
 #[tauri::command]
 #[specta::specta]

@@ -1,5 +1,6 @@
 <script lang="ts">
   // 原稿卡（哑组件）：展示 sources/images 状态，导入按钮回调由步骤页负责。
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import { Button } from "#components/shadcn-svelte/button";
   import CardRow from "#components/common/card-row.svelte";
   import CardSection from "#components/common/card-section.svelte";
@@ -11,14 +12,20 @@
     status,
     importing = false,
     appending = false,
+    openingDir = false,
     onChoose,
     onAppend,
+    onOpenDir,
   }: {
     status: ComicImagesStatus;
     importing: boolean;
     appending: boolean;
+    /** 打开原稿目录进行中：按钮禁用态。 */
+    openingDir?: boolean;
     onChoose: () => void;
     onAppend: () => void;
+    /** 打开原稿目录：调系统文件管理器定位 `sources/images/`，失败 toast 由父组件把守。 */
+    onOpenDir: () => void;
   } = $props();
 
   /** 更新时间展示：UTC 落盘转本地时区，不可用时回落原文。 */
@@ -38,6 +45,19 @@
   title={m.comic_files_source_section()}
   description={m.comic_files_source_description()}
 >
+  {#snippet actions()}
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      class="shrink-0"
+      aria-label={m.comic_files_open_sources_dir()}
+      title={m.comic_files_open_sources_dir()}
+      disabled={!status.exists || openingDir}
+      onclick={onOpenDir}
+    >
+      <FolderOpenIcon />
+    </Button>
+  {/snippet}
   {#if status.exists}
     <div class="grid grid-cols-2 gap-x-4 py-3">
       <div class="min-w-0">

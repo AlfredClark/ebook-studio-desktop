@@ -33,6 +33,9 @@
   /** 清理确认框：纯 UI 态，执行走确认回调。 */
   let orphanConfirmOpen = $state(false);
   let orphanCleaning = $state(false);
+  /** 打开原稿/解析目录进行中：对应按钮禁用态。 */
+  let openingSourcesDir = $state(false);
+  let openingContentDir = $state(false);
   /** 预览图：asset URL 与字节大小，迟到结果按 token 丢弃。 */
   let previewUrl = $state<string | null>(null);
   let previewSize = $state<number | null>(null);
@@ -238,6 +241,32 @@
     }
   }
 
+  /** 打开原稿目录：调系统文件管理器定位 `sources/images/`，失败 toast。 */
+  async function openSourcesDir(): Promise<void> {
+    if (openingSourcesDir) {
+      return;
+    }
+    openingSourcesDir = true;
+    const result = await commands.openComicImagesDir(uuid).result();
+    openingSourcesDir = false;
+    if (result.status === "error") {
+      toast.error(m.comic_files_open_dir_failed());
+    }
+  }
+
+  /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast。 */
+  async function openContentDir(): Promise<void> {
+    if (openingContentDir) {
+      return;
+    }
+    openingContentDir = true;
+    const result = await commands.openProjectDir(uuid).result();
+    openingContentDir = false;
+    if (result.status === "error") {
+      toast.error(m.comic_files_open_dir_failed());
+    }
+  }
+
   onMount(() => {
     void loadStatus();
   });
@@ -262,6 +291,7 @@
             {status}
             {importing}
             {appending}
+            openingDir={openingSourcesDir}
             onChoose={() => {
               if (status?.exists === true) {
                 reselectConfirmOpen = true;
@@ -270,6 +300,7 @@
               }
             }}
             onAppend={() => void handleAppend()}
+            onOpenDir={() => void openSourcesDir()}
           />
           {#if orphans != null && orphans.paths.length > 0}
             <div class="flex flex-col gap-2 py-3">
@@ -312,7 +343,13 @@
           <p class="text-sm text-muted-foreground" aria-busy="true">{m.files_parsing()}</p>
         {:else if outline !== null}
           <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <ComicOutlineCard {outline} {selectedPath} onSelect={handleSelect} />
+            <ComicOutlineCard
+              {outline}
+              {selectedPath}
+              openingDir={openingContentDir}
+              onSelect={handleSelect}
+              onOpenDir={() => void openContentDir()}
+            />
           </div>
           <div class="flex h-[38%] shrink-0 flex-col gap-2 border-t border-border pt-3">
             {#if selectedPath == null}

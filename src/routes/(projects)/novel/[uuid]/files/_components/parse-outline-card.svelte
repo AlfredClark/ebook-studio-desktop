@@ -3,6 +3,7 @@
   // 分卷书按卷折叠（默认收起，点击展开），纯章节超 100 章按序号分段折叠，
   // 折叠头吸顶常驻便于收起（与编辑页左栏同口径）；右栏内不套 Card 边框；
   // 上中下三段以细边框分隔，强制重排按钮沉底。
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
   import * as Accordion from "#components/shadcn-svelte/accordion";
   import { Button } from "#components/shadcn-svelte/button";
@@ -19,14 +20,20 @@
     outline,
     renumbering = false,
     undoing = false,
+    openingDir = false,
     onRenumber,
     onUndo,
+    onOpenDir,
   }: {
     outline: ParseOutline;
     renumbering?: boolean;
     undoing?: boolean;
+    /** 打开解析目录进行中：按钮禁用态。 */
+    openingDir?: boolean;
     onRenumber: () => void;
     onUndo: () => void;
+    /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast 由父组件把守。 */
+    onOpenDir: () => void;
   } = $props();
 
   /** 强制重排确认框开关：纯 UI 态，执行走父组件回调。 */
@@ -77,7 +84,20 @@
 </script>
 
 <section aria-label={m.files_parse_result_title()} class="flex h-full min-h-0 flex-col">
-  <h2 class="shrink-0 text-sm font-semibold">{m.files_parse_result_title()}</h2>
+  <div class="flex shrink-0 items-center justify-between gap-2">
+    <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">{m.files_parse_result_title()}</h2>
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      class="shrink-0"
+      aria-label={m.files_open_content_dir()}
+      title={m.files_open_content_dir()}
+      disabled={openingDir}
+      onclick={onOpenDir}
+    >
+      <FolderOpenIcon />
+    </Button>
+  </div>
   <div class="flex shrink-0 flex-col divide-y divide-border border-b border-border">
     <div class="grid grid-cols-2 gap-x-4 py-3">
       <div class="flex items-baseline justify-between gap-2">

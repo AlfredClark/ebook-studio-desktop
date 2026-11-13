@@ -5,6 +5,7 @@
   import { page } from "$app/state";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import ImageIcon from "@lucide/svelte/icons/image";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import LocateFixedIcon from "@lucide/svelte/icons/locate-fixed";
   import TrashIcon from "@lucide/svelte/icons/trash-2";
   import { Button } from "#components/shadcn-svelte/button";
@@ -97,6 +98,8 @@
   let confirmOpen = $state(false);
   /** 定位请求：递增即通知页序树展开并滚动到当前选中页。 */
   let locateNonce = $state(0);
+  /** 打开解析目录进行中：按钮禁用态。 */
+  let openingContentDir = $state(false);
 
   /** 预览选中：相对 images/ 的 POSIX 路径，拖拽后按 path 跟随。 */
   let selectedPath = $state<string | null>(null);
@@ -1058,6 +1061,19 @@
     toast.success(m.comic_edit_save_success());
   }
 
+  /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast。 */
+  async function openContentDir(): Promise<void> {
+    if (openingContentDir) {
+      return;
+    }
+    openingContentDir = true;
+    const result = await commands.openProjectDir(uuid).result();
+    openingContentDir = false;
+    if (result.status === "error") {
+      toast.error(m.comic_files_open_dir_failed());
+    }
+  }
+
   /** 删除页记录：只从工作话移除顺序记录，sources/images 中的图片文件保留； 未保存前可在左栏放弃更改找回。 */
   function handleDeletePage(): void {
     if (imageLocked) {
@@ -1419,6 +1435,16 @@
             {:else}
               <span class="min-w-0 flex-1" aria-hidden="true"></span>
             {/if}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={m.comic_edit_open_content_dir()}
+              title={m.comic_edit_open_content_dir()}
+              disabled={openingContentDir}
+              onclick={() => void openContentDir()}
+            >
+              <FolderOpenIcon class="size-4" />
+            </Button>
             <Button
               variant="ghost"
               size="icon"

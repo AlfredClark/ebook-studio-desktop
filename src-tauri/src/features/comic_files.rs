@@ -798,6 +798,12 @@ pub fn images_status(app: &tauri::AppHandle, id: &str) -> anyhow::Result<ComicIm
     status_in(&dir)
 }
 
+/// 打开原稿目录（`AppHandle` 入口）：`sources/images/` 不存在直接报错。
+pub fn open_images_dir(app: &tauri::AppHandle, id: &str) -> anyhow::Result<()> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    crate::cores::system::open_existing_dir(app, &dir.join(SOURCES_DIR).join(IMAGES_DIR), "images")
+}
+
 /// 导入漫画目录（`AppHandle` 入口）：图片或导出作业进行中拒绝，避免改动正在导出的内容。
 pub fn import_images(
     app: &tauri::AppHandle,

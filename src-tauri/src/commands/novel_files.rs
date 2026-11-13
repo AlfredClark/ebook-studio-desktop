@@ -132,6 +132,14 @@ pub fn rename_novel_chapter(
     )?)
 }
 
+/// 打开原文目录：调系统文件管理器定位 `sources/`，缺目录直接报错。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_novel_sources_dir(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    Ok(novel_files::open_sources_dir(&app, &id)?)
+}
+
 /// 全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。
 #[tauri::command]
 #[specta::specta]

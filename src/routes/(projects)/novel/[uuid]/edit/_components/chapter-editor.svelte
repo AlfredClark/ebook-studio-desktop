@@ -4,6 +4,7 @@
   // 改名只收标题输入并回抛，落盘与大纲刷新由父组件把守，与正文脏态正交；
   // 正文区按章节键重建，切换章节不串历史、不残留草稿；命中列表仅有命中时出现，点击跳到编辑器对应行。
   import CheckIcon from "@lucide/svelte/icons/check";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import SaveIcon from "@lucide/svelte/icons/save";
   import XIcon from "@lucide/svelte/icons/x";
@@ -22,6 +23,7 @@
     dirty,
     saving,
     renaming = false,
+    openingDir = false,
     autoSave = false,
     matches = [],
     stale = false,
@@ -29,6 +31,7 @@
     onEdit,
     onSave,
     onRename,
+    onOpenDir,
     onToggleAutoSave,
     onJump,
   }: {
@@ -37,8 +40,10 @@
     content: string;
     dirty: boolean;
     saving: boolean;
-    /** 改名落盘中：禁用改名按钮与弹窗确认，正文保存不受影响。 */
+    /** 改名落盘中：禁用改名按钮与确认，正文保存不受影响。 */
     renaming?: boolean;
+    /** 打开解析目录进行中：按钮禁用态。 */
+    openingDir?: boolean;
     autoSave?: boolean;
     matches?: LineMatch[];
     stale?: boolean;
@@ -47,6 +52,8 @@
     onSave: () => void;
     /** 改名提交：已去首尾空白，落盘由父组件把守。 */
     onRename: (fullTitle: string) => void;
+    /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast 由父组件把守。 */
+    onOpenDir: () => void;
     onToggleAutoSave: () => void;
     onJump: (line: number) => void;
   } = $props();
@@ -168,6 +175,17 @@
           onclick={startRename}
         >
           <PencilIcon />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="shrink-0"
+          aria-label={m.edit_open_content_dir()}
+          title={m.edit_open_content_dir()}
+          disabled={openingDir}
+          onclick={onOpenDir}
+        >
+          <FolderOpenIcon />
         </Button>
       {/if}
     </div>

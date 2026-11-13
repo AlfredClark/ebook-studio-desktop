@@ -34,6 +34,8 @@ export const commands = {
 	/**  话页树（已排序）。 */
 	volumes: ComicVolumeOutline[],
 } | null, CommandError>(__TAURI_INVOKE("get_comic_content_outline", { id })),
+	/**  打开原稿目录：调系统文件管理器定位 `sources/images/`，缺目录直接报错。 */
+	openComicImagesDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_comic_images_dir", { id })),
 	/**  查询漫画图片信息：绝对路径供前端转 `asset:`，大小供标题栏展示；非图片或缺失直接报错。 */
 	getComicImagePath: (id: string, path: string) => typedError<ComicImageInfo, CommandError>(__TAURI_INVOKE("get_comic_image_path", { id, path })),
 	/**  全量更新漫画分话结构：标题可改、话可增删排序，页须全量覆盖，落盘后返回新大纲。 */
@@ -217,6 +219,8 @@ export const commands = {
 	/**  疑似标题行的全量计数（采样只存前 N 个）。 */
 	unmatched_total: number,
 } | null, CommandError>(__TAURI_INVOKE("get_novel_content_outline", { id })),
+	/**  打开原文目录：调系统文件管理器定位 `sources/`，缺目录直接报错。 */
+	openNovelSourcesDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_novel_sources_dir", { id })),
 	/**  强制重排编号：按文档顺序重写卷号与章号后落盘，返回新大纲。 */
 	renumberNovelContent: (id: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("renumber_novel_content", { id })),
 	/**  撤销重排：用备份恢复 `content.json`，一次性有效，无备份直接报错。 */

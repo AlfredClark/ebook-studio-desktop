@@ -3,6 +3,8 @@
   // 分话按话折叠（默认收起），平铺超 100 页按序号分段折叠，
   // 大话内再按 100 页分组展示，页按钮点选后由步骤页加载预览。
   import * as Accordion from "#components/shadcn-svelte/accordion";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
+  import { Button } from "#components/shadcn-svelte/button";
   import type { ComicOutline, ComicPageOutline } from "#libs/commands/types";
   import { m } from "#libs/i18n/paraglide/messages";
   import { formatBytes, formatPaddedPageRange, pageFileName } from "./comic-files";
@@ -13,11 +15,17 @@
   let {
     outline,
     selectedPath = null,
+    openingDir = false,
     onSelect,
+    onOpenDir,
   }: {
     outline: ComicOutline;
     selectedPath?: string | null;
+    /** 打开解析目录进行中：按钮禁用态。 */
+    openingDir?: boolean;
     onSelect: (path: string) => void;
+    /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast 由父组件把守。 */
+    onOpenDir: () => void;
   } = $props();
 
   /** 是否按话折叠：多话，或单话有标题时折叠；单个无标题话按分组规则处理。 */
@@ -58,7 +66,20 @@
 </script>
 
 <section aria-label={m.files_parse_result_title()} class="flex h-full min-h-0 flex-col">
-  <h2 class="shrink-0 text-sm font-semibold">{m.files_parse_result_title()}</h2>
+  <div class="flex shrink-0 items-center justify-between gap-2">
+    <h2 class="min-w-0 flex-1 truncate text-sm font-semibold">{m.files_parse_result_title()}</h2>
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      class="shrink-0"
+      aria-label={m.comic_files_open_content_dir()}
+      title={m.comic_files_open_content_dir()}
+      disabled={openingDir}
+      onclick={onOpenDir}
+    >
+      <FolderOpenIcon />
+    </Button>
+  </div>
   <div class="flex shrink-0 flex-col divide-y divide-border border-b border-border">
     <div class="grid grid-cols-2 gap-x-4 py-3">
       <div class="flex items-baseline justify-between gap-2">

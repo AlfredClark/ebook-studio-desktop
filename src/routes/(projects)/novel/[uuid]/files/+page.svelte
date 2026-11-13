@@ -34,6 +34,9 @@
   let renumbering = $state(false);
   /** 撤销重排进行中：按钮禁用态。 */
   let undoing = $state(false);
+  /** 打开原文/解析目录进行中：对应按钮禁用态。 */
+  let openingSourcesDir = $state(false);
+  let openingContentDir = $state(false);
 
   /** 解析参数是否合法：按钮可用性的唯一门禁。 */
   const patternsValid = $derived(isValidPattern(volumePattern) && isValidPattern(chapterPattern));
@@ -145,6 +148,32 @@
     toast.success(m.files_renumber_success());
   }
 
+  /** 打开原文目录：调系统文件管理器定位 `sources/`，失败 toast。 */
+  async function openSourcesDir(): Promise<void> {
+    if (openingSourcesDir) {
+      return;
+    }
+    openingSourcesDir = true;
+    const result = await commands.openNovelSourcesDir(uuid).result();
+    openingSourcesDir = false;
+    if (result.status === "error") {
+      toast.error(m.files_open_dir_failed());
+    }
+  }
+
+  /** 打开解析目录：调系统文件管理器定位项目根（`content.json` 所在），失败 toast。 */
+  async function openContentDir(): Promise<void> {
+    if (openingContentDir) {
+      return;
+    }
+    openingContentDir = true;
+    const result = await commands.openProjectDir(uuid).result();
+    openingContentDir = false;
+    if (result.status === "error") {
+      toast.error(m.files_open_dir_failed());
+    }
+  }
+
   onMount(() => {
     void loadStatus();
   });
@@ -165,7 +194,13 @@
             </Button>
           </div>
         {:else}
-          <TxtSourceCard {status} {importing} onChoose={() => void handleChoose()} />
+          <TxtSourceCard
+            {status}
+            {importing}
+            openingDir={openingSourcesDir}
+            onChoose={() => void handleChoose()}
+            onOpenDir={() => void openSourcesDir()}
+          />
           <ParseParamsCard bind:volumePattern bind:chapterPattern />
           <div class="mt-auto pt-2">
             <Button
@@ -190,8 +225,10 @@
               {outline}
               {renumbering}
               {undoing}
+              openingDir={openingContentDir}
               onRenumber={() => void handleRenumber()}
               onUndo={() => void handleUndo()}
+              onOpenDir={() => void openContentDir()}
             />
           </div>
         {:else}

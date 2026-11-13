@@ -6,6 +6,7 @@ import TxtSourceCard from "../../../../../../../../routes/(projects)/novel/[uuid
 
 // 哑组件：只断展示与回调，不调后端命令。
 const chooseMock = vi.hoisted(() => vi.fn());
+const openDirMock = vi.hoisted(() => vi.fn());
 
 const emptyStatus: NovelTextStatus = { exists: false, size_bytes: 0, updated_at: null };
 const filledStatus: NovelTextStatus = {
@@ -22,7 +23,12 @@ afterEach(() => {
 describe("原文卡片", () => {
   it("缺文件时显示空态与选择按钮，无重选提示", () => {
     render(TxtSourceCard, {
-      props: { status: emptyStatus, importing: false, onChoose: chooseMock },
+      props: {
+        status: emptyStatus,
+        importing: false,
+        onChoose: chooseMock,
+        onOpenDir: openDirMock,
+      },
     });
 
     expect(screen.getByText("No source text imported yet")).not.toBeNull();
@@ -36,7 +42,12 @@ describe("原文卡片", () => {
 
   it("已导入时显示文件大小与更新时间在同一行", () => {
     render(TxtSourceCard, {
-      props: { status: filledStatus, importing: false, onChoose: chooseMock },
+      props: {
+        status: filledStatus,
+        importing: false,
+        onChoose: chooseMock,
+        onOpenDir: openDirMock,
+      },
     });
 
     const sizeLabel = screen.getByText("File size");
@@ -56,7 +67,7 @@ describe("原文卡片", () => {
   it("导入中禁用按钮，点击走回调", async () => {
     const user = userEvent.setup();
     render(TxtSourceCard, {
-      props: { status: emptyStatus, importing: true, onChoose: chooseMock },
+      props: { status: emptyStatus, importing: true, onChoose: chooseMock, onOpenDir: openDirMock },
     });
 
     expect((screen.getByRole("button", { name: "Importing…" }) as HTMLButtonElement).disabled).toBe(
@@ -69,10 +80,44 @@ describe("原文卡片", () => {
   it("空闲点击触发选择回调", async () => {
     const user = userEvent.setup();
     render(TxtSourceCard, {
-      props: { status: emptyStatus, importing: false, onChoose: chooseMock },
+      props: {
+        status: emptyStatus,
+        importing: false,
+        onChoose: chooseMock,
+        onOpenDir: openDirMock,
+      },
     });
 
     await user.click(screen.getByRole("button", { name: "Choose TXT…" }));
     expect(chooseMock).toHaveBeenCalledOnce();
+  });
+
+  it("无原文时打开目录按钮禁用，有原文时点击走回调", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(TxtSourceCard, {
+      props: {
+        status: emptyStatus,
+        importing: false,
+        onChoose: chooseMock,
+        onOpenDir: openDirMock,
+      },
+    });
+
+    expect(
+      (screen.getByRole("button", { name: "Open source folder" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    unmount();
+    cleanup();
+
+    render(TxtSourceCard, {
+      props: {
+        status: filledStatus,
+        importing: false,
+        onChoose: chooseMock,
+        onOpenDir: openDirMock,
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Open source folder" }));
+    expect(openDirMock).toHaveBeenCalledOnce();
   });
 });

@@ -55,6 +55,7 @@ const flat: ParseOutline = {
 
 const renumberMock = vi.hoisted(() => vi.fn());
 const undoMock = vi.hoisted(() => vi.fn());
+const openDirMock = vi.hoisted(() => vi.fn());
 
 afterEach(() => {
   cleanup();
@@ -63,7 +64,9 @@ afterEach(() => {
 
 describe("解析结果卡", () => {
   it("两行展示计数，无标题卷回落未分卷", () => {
-    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock, onUndo: undoMock } });
+    render(ParseOutlineCard, {
+      props: { outline, onRenumber: renumberMock, onUndo: undoMock, onOpenDir: openDirMock },
+    });
 
     expect(screen.getByText("Volumes")).not.toBeNull();
     expect(screen.getByText("Chapters")).not.toBeNull();
@@ -78,7 +81,9 @@ describe("解析结果卡", () => {
 
   it("分卷书默认折叠，展开后查看章节与字数", async () => {
     const user = userEvent.setup();
-    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock, onUndo: undoMock } });
+    render(ParseOutlineCard, {
+      props: { outline, onRenumber: renumberMock, onUndo: undoMock, onOpenDir: openDirMock },
+    });
 
     // 卷头右侧显示本卷章节数，章节默认收起。
     expect(screen.getByText("2 chapters")).not.toBeNull();
@@ -100,7 +105,7 @@ describe("解析结果卡", () => {
 
   it("纯章节单卷平铺展示", () => {
     render(ParseOutlineCard, {
-      props: { outline: flat, onRenumber: renumberMock, onUndo: undoMock },
+      props: { outline: flat, onRenumber: renumberMock, onUndo: undoMock, onOpenDir: openDirMock },
     });
 
     expect(screen.getByText("第一章 引子")).not.toBeNull();
@@ -133,7 +138,7 @@ describe("解析结果卡", () => {
       ],
     };
     render(ParseOutlineCard, {
-      props: { outline: long, onRenumber: renumberMock, onUndo: undoMock },
+      props: { outline: long, onRenumber: renumberMock, onUndo: undoMock, onOpenDir: openDirMock },
     });
 
     expect(screen.getByText("205 chapters")).not.toBeNull();
@@ -174,7 +179,7 @@ describe("解析结果卡", () => {
       ],
     };
     render(ParseOutlineCard, {
-      props: { outline: flat, onRenumber: renumberMock, onUndo: undoMock },
+      props: { outline: flat, onRenumber: renumberMock, onUndo: undoMock, onOpenDir: openDirMock },
     });
 
     expect(screen.getByText("Chapters 001–100")).not.toBeNull();
@@ -204,6 +209,7 @@ describe("解析结果卡", () => {
         },
         onRenumber: renumberMock,
         onUndo: undoMock,
+        onOpenDir: openDirMock,
       },
     });
 
@@ -220,6 +226,7 @@ describe("解析结果卡", () => {
         outline: { ...outline, numbers_missing: true, titles_missing: true },
         onRenumber: renumberMock,
         onUndo: undoMock,
+        onOpenDir: openDirMock,
       },
     });
 
@@ -248,6 +255,7 @@ describe("解析结果卡", () => {
         },
         onRenumber: renumberMock,
         onUndo: undoMock,
+        onOpenDir: openDirMock,
       },
     });
 
@@ -260,7 +268,9 @@ describe("解析结果卡", () => {
   });
 
   it("无备份时不显示撤销重排按钮", () => {
-    render(ParseOutlineCard, { props: { outline, onRenumber: renumberMock, onUndo: undoMock } });
+    render(ParseOutlineCard, {
+      props: { outline, onRenumber: renumberMock, onUndo: undoMock, onOpenDir: openDirMock },
+    });
 
     expect(screen.queryByRole("button", { name: "Undo renumber" })).toBeNull();
   });
@@ -272,6 +282,7 @@ describe("解析结果卡", () => {
         outline: { ...outline, backup_exists: true },
         onRenumber: renumberMock,
         onUndo: undoMock,
+        onOpenDir: openDirMock,
       },
     });
 
@@ -290,6 +301,7 @@ describe("解析结果卡", () => {
         },
         onRenumber: renumberMock,
         onUndo: undoMock,
+        onOpenDir: openDirMock,
       },
     });
 
