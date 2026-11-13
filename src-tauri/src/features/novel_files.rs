@@ -1090,6 +1090,49 @@ pub fn update_chapter_in(
     Ok(outline_of(&content, project_dir))
 }
 
+/// 改单章标题并同步纯标题与编号：新标题修边后不能为空，正文与简介不动；
+/// 用存量章正则重解析新标题行，命中则回填编号与纯标题，未命中或正则失效
+/// 则回落纯标题为整行、编号为空（与初次解析口径一致，避免旧号残留导致
+/// 原文与其他构建格式渲染分叉）；标题已变同样清备份与诊断并刷新大纲。
+pub fn rename_chapter_in(
+    project_dir: &Path,
+    volume_index: usize,
+    chapter_index: usize,
+    full_title: &str,
+) -> anyhow::Result<ParseOutline> {
+    let trimmed = full_title.trim().to_string();
+    if trimmed.is_empty() {
+        anyhow::bail!("chapter title must not be empty");
+    }
+    let mut content = read_content(project_dir)?;
+    let volume = content.volumes.get_mut(volume_index).with_context(|| {
+        format!("chapter address out of range: volume {volume_index}, chapter {chapter_index}")
+    })?;
+    let chapter = volume.chapters.get_mut(chapter_index).with_context(|| {
+        format!("chapter address out of range: volume {volume_index}, chapter {chapter_index}")
+    })?;
+    chapter.full_title.clone_from(&trimmed);
+    if let Some(caps) = Regex::new(&content.chapter_pattern)
+        .ok()
+        .and_then(|re| re.captures(&trimmed))
+    {
+        chapter.number = caps
+            .get(1)
+            .and_then(|matched| parse_numeral(matched.as_str()));
+        chapter.title = pure_title(&caps, &trimmed);
+    } else {
+        chapter.number = None;
+        chapter.title.clone_from(&trimmed);
+    }
+    content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
+    clear_backup(project_dir);
+    clear_diagnostics(project_dir);
+    std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
+    super::projects::touch_updated(project_dir);
+    Ok(outline_of(&content, project_dir))
+}
+
 /// 读单章正文（`AppHandle` 入口）：下标寻址，越界直接报错。
 pub fn chapter_content(
     app: &tauri::AppHandle,
@@ -1111,6 +1154,23 @@ pub fn update_chapter(
 ) -> anyhow::Result<ParseOutline> {
     let dir = super::projects::resolve_project_dir(app, id)?;
     update_chapter_in(&dir, volume_index as usize, chapter_index as usize, lines)
+}
+
+/// 改单章标题（`AppHandle` 入口）：同步纯标题与编号后返回新大纲。
+pub fn rename_chapter(
+    app: &tauri::AppHandle,
+    id: &str,
+    volume_index: u32,
+    chapter_index: u32,
+    full_title: &str,
+) -> anyhow::Result<ParseOutline> {
+    let dir = super::projects::resolve_project_dir(app, id)?;
+    rename_chapter_in(
+        &dir,
+        volume_index as usize,
+        chapter_index as usize,
+        full_title,
+    )
 }
 
 /// 筛选种类编译为正则：关键词转义后统一走正则引擎，命中字节区间落在原文上，
@@ -1651,6 +1711,54 @@ mod tests {
         assert_eq!(chapter.full_title, "第二章 发展");
         assert_eq!(chapter.lines, vec!["新正文", "第二行"]);
         assert_eq!(outline.volumes[0].chapters[1].chars, 6);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn renames_chapter_title_and_syncs_number_and_outline() {
+        let (root, dir) = test_project("chapter-rename");
+        write_content(&dir, "第一章 引子\n正文\n第二章 发展\n正文\n");
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        let outline = rename_chapter_in(&dir, 0, 1, "  第十章 终局  ").expect("rename");
+        assert_eq!(outline.volumes[0].chapters[1].title, "第十章 终局");
+        let content: NovelContent =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(CONTENT_NAME)).expect("read"))
+                .expect("parse content");
+        assert_eq!(content.volumes[0].chapters[1].full_title, "第十章 终局");
+        assert_eq!(content.volumes[0].chapters[1].title, "终局");
+        assert_eq!(content.volumes[0].chapters[1].number, Some(10));
+        // 正文不动。
+        let chapter = chapter_in(&dir, 0, 1).expect("reread");
+        assert_eq!(chapter.full_title, "第十章 终局");
+        assert_eq!(chapter.lines, vec!["正文"]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn rename_chapter_title_falls_back_when_pattern_misses() {
+        let (root, dir) = test_project("chapter-rename-fallback");
+        write_content(&dir, "第一章 引子\n正文\n");
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        let outline = rename_chapter_in(&dir, 0, 0, "序幕").expect("rename with plain title");
+        assert_eq!(outline.volumes[0].chapters[0].title, "序幕");
+        let content: NovelContent =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(CONTENT_NAME)).expect("read"))
+                .expect("parse content");
+        assert_eq!(content.volumes[0].chapters[0].title, "序幕");
+        assert_eq!(content.volumes[0].chapters[0].number, None);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn rename_chapter_title_rejects_empty_and_bad_address() {
+        let (root, dir) = test_project("chapter-rename-invalid");
+        write_content(&dir, "第一章 引子\n正文\n");
+        parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
+        assert!(rename_chapter_in(&dir, 0, 0, "   ").is_err());
+        assert!(rename_chapter_in(&dir, 0, 5, "第二章 新").is_err());
+        // 空标题拒绝后旧标题保持不变。
+        let chapter = chapter_in(&dir, 0, 0).expect("reread");
+        assert_eq!(chapter.full_title, "第一章 引子");
         cleanup(&root);
     }
 

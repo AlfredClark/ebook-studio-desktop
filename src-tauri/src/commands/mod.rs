@@ -91,6 +91,7 @@ macro_rules! collect_commands {
             $crate::commands::novel_files::restore_novel_content_backup,
             $crate::commands::novel_files::get_novel_chapter,
             $crate::commands::novel_files::update_novel_chapter,
+            $crate::commands::novel_files::rename_novel_chapter,
             $crate::commands::novel_files::filter_novel_content,
             $crate::commands::novel_build::build_novel_content,
             $crate::commands::novel_build::clear_novel_build_content,

@@ -225,6 +225,8 @@ export const commands = {
 	getNovelChapter: (id: string, volumeIndex: number, chapterIndex: number) => typedError<ChapterContent, CommandError>(__TAURI_INVOKE("get_novel_chapter", { id, volumeIndex, chapterIndex })),
 	/**  保存单章正文：归一化落盘后返回新大纲（左栏字数即时刷新）。 */
 	updateNovelChapter: (id: string, volumeIndex: number, chapterIndex: number, lines: string[]) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("update_novel_chapter", { id, volumeIndex, chapterIndex, lines })),
+	/**  改单章标题：同步纯标题与编号后返回新大纲（左栏与中栏即时刷新）。 */
+	renameNovelChapter: (id: string, volumeIndex: number, chapterIndex: number, fullTitle: string) => typedError<ParseOutline, CommandError>(__TAURI_INVOKE("rename_novel_chapter", { id, volumeIndex, chapterIndex, fullTitle })),
 	/**  全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。 */
 	filterNovelContent: (id: string, filter: NovelFilter) => typedError<FilterOutcome, CommandError>(__TAURI_INVOKE("filter_novel_content", { id, filter })),
 	/**  构建小说：清空构建目录后全量重生成，返回文件树。 */

@@ -41,6 +41,8 @@
   let chapterLoading = $state(false);
   let chapterFailed = $state(false);
   let saving = $state(false);
+  /** 改名落盘中：与正文保存互斥防并发覆盖，正文脏态不阻塞改名。 */
+  let renamingTitle = $state(false);
 
   /** 脏态：编辑器文本与落盘快照不一致时保存可用。 */
   const dirty = $derived(draft !== savedContent);
@@ -294,7 +296,7 @@
 
   /** 保存：切分归一化后落盘，成功刷新大纲字数并清脏态；筛选激活时自动重跑。 自动保存成功用专属提示，手动保存沿用原提示；返回是否成功供切章守卫分支。 */
   async function handleSave(auto = false): Promise<boolean> {
-    if (selected == null || !dirty || saving) {
+    if (selected == null || !dirty || saving || renamingTitle) {
       return false;
     }
     saving = true;
@@ -313,6 +315,25 @@
       await runFilter();
     }
     return true;
+  }
+
+  /** 改名：落盘标题并同步纯标题与编号，成功刷新大纲与中栏标题；正文快照与筛选结果不受影响。 */
+  async function handleRenameTitle(fullTitle: string): Promise<void> {
+    if (selected == null || renamingTitle || saving) {
+      return;
+    }
+    renamingTitle = true;
+    const result = await commands
+      .renameNovelChapter(uuid, selected.volume, selected.chapter, fullTitle)
+      .result();
+    renamingTitle = false;
+    if (result.status === "error") {
+      toast.error(m.edit_rename_failed());
+      return;
+    }
+    outline = result.data;
+    chapterTitle = fullTitle;
+    toast.success(m.edit_rename_success());
   }
 
   /** 全局保存快捷键：Ctrl/Cmd+S 与保存按钮同等效果，门禁由 handleSave 统一把守。 */
@@ -446,12 +467,14 @@
               content={savedContent}
               {dirty}
               {saving}
+              renaming={renamingTitle}
               {autoSave}
               matches={selectedMatches}
               {stale}
               {jumpTo}
               onEdit={(text) => (draft = text)}
               onSave={() => void handleSave()}
+              onRename={(fullTitle) => void handleRenameTitle(fullTitle)}
               onToggleAutoSave={toggleAutoSave}
               onJump={(line) => (jumpTo = { line, nonce: Date.now() })}
             />

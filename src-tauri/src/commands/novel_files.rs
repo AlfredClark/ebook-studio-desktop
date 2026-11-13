@@ -112,6 +112,26 @@ pub fn update_novel_chapter(
     )?)
 }
 
+/// 改单章标题：同步纯标题与编号后返回新大纲（左栏与中栏即时刷新）。
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)]
+pub fn rename_novel_chapter(
+    app: tauri::AppHandle,
+    id: String,
+    volume_index: u32,
+    chapter_index: u32,
+    full_title: String,
+) -> CommandResult<ParseOutline> {
+    Ok(novel_files::rename_chapter(
+        &app,
+        &id,
+        volume_index,
+        chapter_index,
+        &full_title,
+    )?)
+}
+
 /// 全书筛选：按筛选种类与参数扫描各章正文，返回命中清单（正文行不出 IPC，只出命中位置）。
 #[tauri::command]
 #[specta::specta]
