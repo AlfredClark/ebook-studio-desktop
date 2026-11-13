@@ -324,7 +324,6 @@
   "files_renumber_undo_success": "已撤销重排",
   "files_renumber_undo_failed": "撤销重排失败",
   "files_import_transcoded": "检测到{encoding}编码，已自动转为 UTF-8 导入",
-  "files_unmatched_hint": "以下疑似标题行未被正则命中（共 {count} 行），可调整正则后重新解析",
   "files_preface_lines": "前言 · {count} 行",
   "files_outline_more": "等 {count} 章",
   "files_preview_empty_description": "完成导入并开始解析后，在此预览分卷分章结果",

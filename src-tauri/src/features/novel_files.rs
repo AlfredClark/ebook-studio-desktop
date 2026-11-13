@@ -30,11 +30,6 @@ const CONTENT_SCHEMA_VERSION: u32 = 1;
 /// 重排备份：`renumber` 前把当时的 `content.json` 拷一份，撤销用完即删；
 /// 重新解析或编辑正文后备份失效，避免用旧快照覆盖新改动。
 const CONTENT_BACKUP: &str = "content.json.bak";
-/// 解析诊断落盘：扫描行数与疑似标题采样，重进文件页也能回显；
-/// 重新解析时覆盖，编辑正文或换源时删除（行文已变）。
-const DIAGNOSTICS_NAME: &str = "parse-diagnostics.json";
-/// 疑似标题采样上限：只存前 N 行，全量计数另记，避免长文打爆 IPC。
-const MAX_UNMATCHED_SAMPLES: usize = 8;
 /// 解析上限：超限报错而非截断，避免静默丢文。
 const MAX_VOLUMES: usize = 2000;
 /// 解析上限：全书章节总数，跨卷连续计数与卷内重计数都不影响切分。
@@ -166,9 +161,8 @@ fn clear_downstream(project_dir: &Path) {
     let _ = std::fs::remove_file(project_dir.join(CONTENT_NAME));
     let _ = std::fs::remove_dir_all(project_dir.join(BUILD_DIR));
     let _ = std::fs::remove_dir_all(project_dir.join(DIST_DIR));
-    // 换源后旧解析的备份与诊断全部失效。
+    // 换源后旧解析的备份失效。
     clear_backup(project_dir);
-    clear_diagnostics(project_dir);
 }
 
 /// 查询原文状态（`AppHandle` 入口）：项目目录不存在视为目标缺失。
@@ -465,12 +459,6 @@ pub struct ParseOutline {
     /// 重排备份是否存在：存在时前端展示“撤销重排”，用完即删；
     /// 重新解析或编辑正文后失效（后端落盘时删备份）。
     pub backup_exists: bool,
-    /// 扫描的非空行数：诊断展示用（命中 + 未命中）。
-    pub scanned_lines: u32,
-    /// 疑似标题但两套正则都没命中的行（前 N 个原文）：诊断展示用，正文误伤可接受。
-    pub unmatched_samples: Vec<String>,
-    /// 疑似标题行的全量计数（采样只存前 N 个）。
-    pub unmatched_total: u32,
 }
 
 /// 宽松转 `u32`：大纲计数上溢时钳制，不报错。
@@ -479,7 +467,6 @@ fn saturating_u32(value: usize) -> u32 {
 }
 
 /// 由完整内容派生识别大纲（落盘与返回共用同一口径）。
-/// 诊断字段（扫描行数、疑似标题采样）只在解析时回填，其余入口置零/置空。
 fn outline_of(content: &NovelContent, project_dir: &Path) -> ParseOutline {
     let numbers_missing =
         lacks_number_group(&content.volume_pattern) && lacks_number_group(&content.chapter_pattern);
@@ -502,9 +489,6 @@ fn outline_of(content: &NovelContent, project_dir: &Path) -> ParseOutline {
         titles_missing,
         issues: collect_issues(content, numbers_missing, titles_missing),
         backup_exists: project_dir.join(CONTENT_BACKUP).is_file(),
-        scanned_lines: 0,
-        unmatched_samples: Vec::new(),
-        unmatched_total: 0,
         volumes: content
             .volumes
             .iter()
@@ -742,66 +726,9 @@ fn pure_title(caps: &regex::Captures<'_>, line: &str) -> String {
         .to_string()
 }
 
-/// 疑似标题行判定：短行（40 字内）且带标题关键词、非纯数字；正文误伤可接受，只做诊断展示。
-fn is_title_like(line: &str) -> bool {
-    const KEYWORDS: &[char] = &['章', '节', '回', '集', '话', '篇', '卷', '楔', '序', '终'];
-    const WORDS: &[&str] = &["前言", "后记", "番外", "尾声", "引子"];
-    if line.is_empty() || line.chars().count() > 40 {
-        return false;
-    }
-    if line.chars().all(|ch| ch.is_ascii_digit()) {
-        return false;
-    }
-    line.chars().any(|ch| KEYWORDS.contains(&ch)) || WORDS.iter().any(|w| line.contains(w))
-}
-
-/// 疑似标题采样：短行关键词命中即记数，只存前 N 个原文。
-fn sample_unmatched(samples: &mut Vec<String>, total: &mut u32, line: &str) {
-    if !is_title_like(line) {
-        return;
-    }
-    *total += 1;
-    if samples.len() < MAX_UNMATCHED_SAMPLES {
-        samples.push(line.to_string());
-    }
-}
-
-/// 解析诊断落盘体：只在解析时写入，重进文件页回显用；内部流转不进 IPC。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ParseDiagnostics {
-    scanned_lines: u32,
-    unmatched_samples: Vec<String>,
-    unmatched_total: u32,
-}
-
-/// 诊断落盘：解析成功后与 `content.json` 同步写，重进文件页回显不断档。
-fn write_diagnostics(project_dir: &Path, diagnostics: &ParseDiagnostics) -> anyhow::Result<()> {
-    let text =
-        serde_json::to_string_pretty(diagnostics).context("failed to serialize diagnostics")?;
-    std::fs::write(project_dir.join(DIAGNOSTICS_NAME), text).context("failed to write diagnostics")
-}
-
-/// 诊断读取：缺失或损坏回落空（旧项目无此文件直接当无诊断）。
-fn read_diagnostics(project_dir: &Path) -> ParseDiagnostics {
-    let empty = ParseDiagnostics {
-        scanned_lines: 0,
-        unmatched_samples: Vec::new(),
-        unmatched_total: 0,
-    };
-    let Ok(text) = std::fs::read_to_string(project_dir.join(DIAGNOSTICS_NAME)) else {
-        return empty;
-    };
-    serde_json::from_str(&text).unwrap_or(empty)
-}
-
 /// 重排备份失效：重新解析或编辑正文后旧快照不再能安全还原，直接删除。
 fn clear_backup(project_dir: &Path) {
     let _ = std::fs::remove_file(project_dir.join(CONTENT_BACKUP));
-}
-
-/// 诊断失效：行文已变（换源/重解析覆盖写，编辑正文删），旧采样不再回显。
-fn clear_diagnostics(project_dir: &Path) {
-    let _ = std::fs::remove_file(project_dir.join(DIAGNOSTICS_NAME));
 }
 
 /// 数字组缺失判定：正则连第一捕获组都没有；编译失败也视为缺失。
@@ -836,15 +763,11 @@ pub fn parse_txt_in(
         volumes: Vec::new(),
     };
     let mut chapter_total = 0usize;
-    let mut scanned_lines = 0usize;
-    let mut unmatched_samples = Vec::new();
-    let mut unmatched_total = 0u32;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
         }
-        scanned_lines += 1;
         if let Some(caps) = volume_re.captures(line) {
             if content.volumes.len() >= MAX_VOLUMES {
                 anyhow::bail!("too many volumes (max {MAX_VOLUMES})");
@@ -875,20 +798,16 @@ pub fn parse_txt_in(
                 lines: Vec::new(),
             });
         } else if content.volumes.is_empty() {
-            sample_unmatched(&mut unmatched_samples, &mut unmatched_total, line);
             content.preface.push(line.to_string());
         } else {
             let volume = content.volumes.last_mut().expect("volume exists");
             if volume.chapters.is_empty() {
-                sample_unmatched(&mut unmatched_samples, &mut unmatched_total, line);
                 volume.intro.push(line.to_string());
             } else {
                 let chapter = volume.chapters.last_mut().expect("chapter exists");
                 if chapter.lines.len() >= MAX_CHAPTER_LINES {
                     anyhow::bail!("chapter is too long (max {MAX_CHAPTER_LINES} lines)");
                 }
-                // 漏命中的章标题会藏进上一章正文：同样采样，正文误伤可接受。
-                sample_unmatched(&mut unmatched_samples, &mut unmatched_total, line);
                 chapter.lines.push(line.to_string());
             }
         }
@@ -897,18 +816,7 @@ pub fn parse_txt_in(
         anyhow::bail!("no chapters recognized, check title patterns against the text");
     }
     clear_backup(project_dir);
-    let mut outline = outline_of(&content, project_dir);
-    outline.scanned_lines = saturating_u32(scanned_lines);
-    outline.unmatched_samples.clone_from(&unmatched_samples);
-    outline.unmatched_total = unmatched_total;
-    write_diagnostics(
-        project_dir,
-        &ParseDiagnostics {
-            scanned_lines: outline.scanned_lines,
-            unmatched_samples,
-            unmatched_total,
-        },
-    )?;
+    let outline = outline_of(&content, project_dir);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     super::projects::touch_updated(project_dir);
@@ -982,12 +890,7 @@ pub fn outline_in(project_dir: &Path) -> Option<ParseOutline> {
             return None;
         }
     };
-    let mut outline = outline_of(&content, project_dir);
-    // 诊断随解析落盘：重进文件页回显不断档，缺失（旧项目）即无诊断。
-    let diagnostics = read_diagnostics(project_dir);
-    outline.scanned_lines = diagnostics.scanned_lines;
-    outline.unmatched_samples = diagnostics.unmatched_samples;
-    outline.unmatched_total = diagnostics.unmatched_total;
+    let outline = outline_of(&content, project_dir);
     Some(outline)
 }
 
@@ -1082,9 +985,8 @@ pub fn update_chapter_in(
     chapter.lines = normalized;
     content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
-    // 正文已变：旧重排备份与旧诊断采样不再能安全还原/回显，直接失效。
+    // 正文已变：旧重排备份不再能安全还原，直接失效。
     clear_backup(project_dir);
-    clear_diagnostics(project_dir);
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     super::projects::touch_updated(project_dir);
     Ok(outline_of(&content, project_dir))
@@ -1093,7 +995,7 @@ pub fn update_chapter_in(
 /// 改单章标题并同步纯标题与编号：新标题修边后不能为空，正文与简介不动；
 /// 用存量章正则重解析新标题行，命中则回填编号与纯标题，未命中或正则失效
 /// 则回落纯标题为整行、编号为空（与初次解析口径一致，避免旧号残留导致
-/// 原文与其他构建格式渲染分叉）；标题已变同样清备份与诊断并刷新大纲。
+/// 原文与其他构建格式渲染分叉）；标题已变同样清备份并刷新大纲。
 pub fn rename_chapter_in(
     project_dir: &Path,
     volume_index: usize,
@@ -1127,7 +1029,6 @@ pub fn rename_chapter_in(
     content.parsed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let text = serde_json::to_string_pretty(&content).context("failed to serialize content")?;
     clear_backup(project_dir);
-    clear_diagnostics(project_dir);
     std::fs::write(project_dir.join(CONTENT_NAME), text).context("failed to write content.json")?;
     super::projects::touch_updated(project_dir);
     Ok(outline_of(&content, project_dir))
@@ -2485,29 +2386,6 @@ mod tests {
         assert!(!dir.join(CONTENT_BACKUP).exists());
         let outline = outline_in(&dir).expect("outline");
         assert!(!outline.backup_exists);
-        cleanup(&root);
-    }
-
-    #[test]
-    fn parse_collects_unmatched_title_like_lines() {
-        let (root, dir) = test_project("parse-diagnostics");
-        write_content(
-            &dir,
-            "前言一句\n第一卷 开篇\n楔子\n引文\n第一章 起\n甲\n番外：小剧场\n乙\n",
-        );
-        let outline = parse_txt_in(&dir, VOLUME_PATTERN, CHAPTER_PATTERN).expect("parse");
-        assert_eq!(outline.scanned_lines, 8);
-        // “楔子”命中卷简介前的采样，“番外：小剧场”藏进上一章正文同样采样。
-        assert!(outline.unmatched_total >= 2);
-        assert!(outline.unmatched_samples.contains(&"楔子".to_string()));
-        assert!(
-            outline
-                .unmatched_samples
-                .contains(&"番外：小剧场".to_string())
-        );
-        assert!(outline.unmatched_samples.len() <= MAX_UNMATCHED_SAMPLES);
-        // 正文行不计入采样。
-        assert!(!outline.unmatched_samples.contains(&"甲".to_string()));
         cleanup(&root);
     }
 

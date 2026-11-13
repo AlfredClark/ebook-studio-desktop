@@ -324,7 +324,6 @@
   "files_renumber_undo_success": "Renumber undone",
   "files_renumber_undo_failed": "Failed to undo renumber",
   "files_import_transcoded": "Detected {encoding} encoding, automatically converted to UTF-8 on import",
-  "files_unmatched_hint": "{count} title-like lines were not matched by the patterns. Adjust the patterns and re-parse:",
   "files_preface_lines": "Preface · {count} lines",
   "files_outline_more": "+ {count} more chapters",
   "files_preview_empty_description": "Volume and chapter results will be previewed here after import and parsing",

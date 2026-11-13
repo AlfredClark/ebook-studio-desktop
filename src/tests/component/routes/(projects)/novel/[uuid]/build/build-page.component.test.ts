@@ -278,9 +278,6 @@ describe("构建页", () => {
       titles_missing: false,
       issues: [],
       backup_exists: false,
-      scanned_lines: 0,
-      unmatched_samples: [],
-      unmatched_total: 0,
       volumes: [
         {
           title: "第一卷 开篇",

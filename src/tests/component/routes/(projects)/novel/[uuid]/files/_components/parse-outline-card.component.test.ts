@@ -14,9 +14,6 @@ const outline: ParseOutline = {
   titles_missing: false,
   issues: [],
   backup_exists: false,
-  scanned_lines: 0,
-  unmatched_samples: [],
-  unmatched_total: 0,
   volumes: [
     {
       title: null,
@@ -39,9 +36,6 @@ const flat: ParseOutline = {
   titles_missing: false,
   issues: [],
   backup_exists: false,
-  scanned_lines: 0,
-  unmatched_samples: [],
-  unmatched_total: 0,
   volumes: [
     {
       title: null,
@@ -124,9 +118,6 @@ describe("解析结果卡", () => {
       titles_missing: false,
       issues: [],
       backup_exists: false,
-      scanned_lines: 0,
-      unmatched_samples: [],
-      unmatched_total: 0,
       volumes: [
         {
           title: "第一卷 长卷",
@@ -165,9 +156,6 @@ describe("解析结果卡", () => {
       titles_missing: false,
       issues: [],
       backup_exists: false,
-      scanned_lines: 0,
-      unmatched_samples: [],
-      unmatched_total: 0,
       volumes: [
         {
           title: null,
@@ -289,24 +277,5 @@ describe("解析结果卡", () => {
     await user.click(screen.getByRole("button", { name: "Undo renumber" }));
 
     expect(undoMock).toHaveBeenCalledOnce();
-  });
-
-  it("疑似标题行展示采样与总数", () => {
-    render(ParseOutlineCard, {
-      props: {
-        outline: {
-          ...outline,
-          unmatched_total: 3,
-          unmatched_samples: ["楔子", "番外：小剧场"],
-        },
-        onRenumber: renumberMock,
-        onUndo: undoMock,
-        onOpenDir: openDirMock,
-      },
-    });
-
-    expect(screen.getByText(/3 title-like lines were not matched/)).not.toBeNull();
-    expect(screen.getByText("「楔子」")).not.toBeNull();
-    expect(screen.getByText("「番外：小剧场」")).not.toBeNull();
   });
 });

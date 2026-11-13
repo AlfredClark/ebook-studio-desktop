@@ -200,17 +200,6 @@
           <p class="text-sm break-words text-muted-foreground">{m.files_issues_empty()}</p>
         {/if}
       {/each}
-      {#if outline.unmatched_total > 0}
-        <div class="flex items-start gap-2">
-          <TriangleAlertIcon class="mt-0.5 size-4 shrink-0 text-destructive" />
-          <p class="text-sm break-words text-muted-foreground">
-            {m.files_unmatched_hint({ count: outline.unmatched_total })}
-          </p>
-        </div>
-        {#each outline.unmatched_samples as sample (sample)}
-          <p class="pl-6 text-sm break-words text-muted-foreground">「{sample}」</p>
-        {/each}
-      {/if}
     </div>
     {#if issueCount > 0}
       <div class="mt-auto shrink-0">

@@ -212,12 +212,6 @@ export const commands = {
 	 *  重新解析或编辑正文后失效（后端落盘时删备份）。
 	 */
 	backup_exists: boolean,
-	/**  扫描的非空行数：诊断展示用（命中 + 未命中）。 */
-	scanned_lines: number,
-	/**  疑似标题但两套正则都没命中的行（前 N 个原文）：诊断展示用，正文误伤可接受。 */
-	unmatched_samples: string[],
-	/**  疑似标题行的全量计数（采样只存前 N 个）。 */
-	unmatched_total: number,
 } | null, CommandError>(__TAURI_INVOKE("get_novel_content_outline", { id })),
 	/**  打开原文目录：调系统文件管理器定位 `sources/`，缺目录直接报错。 */
 	openNovelSourcesDir: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_novel_sources_dir", { id })),
@@ -1111,12 +1105,6 @@ export type ParseOutline = {
 	 *  重新解析或编辑正文后失效（后端落盘时删备份）。
 	 */
 	backup_exists: boolean,
-	/**  扫描的非空行数：诊断展示用（命中 + 未命中）。 */
-	scanned_lines: number,
-	/**  疑似标题但两套正则都没命中的行（前 N 个原文）：诊断展示用，正文误伤可接受。 */
-	unmatched_samples: string[],
-	/**  疑似标题行的全量计数（采样只存前 N 个）。 */
-	unmatched_total: number,
 };
 
 /**  项目基本信息：`project.json` 的落盘格式即前端契约，时间全链路 UTC。 */
